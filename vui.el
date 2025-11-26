@@ -1872,30 +1872,44 @@ HEADER-P indicates if this is a header row."
              for width in col-widths
              for col in columns
              for i from 0
-             do (let* ((content (vui--cell-to-string cell))
-                       (align (or (plist-get col :align) :left))
+             do (let* ((align (or (plist-get col :align) :left))
+                       (is-vnode (and (not (stringp cell))
+                                      (not (null cell))
+                                      (not header-p)))
+                       (content (if is-vnode
+                                    (vui--cell-to-string cell)
+                                  (cond ((stringp cell) cell)
+                                        ((null cell) "")
+                                        (t (format "%s" cell)))))
                        (content-width (string-width content))
                        (padding (max 0 (- width content-width)))
                        (face (when header-p 'bold)))
                   ;; Render cell content with alignment
                   (pcase align
                     (:left
-                     (if face
-                         (insert (propertize content 'face face))
-                       (insert content))
+                     (let ((start (point)))
+                       (if is-vnode
+                           (vui--render-vnode cell)
+                         (if face
+                             (insert (propertize content 'face face))
+                           (insert content))))
                      (insert (make-string padding ?\s)))
                     (:right
                      (insert (make-string padding ?\s))
-                     (if face
-                         (insert (propertize content 'face face))
-                       (insert content)))
+                     (if is-vnode
+                         (vui--render-vnode cell)
+                       (if face
+                           (insert (propertize content 'face face))
+                         (insert content))))
                     (:center
                      (let ((left-pad (/ padding 2))
                            (right-pad (- padding (/ padding 2))))
                        (insert (make-string left-pad ?\s))
-                       (if face
-                           (insert (propertize content 'face face))
-                         (insert content))
+                       (if is-vnode
+                           (vui--render-vnode cell)
+                         (if face
+                             (insert (propertize content 'face face))
+                           (insert content)))
                        (insert (make-string right-pad ?\s)))))
                   ;; Column separator
                   (when border-style
