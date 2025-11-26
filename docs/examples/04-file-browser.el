@@ -26,25 +26,25 @@
 
 (defcomponent breadcrumb ()
   :render
-  (let ((path (use-file-browser-path))
-        (set-path (use-file-browser-set-path)))
+  (let* ((path (expand-file-name (use-file-browser-path)))
+         (set-path (use-file-browser-set-path))
+         (parts (split-string path "/" t))
+         (accumulated "/"))
     (vui-hstack
      (vui-text "📁 ")
-     (let* ((parts (split-string path "/" t))
-            (accumulated "/"))
-       (apply #'vui-fragment
-              (vui-button "/"
-                          :on-click (lambda ()
-                                      (funcall set-path "/")))
-              (mapcar (lambda (part)
-                        (setq accumulated (concat accumulated part "/"))
-                        (let ((target accumulated))
-                          (vui-fragment
-                           (vui-text " / ")
-                           (vui-button part
-                                       :on-click (lambda ()
-                                                   (funcall set-path target))))))
-                      parts))))))
+     (apply #'vui-fragment
+            (vui-button "/"
+                        :on-click (lambda ()
+                                    (funcall set-path "/")))
+            (mapcar (lambda (part)
+                      (setq accumulated (concat accumulated part "/"))
+                      (let ((target accumulated))
+                        (vui-fragment
+                         (vui-text " / ")
+                         (vui-button part
+                                     :on-click (lambda ()
+                                                 (funcall set-path target))))))
+                    parts)))))
 
 
 ;;; File Entry Component
@@ -175,7 +175,7 @@
           (filter ""))
 
   :on-mount
-  (let ((path (use-file-browser-path)))
+  (let ((path (expand-file-name (use-file-browser-path))))
     (condition-case err
         (let ((files (directory-files-and-attributes path nil nil t)))
           (vui-batch
@@ -198,7 +198,7 @@
 
   :on-update
   ;; Reload when path changes
-  (let ((path (use-file-browser-path)))
+  (let ((path (expand-file-name (use-file-browser-path))))
     (when (not (equal path (plist-get prev-state :last-path)))
       ;; Set last-path immediately to prevent re-triggering on next update
       (vui-batch
