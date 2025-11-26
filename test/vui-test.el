@@ -1300,4 +1300,103 @@
       (expect (car handler-called) :to-equal "on-click")
       (expect (cadr handler-called) :to-equal "Custom event error"))))
 
+(describe "vui-batch"
+  (it "batches multiple state updates into single render"
+    (let ((vui-idle-render-delay nil)  ; Disable idle rendering
+          (render-count 0))
+      (defcomponent batch-test ()
+        :state ((a 0) (b 0))
+        :render (progn
+                  (setq render-count (1+ render-count))
+                  (vui-text (format "a=%d b=%d" a b))))
+      (let ((instance (vui-mount (vui-component 'batch-test) "*test-batch*")))
+        (unwind-protect
+            (progn
+              ;; Initial render
+              (expect render-count :to-equal 1)
+              ;; Batch multiple updates
+              (with-current-buffer "*test-batch*"
+                (let ((vui--current-instance instance)
+                      (vui--root-instance instance))
+                  (vui-batch
+                    (vui-set-state :a 1)
+                    (vui-set-state :b 2))))
+              ;; Should only have one additional render (total 2)
+              (expect render-count :to-equal 2)
+              (expect (with-current-buffer "*test-batch*" (buffer-string))
+                      :to-equal "a=1 b=2"))
+          (kill-buffer "*test-batch*")))))
+
+  (it "handles nested batches correctly"
+    (let ((vui-idle-render-delay nil)
+          (render-count 0))
+      (defcomponent nested-batch-test ()
+        :state ((x 0))
+        :render (progn
+                  (setq render-count (1+ render-count))
+                  (vui-text (number-to-string x))))
+      (let ((instance (vui-mount (vui-component 'nested-batch-test) "*test-nested-batch*")))
+        (unwind-protect
+            (progn
+              (expect render-count :to-equal 1)
+              (with-current-buffer "*test-nested-batch*"
+                (let ((vui--current-instance instance)
+                      (vui--root-instance instance))
+                  (vui-batch
+                    (vui-set-state :x 1)
+                    (vui-batch
+                      (vui-set-state :x 2))
+                    (vui-set-state :x 3))))
+              ;; Only one render at the end of outermost batch
+              (expect render-count :to-equal 2)
+              (expect (with-current-buffer "*test-nested-batch*" (buffer-string))
+                      :to-equal "3"))
+          (kill-buffer "*test-nested-batch*")))))
+
+  (it "does not render if no state changes"
+    (let ((vui-idle-render-delay nil)
+          (render-count 0))
+      (defcomponent no-change-batch ()
+        :state ((val 0))
+        :render (progn
+                  (setq render-count (1+ render-count))
+                  (vui-text "OK")))
+      (let ((instance (vui-mount (vui-component 'no-change-batch) "*test-no-change*")))
+        (unwind-protect
+            (progn
+              (expect render-count :to-equal 1)
+              ;; Empty batch - no state changes
+              (vui-batch)
+              ;; Should not trigger re-render
+              (expect render-count :to-equal 1))
+          (kill-buffer "*test-no-change*"))))))
+
+(describe "vui-flush-sync"
+  (it "forces immediate render"
+    (let ((vui-idle-render-delay 10)  ; Long delay
+          (render-count 0))
+      (defcomponent flush-test ()
+        :state ((val 0))
+        :render (progn
+                  (setq render-count (1+ render-count))
+                  (vui-text (number-to-string val))))
+      (let ((instance (vui-mount (vui-component 'flush-test) "*test-flush*")))
+        (unwind-protect
+            (progn
+              (expect render-count :to-equal 1)
+              ;; Change state (would be deferred)
+              (with-current-buffer "*test-flush*"
+                (let ((vui--current-instance instance)
+                      (vui--root-instance instance))
+                  (vui-set-state :val 42)))
+              ;; Timer scheduled but not fired yet
+              ;; Force sync render
+              (let ((vui--root-instance instance))
+                (vui-flush-sync))
+              ;; Should have rendered
+              (expect render-count :to-equal 2)
+              (expect (with-current-buffer "*test-flush*" (buffer-string))
+                      :to-equal "42"))
+          (kill-buffer "*test-flush*"))))))
+
 ;;; vui-test.el ends here

@@ -687,6 +687,22 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
 (defvar vui--root-instance nil
   "The root component instance for the current buffer.")
 
+(defvar vui--batch-depth 0
+  "Current nesting depth of vui-batch calls.")
+
+(defvar vui--render-pending-p nil
+  "Non-nil if a re-render is pending (during batched updates).")
+
+(defvar vui--idle-timer nil
+  "Timer for deferred rendering when Emacs is idle.")
+
+(defcustom vui-idle-render-delay 0.01
+  "Seconds to wait before rendering when using deferred rendering.
+Set to nil to disable idle-time rendering (render immediately)."
+  :type '(choice (number :tag "Delay in seconds")
+                 (const :tag "Disabled" nil))
+  :group 'vui)
+
 (defun vui--find-state-owner (instance key)
   "Find the instance that owns state KEY, starting from INSTANCE.
 Searches up the parent chain. Returns INSTANCE if KEY exists in its state,
@@ -716,7 +732,64 @@ Must be called from within a component's event handler."
   (let ((target (vui--find-state-owner vui--current-instance key)))
     (setf (vui-instance-state target)
           (plist-put (vui-instance-state target) key value)))
-  ;; Re-render from the root
+  ;; Schedule re-render (respects batching)
+  (vui--schedule-render))
+
+(defun vui--schedule-render ()
+  "Schedule a re-render of the root instance.
+If inside a vui-batch, the render is deferred until batch completes.
+Otherwise, render immediately or after idle delay based on config."
+  (when vui--root-instance
+    (if (> vui--batch-depth 0)
+        ;; Inside a batch - just mark as pending
+        (setq vui--render-pending-p t)
+      ;; Not in a batch - render based on config
+      (if vui-idle-render-delay
+          ;; Deferred rendering
+          (vui--schedule-idle-render)
+        ;; Immediate rendering
+        (vui--rerender-instance vui--root-instance)))))
+
+(defun vui--schedule-idle-render ()
+  "Schedule a render when Emacs becomes idle."
+  (when vui--idle-timer
+    (cancel-timer vui--idle-timer))
+  (let ((root vui--root-instance))
+    (setq vui--idle-timer
+          (run-with-idle-timer
+           vui-idle-render-delay nil
+           (lambda ()
+             (setq vui--idle-timer nil)
+             (when root
+               (vui--rerender-instance root)))))))
+
+(defmacro vui-batch (&rest body)
+  "Batch state updates in BODY into a single re-render.
+
+Use this when making multiple state changes that should
+result in only one re-render, for better performance.
+
+Example:
+  (vui-batch
+    (vui-set-state \\='count (1+ count))
+    (vui-set-state \\='name \"Bob\"))"
+  `(let ((vui--batch-depth (1+ vui--batch-depth)))
+     (unwind-protect
+         (progn ,@body)
+       (cl-decf vui--batch-depth)
+       (when (and (= vui--batch-depth 0)
+                  vui--render-pending-p
+                  vui--root-instance)
+         ;; End of outermost batch - do single re-render
+         (setq vui--render-pending-p nil)
+         (vui--rerender-instance vui--root-instance)))))
+
+(defun vui-flush-sync ()
+  "Force immediate re-render, bypassing any pending idle timers.
+Use when you need the UI to update synchronously."
+  (when vui--idle-timer
+    (cancel-timer vui--idle-timer)
+    (setq vui--idle-timer nil))
   (when vui--root-instance
     (vui--rerender-instance vui--root-instance)))
 
