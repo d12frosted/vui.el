@@ -555,4 +555,186 @@
             (expect (buffer-string) :to-equal "A:5B:0"))
         (kill-buffer "*test-idx*")))))
 
+(describe "use-effect"
+  (it "runs effect after first render"
+    (let ((effect-ran nil))
+      (defcomponent effect-test ()
+        :render (progn
+                  (use-effect ()
+                    (setq effect-ran t))
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'effect-test) "*test-effect1*")))
+        (unwind-protect
+            (expect effect-ran :to-be-truthy)
+          (kill-buffer "*test-effect1*")))))
+
+  (it "runs effect when deps change"
+    (let ((effect-count 0)
+          (show-alt nil))
+      (defcomponent effect-deps ()
+        :state ((value 1))
+        :render (progn
+                  (use-effect (value)
+                    (setq effect-count (1+ effect-count)))
+                  (vui-text (number-to-string value))))
+      (let ((instance (vui-mount (vui-component 'effect-deps) "*test-effect2*")))
+        (unwind-protect
+            (progn
+              ;; Effect should run once on mount
+              (expect effect-count :to-equal 1)
+              ;; Change state and re-render
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :value 2))
+              (vui--rerender-instance instance)
+              ;; Effect should run again because dep changed
+              (expect effect-count :to-equal 2)
+              ;; Re-render without changing value
+              (vui--rerender-instance instance)
+              ;; Effect should NOT run (deps unchanged)
+              (expect effect-count :to-equal 2))
+          (kill-buffer "*test-effect2*")))))
+
+  (it "does not run effect when deps are unchanged"
+    (let ((effect-count 0))
+      (defcomponent effect-stable ()
+        :state ((count 0) (other 0))
+        :render (progn
+                  (use-effect (count)
+                    (setq effect-count (1+ effect-count)))
+                  (vui-text (format "%d-%d" count other))))
+      (let ((instance (vui-mount (vui-component 'effect-stable) "*test-effect3*")))
+        (unwind-protect
+            (progn
+              (expect effect-count :to-equal 1)
+              ;; Change 'other' but not 'count'
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :other 5))
+              (vui--rerender-instance instance)
+              ;; Effect should NOT run (count unchanged)
+              (expect effect-count :to-equal 1))
+          (kill-buffer "*test-effect3*")))))
+
+  (it "runs cleanup before next effect"
+    (let ((cleanup-ran nil)
+          (effect-value nil))
+      (defcomponent effect-cleanup ()
+        :state ((value 1))
+        :render (progn
+                  (use-effect (value)
+                    (setq effect-value value)
+                    (lambda () (setq cleanup-ran value)))
+                  (vui-text (number-to-string value))))
+      (let ((instance (vui-mount (vui-component 'effect-cleanup) "*test-effect4*")))
+        (unwind-protect
+            (progn
+              (expect effect-value :to-equal 1)
+              (expect cleanup-ran :to-be nil)
+              ;; Change state
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :value 2))
+              (vui--rerender-instance instance)
+              ;; Cleanup from previous effect should have run
+              (expect cleanup-ran :to-equal 1)
+              (expect effect-value :to-equal 2))
+          (kill-buffer "*test-effect4*")))))
+
+  (it "runs cleanup on unmount"
+    (let ((cleanup-ran nil)
+          (show-child t))
+      (defcomponent effect-unmount-child ()
+        :render (progn
+                  (use-effect ()
+                    (lambda () (setq cleanup-ran t)))
+                  (vui-text "child")))
+      (defcomponent effect-unmount-parent ()
+        :render (if show-child
+                    (vui-component 'effect-unmount-child)
+                  (vui-text "no child")))
+      (let ((instance (vui-mount (vui-component 'effect-unmount-parent) "*test-effect5*")))
+        (unwind-protect
+            (progn
+              (expect cleanup-ran :to-be nil)
+              ;; Remove child
+              (setq show-child nil)
+              (vui--rerender-instance instance)
+              ;; Cleanup should have run
+              (expect cleanup-ran :to-be-truthy))
+          (kill-buffer "*test-effect5*"))))))
+
+(describe "use-ref"
+  (it "creates a ref with initial value"
+    (let ((ref-value nil))
+      (defcomponent ref-test ()
+        :render (let ((my-ref (use-ref 42)))
+                  (setq ref-value (car my-ref))
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'ref-test) "*test-ref1*")))
+        (unwind-protect
+            (expect ref-value :to-equal 42)
+          (kill-buffer "*test-ref1*")))))
+
+  (it "preserves ref value across re-renders"
+    (let ((ref-values nil))
+      (defcomponent ref-persist ()
+        :state ((count 0))
+        :render (let ((my-ref (use-ref 0)))
+                  ;; On first render, set ref to 100
+                  (when (= (car my-ref) 0)
+                    (setcar my-ref 100))
+                  (push (car my-ref) ref-values)
+                  (vui-text (number-to-string count))))
+      (let ((instance (vui-mount (vui-component 'ref-persist) "*test-ref2*")))
+        (unwind-protect
+            (progn
+              ;; First render - ref should be 100 (we set it)
+              (expect (car ref-values) :to-equal 100)
+              ;; Re-render
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :count 1))
+              (vui--rerender-instance instance)
+              ;; Ref should still be 100 (preserved)
+              (expect (car ref-values) :to-equal 100)
+              (expect (length ref-values) :to-equal 2))
+          (kill-buffer "*test-ref2*")))))
+
+  (it "does not trigger re-render when modified"
+    (let ((render-count 0))
+      (defcomponent ref-no-rerender ()
+        :render (let ((my-ref (use-ref 0)))
+                  (setq render-count (1+ render-count))
+                  ;; Modify ref - should NOT cause re-render
+                  (setcar my-ref (1+ (car my-ref)))
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'ref-no-rerender) "*test-ref3*")))
+        (unwind-protect
+            (progn
+              ;; Only one render should have occurred
+              (expect render-count :to-equal 1))
+          (kill-buffer "*test-ref3*")))))
+
+  (it "works with use-effect for storing timers"
+    (let ((cleanup-called nil)
+          (timer-value nil))
+      (defcomponent ref-with-effect ()
+        :render (let ((timer-ref (use-ref nil)))
+                  (use-effect ()
+                    ;; Store a value (simulating timer)
+                    (setcar timer-ref 'my-timer)
+                    (lambda ()
+                      (setq cleanup-called t)
+                      (setq timer-value (car timer-ref))))
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'ref-with-effect) "*test-ref4*")))
+        (unwind-protect
+            (progn
+              ;; Initially, cleanup not called
+              (expect cleanup-called :to-be nil)
+              ;; Force unmount by killing buffer (via vui--call-unmount-recursive)
+              (vui--call-unmount-recursive instance)
+              ;; Cleanup should have run and accessed the ref
+              (expect cleanup-called :to-be-truthy)
+              (expect timer-value :to-equal 'my-timer))
+          (when (get-buffer "*test-ref4*")
+            (kill-buffer "*test-ref4*")))))))
+
 ;;; vui-test.el ends here

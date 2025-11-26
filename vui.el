@@ -166,7 +166,9 @@
   parent      ; Parent vui-instance or nil for root
   children    ; Child vui-instances
   buffer      ; Buffer this instance is rendered into
-  mounted-p)  ; Has this been mounted?
+  mounted-p   ; Has this been mounted?
+  effects     ; Alist of (effect-id . (deps . cleanup-fn)) for use-effect
+  refs)       ; Hash table of ref-id -> (value . nil) for use-ref
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -184,6 +186,15 @@
 
 (defvar vui--new-children nil
   "Accumulator for child instances created during render.")
+
+(defvar vui--pending-effects nil
+  "List of effects to run after commit: ((instance effect-id deps effect-fn) ...).")
+
+(defvar vui--effect-index 0
+  "Counter for auto-generating effect IDs within a component render.")
+
+(defvar vui--ref-index 0
+  "Counter for auto-generating ref IDs within a component render.")
 
 (defun vui--register-component (def)
   "Register component definition DEF in the registry."
@@ -517,6 +528,132 @@ Must be called from within a component's event handler."
   (when vui--root-instance
     (vui--rerender-instance vui--root-instance)))
 
+;;; Effects System
+
+(defmacro use-effect (deps &rest body)
+  "Run BODY as a side effect when DEPS change.
+
+DEPS is a list of variables to watch. The effect runs:
+- After first render
+- After re-render if any dep changed (compared with `equal')
+
+If BODY returns a function, it's called as cleanup before
+the next effect run or on unmount.
+
+Examples:
+  ;; Run once on mount (empty deps)
+  (use-effect ()
+    (message \"Component mounted\"))
+
+  ;; Run when count changes
+  (use-effect (count)
+    (message \"Count is now %d\" count))
+
+  ;; With cleanup
+  (use-effect (user-id)
+    (let ((subscription (subscribe user-id)))
+      (lambda () (unsubscribe subscription))))"
+  (declare (indent 1))
+  `(vui--register-effect
+    (list ,@deps)
+    (lambda () ,@body)))
+
+(defun vui--register-effect (deps effect-fn)
+  "Register an effect with DEPS and EFFECT-FN to run after commit.
+Called from within a component's render function."
+  (unless vui--current-instance
+    (error "use-effect called outside of component context"))
+  (let* ((instance vui--current-instance)
+         (effect-id vui--effect-index)
+         (effects (vui-instance-effects instance))
+         (prev-entry (assq effect-id effects))
+         (prev-deps (cadr prev-entry)))
+    ;; Increment effect counter for next use-effect call
+    (cl-incf vui--effect-index)
+    ;; Check if deps changed (or first run)
+    (when (or (null prev-entry)
+              (not (equal prev-deps deps)))
+      ;; Schedule effect to run after commit
+      (push (list instance effect-id deps effect-fn (cddr prev-entry))
+            vui--pending-effects))))
+
+(defun vui--run-pending-effects ()
+  "Run all pending effects after commit."
+  (let ((effects (nreverse vui--pending-effects)))
+    (setq vui--pending-effects nil)
+    (dolist (effect effects)
+      (let* ((instance (nth 0 effect))
+             (effect-id (nth 1 effect))
+             (deps (nth 2 effect))
+             (effect-fn (nth 3 effect))
+             (prev-cleanup (car (nth 4 effect))))
+        ;; Run cleanup from previous effect
+        (when (functionp prev-cleanup)
+          (funcall prev-cleanup))
+        ;; Run new effect, capture cleanup
+        (let ((new-cleanup (funcall effect-fn)))
+          ;; Store new deps and cleanup in instance
+          (let ((effects (vui-instance-effects instance)))
+            (setf (vui-instance-effects instance)
+                  (cons (cons effect-id (list deps new-cleanup))
+                        (assq-delete-all effect-id effects)))))))))
+
+(defun vui--cleanup-instance-effects (instance)
+  "Run all cleanup functions for INSTANCE's effects."
+  (dolist (effect-entry (vui-instance-effects instance))
+    (let ((cleanup (cadr (cdr effect-entry))))
+      (when (functionp cleanup)
+        (funcall cleanup))))
+  (setf (vui-instance-effects instance) nil))
+
+;;; Refs System
+
+(defmacro use-ref (initial-value)
+  "Create a mutable ref that persists across re-renders.
+
+Returns a cons cell whose car is the current value.
+Access via (car ref), set via (setcar ref new-value).
+
+Unlike state, modifying a ref does NOT trigger re-render.
+
+Useful for:
+- Storing previous values
+- Holding timer/process references
+- Mutable values that don't affect rendering
+
+Examples:
+  ;; Store a timer reference
+  (let ((timer-ref (use-ref nil)))
+    (use-effect ()
+      (setcar timer-ref (run-with-timer 1 1 #\\='update))
+      (lambda () (cancel-timer (car timer-ref)))))
+
+  ;; Track previous value
+  (let ((prev-ref (use-ref nil)))
+    (use-effect (value)
+      (message \"Changed from %s to %s\" (car prev-ref) value)
+      (setcar prev-ref value)))"
+  `(vui--get-or-create-ref ,initial-value))
+
+(defun vui--get-or-create-ref (initial-value)
+  "Get existing ref or create new one with INITIAL-VALUE.
+Called from within a component's render function."
+  (unless vui--current-instance
+    (error "use-ref called outside of component context"))
+  (let* ((instance vui--current-instance)
+         (ref-id vui--ref-index)
+         (refs (or (vui-instance-refs instance)
+                   (let ((h (make-hash-table :test 'eq)))
+                     (setf (vui-instance-refs instance) h)
+                     h))))
+    ;; Increment ref counter for next use-ref call
+    (cl-incf vui--ref-index)
+    ;; Get existing ref or create new one
+    (or (gethash ref-id refs)
+        (let ((ref (cons initial-value nil)))
+          (puthash ref-id ref refs)
+          ref))))
+
 (defun vui--rerender-instance (instance)
   "Re-render INSTANCE and update the buffer."
   (let ((buffer (vui-instance-buffer instance)))
@@ -527,7 +664,9 @@ Must be called from within a component's event handler."
                (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
                ;; Save widget-relative position
                (cursor-info (vui--save-cursor-position))
-               (vui--root-instance instance))
+               (vui--root-instance instance)
+               ;; Clear pending effects before render
+               (vui--pending-effects nil))
           ;; Clear widget tracking before re-render
           (setq widget-field-list nil)
           (setq widget-field-new nil)
@@ -538,7 +677,9 @@ Must be called from within a component's event handler."
           (widget-setup)
           (use-local-map widget-keymap)
           ;; Restore cursor position
-          (vui--restore-cursor-position cursor-info))))))
+          (vui--restore-cursor-position cursor-info)
+          ;; Run effects after commit
+          (vui--run-pending-effects))))))
 
 (defun vui--widget-bounds (widget)
   "Get (START . END) bounds for WIDGET."
@@ -621,6 +762,8 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
+         (vui--effect-index 0)  ; Reset effect counter for this component
+         (vui--ref-index 0)     ; Reset ref counter for this component
          (old-children (vui-instance-children instance))
          (def (vui-instance-def instance))
          (render-fn (vui-component-def-render-fn def))
@@ -648,7 +791,9 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
   ;; First unmount children (depth-first)
   (dolist (child (vui-instance-children instance))
     (vui--call-unmount-recursive child))
-  ;; Then unmount this instance
+  ;; Clean up effects
+  (vui--cleanup-instance-effects instance)
+  ;; Then call on-unmount hook
   (let* ((def (vui-instance-def instance))
          (on-unmount (vui-component-def-on-unmount def)))
     (when on-unmount
@@ -956,7 +1101,9 @@ BUFFER-NAME defaults to \"*vui*\".
 Returns the root instance."
   (let* ((buf-name (or buffer-name "*vui*"))
          (buf (get-buffer-create buf-name))
-         (instance (vui--create-instance component-vnode nil)))
+         (instance (vui--create-instance component-vnode nil))
+         ;; Clear pending effects before initial render
+         (vui--pending-effects nil))
     ;; Store buffer reference in instance for re-rendering
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf
@@ -972,6 +1119,8 @@ Returns the root instance."
         ;; editing outside of editable fields - no need for buffer-read-only
         (widget-setup)
         (use-local-map widget-keymap)
+        ;; Run effects after initial render
+        (vui--run-pending-effects)
         (goto-char (point-min))))
     (switch-to-buffer buf)
     instance))
