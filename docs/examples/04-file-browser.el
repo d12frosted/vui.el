@@ -14,16 +14,11 @@
 
 ;;; Context: Current Path
 ;; Share the current directory path and setter across components
+;; Components should capture set-path with (use-file-browser-set-path) during render
+;; and call it in event handlers: (funcall set-path new-path)
 
 (defcontext file-browser-path)
 (defcontext file-browser-set-path)
-
-(defun set-file-browser-path (new-path)
-  "Set the file browser path to NEW-PATH.
-Must be called from within a file-browser component tree."
-  (let ((setter (use-file-browser-set-path)))
-    (when setter
-      (funcall setter new-path))))
 
 
 ;;; Breadcrumb Navigation
@@ -31,7 +26,8 @@ Must be called from within a file-browser component tree."
 
 (defcomponent breadcrumb ()
   :render
-  (let ((path (use-file-browser-path)))
+  (let ((path (use-file-browser-path))
+        (set-path (use-file-browser-set-path)))
     (vui-hstack
      (vui-text "📁 ")
      (let* ((parts (split-string path "/" t))
@@ -39,7 +35,7 @@ Must be called from within a file-browser component tree."
        (apply #'vui-fragment
               (vui-button "/"
                           :on-click (lambda ()
-                                      (set-file-browser-path "/")))
+                                      (funcall set-path "/")))
               (mapcar (lambda (part)
                         (setq accumulated (concat accumulated part "/"))
                         (let ((target accumulated))
@@ -47,7 +43,7 @@ Must be called from within a file-browser component tree."
                            (vui-text " / ")
                            (vui-button part
                                        :on-click (lambda ()
-                                                   (set-file-browser-path target))))))
+                                                   (funcall set-path target))))))
                       parts))))))
 
 
@@ -231,7 +227,8 @@ Must be called from within a file-browser component tree."
           (vui-set-state :loading nil))))))
 
   :render
-  (let ((path (use-file-browser-path)))
+  (let ((path (use-file-browser-path))
+        (set-path (use-file-browser-set-path)))
     (vui-vstack :spacing 1
                 ;; Header
                 (vui-component 'breadcrumb)
@@ -272,9 +269,9 @@ Must be called from within a file-browser component tree."
                                  :sort-asc sort-asc
                                  :filter filter
                                  :on-open (lambda (entry)
-                                            (set-file-browser-path
-                                             (expand-file-name (plist-get entry :name)
-                                                               path))))))
+                                            (funcall set-path
+                                                     (expand-file-name (plist-get entry :name)
+                                                                       path))))))
 
                 ;; Status bar
                 (vui-newline)
