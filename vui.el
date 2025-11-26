@@ -186,6 +186,143 @@ Groups by component and shows total time per phase."
       (special-mode)
       (display-buffer (current-buffer)))))
 
+;;; Component Inspector
+
+(defvar vui-inspector-buffer-name "*vui-inspector*"
+  "Name of the buffer for the component inspector.")
+
+(defun vui--format-plist (plist &optional indent)
+  "Format PLIST for display with INDENT spaces."
+  (let ((indent-str (make-string (or indent 0) ?\s))
+        (result ""))
+    (when plist
+      (cl-loop for (key val) on plist by #'cddr
+               do (setq result
+                        (concat result
+                                (format "%s%s: %S\n"
+                                        indent-str
+                                        key
+                                        (if (functionp val)
+                                            "#<function>"
+                                          val))))))
+    result))
+
+(defun vui--inspect-instance-recursive (instance depth)
+  "Return inspection string for INSTANCE at DEPTH level."
+  (let* ((def (vui-instance-def instance))
+         (name (vui-component-def-name def))
+         (props (vui-instance-props instance))
+         (state (vui-instance-state instance))
+         (children (vui-instance-children instance))
+         (indent (make-string (* depth 2) ?\s))
+         (result ""))
+    ;; Component header
+    (setq result (concat result
+                         (format "%s[%s] (id: %d)\n"
+                                 indent
+                                 name
+                                 (vui-instance-id instance))))
+    ;; Props (exclude children and functions for brevity)
+    (when props
+      (let ((display-props (copy-sequence props)))
+        (cl-remf display-props :children)
+        (when display-props
+          (setq result (concat result
+                               (format "%s  Props:\n" indent)
+                               (vui--format-plist display-props (+ (* depth 2) 4)))))))
+    ;; State
+    (when state
+      (setq result (concat result
+                           (format "%s  State:\n" indent)
+                           (vui--format-plist state (+ (* depth 2) 4)))))
+    ;; Children
+    (when children
+      (setq result (concat result
+                           (format "%s  Children:\n" indent)))
+      (dolist (child children)
+        (setq result (concat result
+                             (vui--inspect-instance-recursive child (1+ depth))))))
+    result))
+
+(defun vui-inspect (&optional instance)
+  "Display the component inspector for INSTANCE or the root instance.
+Shows the component tree with props and state for each component."
+  (interactive)
+  (let ((inst (or instance vui--root-instance)))
+    (if (not inst)
+        (message "No VUI instance mounted. Use vui-mount to mount a component.")
+      (with-current-buffer (get-buffer-create vui-inspector-buffer-name)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "VUI Component Inspector\n")
+          (insert (make-string 60 ?=) "\n\n")
+          (insert (format "Buffer: %s\n\n"
+                          (or (buffer-name (vui-instance-buffer inst))
+                              "(no buffer)")))
+          (insert "Component Tree:\n")
+          (insert (make-string 60 ?-) "\n")
+          (insert (vui--inspect-instance-recursive inst 0)))
+        (goto-char (point-min))
+        (special-mode)
+        (display-buffer (current-buffer))))))
+
+(defun vui-inspect-state (&optional instance)
+  "Display the state viewer for INSTANCE or the root instance.
+Shows a focused view of all component state in the tree."
+  (interactive)
+  (let ((inst (or instance vui--root-instance)))
+    (if (not inst)
+        (message "No VUI instance mounted. Use vui-mount to mount a component.")
+      (with-current-buffer (get-buffer-create "*vui-state*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "VUI State Viewer\n")
+          (insert (make-string 60 ?=) "\n\n")
+          (vui--collect-state-recursive inst 0))
+        (goto-char (point-min))
+        (special-mode)
+        (display-buffer (current-buffer))))))
+
+(defun vui--collect-state-recursive (instance depth)
+  "Insert state for INSTANCE at DEPTH level."
+  (let* ((def (vui-instance-def instance))
+         (name (vui-component-def-name def))
+         (state (vui-instance-state instance))
+         (children (vui-instance-children instance))
+         (indent (make-string (* depth 2) ?\s)))
+    ;; Only show components with state
+    (when state
+      (insert (format "%s%s (id: %d):\n" indent name (vui-instance-id instance)))
+      (insert (vui--format-plist state (+ (* depth 2) 2)))
+      (insert "\n"))
+    ;; Recurse to children
+    (dolist (child children)
+      (vui--collect-state-recursive child (1+ depth)))))
+
+(defun vui-get-instance-by-id (id &optional instance)
+  "Find instance with ID starting from INSTANCE or root."
+  (let* ((inst (or instance vui--root-instance))
+         (found nil))
+    (when inst
+      (if (= (vui-instance-id inst) id)
+          (setq found inst)
+        (dolist (child (vui-instance-children inst))
+          (unless found
+            (setq found (vui-get-instance-by-id id child))))))
+    found))
+
+(defun vui-get-component-instances (component-type &optional instance)
+  "Find all instances of COMPONENT-TYPE starting from INSTANCE or root.
+Returns a list of instances."
+  (let* ((inst (or instance vui--root-instance))
+         (result nil))
+    (when inst
+      (when (eq (vui-component-def-name (vui-instance-def inst)) component-type)
+        (push inst result))
+      (dolist (child (vui-instance-children inst))
+        (setq result (append result (vui-get-component-instances component-type child)))))
+    result))
+
 ;;; Core Data Structures - Virtual Nodes
 
 ;; Base structure for all virtual nodes

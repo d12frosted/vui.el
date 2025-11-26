@@ -1702,4 +1702,128 @@
               (expect (length (vui-get-timing)) :to-equal 5))
           (kill-buffer "*test-timing9*"))))))
 
+(describe "component inspector"
+  (it "returns message when no instance mounted"
+    (let ((vui--root-instance nil))
+      (expect (vui-inspect) :not :to-throw)))
+
+  (it "inspects root instance"
+    (defcomponent inspect-root-test ()
+      :state ((count 42))
+      :render (vui-text "hello"))
+    (let ((instance (vui-mount (vui-component 'inspect-root-test) "*test-inspect1*")))
+      (unwind-protect
+          (progn
+            (vui-inspect)
+            (with-current-buffer "*vui-inspector*"
+              (let ((content (buffer-string)))
+                (expect content :to-match "Component Inspector")
+                (expect content :to-match "inspect-root-test")
+                (expect content :to-match ":count")
+                (expect content :to-match "42"))))
+        (kill-buffer "*test-inspect1*")
+        (when (get-buffer "*vui-inspector*")
+          (kill-buffer "*vui-inspector*")))))
+
+  (it "shows nested component tree"
+    (defcomponent inspect-child ()
+      :state ((value "inner"))
+      :render (vui-text value))
+    (defcomponent inspect-parent ()
+      :state ((label "outer"))
+      :render (vui-fragment
+                (vui-text label)
+                (vui-component 'inspect-child)))
+    (let ((instance (vui-mount (vui-component 'inspect-parent) "*test-inspect2*")))
+      (unwind-protect
+          (progn
+            (vui-inspect)
+            (with-current-buffer "*vui-inspector*"
+              (let ((content (buffer-string)))
+                (expect content :to-match "inspect-parent")
+                (expect content :to-match "inspect-child")
+                (expect content :to-match ":label")
+                (expect content :to-match ":value"))))
+        (kill-buffer "*test-inspect2*")
+        (when (get-buffer "*vui-inspector*")
+          (kill-buffer "*vui-inspector*")))))
+
+  (it "shows props in inspector"
+    (defcomponent inspect-with-props (name)
+      :render (vui-text (format "Hi %s" name)))
+    (let ((instance (vui-mount (vui-component 'inspect-with-props :name "Alice")
+                               "*test-inspect3*")))
+      (unwind-protect
+          (progn
+            (vui-inspect)
+            (with-current-buffer "*vui-inspector*"
+              (let ((content (buffer-string)))
+                (expect content :to-match ":name")
+                (expect content :to-match "Alice"))))
+        (kill-buffer "*test-inspect3*")
+        (when (get-buffer "*vui-inspector*")
+          (kill-buffer "*vui-inspector*"))))))
+
+(describe "state viewer"
+  (it "shows only stateful components"
+    (defcomponent stateless-comp ()
+      :render (vui-text "no state"))
+    (defcomponent stateful-comp ()
+      :state ((val 123))
+      :render (vui-text "with state"))
+    (defcomponent state-viewer-parent ()
+      :state ((parent-val "parent"))
+      :render (vui-fragment
+                (vui-component 'stateless-comp)
+                (vui-component 'stateful-comp)))
+    (let ((instance (vui-mount (vui-component 'state-viewer-parent) "*test-state1*")))
+      (unwind-protect
+          (progn
+            (vui-inspect-state)
+            (with-current-buffer "*vui-state*"
+              (let ((content (buffer-string)))
+                (expect content :to-match "state-viewer-parent")
+                (expect content :to-match "stateful-comp")
+                ;; Stateless should not appear (no state to show)
+                (expect content :not :to-match "stateless-comp"))))
+        (kill-buffer "*test-state1*")
+        (when (get-buffer "*vui-state*")
+          (kill-buffer "*vui-state*"))))))
+
+(describe "instance lookup"
+  (it "finds instance by id"
+    (defcomponent lookup-child ()
+      :render (vui-text "child"))
+    (defcomponent lookup-parent ()
+      :render (vui-component 'lookup-child))
+    (let ((instance (vui-mount (vui-component 'lookup-parent) "*test-lookup1*")))
+      (unwind-protect
+          (let* ((child (car (vui-instance-children instance)))
+                 (child-id (vui-instance-id child))
+                 (found (vui-get-instance-by-id child-id)))
+            (expect found :to-equal child))
+        (kill-buffer "*test-lookup1*"))))
+
+  (it "returns nil for non-existent id"
+    (defcomponent lookup-simple ()
+      :render (vui-text "hi"))
+    (let ((instance (vui-mount (vui-component 'lookup-simple) "*test-lookup2*")))
+      (unwind-protect
+          (expect (vui-get-instance-by-id 999999) :to-be nil)
+        (kill-buffer "*test-lookup2*"))))
+
+  (it "finds all instances of a type"
+    (defcomponent item-comp ()
+      :render (vui-text "item"))
+    (defcomponent list-comp ()
+      :render (vui-fragment
+                (vui-component 'item-comp)
+                (vui-component 'item-comp)
+                (vui-component 'item-comp)))
+    (let ((instance (vui-mount (vui-component 'list-comp) "*test-lookup3*")))
+      (unwind-protect
+          (let ((items (vui-get-component-instances 'item-comp)))
+            (expect (length items) :to-equal 3))
+        (kill-buffer "*test-lookup3*")))))
+
 ;;; vui-test.el ends here
