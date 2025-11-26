@@ -190,7 +190,9 @@
   buffer      ; Buffer this instance is rendered into
   mounted-p   ; Has this been mounted?
   effects     ; Alist of (effect-id . (deps . cleanup-fn)) for use-effect
-  refs)       ; Hash table of ref-id -> (value . nil) for use-ref
+  refs        ; Hash table of ref-id -> (value . nil) for use-ref
+  callbacks   ; Hash table of callback-id -> (deps . fn) for use-callback
+  memos)      ; Hash table of memo-id -> (deps . value) for let-memo
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -217,6 +219,12 @@
 
 (defvar vui--ref-index 0
   "Counter for auto-generating ref IDs within a component render.")
+
+(defvar vui--callback-index 0
+  "Counter for auto-generating callback IDs within a component render.")
+
+(defvar vui--memo-index 0
+  "Counter for auto-generating memo IDs within a component render.")
 
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
@@ -736,6 +744,100 @@ Returns default-value if no provider found."
                return (vui-context-binding-value binding))
       (vui-context-default-value context)))
 
+;;; Memoized Callbacks
+
+(defmacro use-callback (deps &rest body)
+  "Create a memoized callback that only changes when DEPS change.
+
+Returns a function that remains stable (eq-identical) across re-renders
+as long as DEPS don't change. This is useful for optimizing child
+components that depend on callback reference equality.
+
+DEPS is a list of variables to watch. The callback is regenerated when
+any dep changes (compared with `equal').
+
+Example:
+  ;; Stable callback that only changes when item-id changes
+  (let ((handle-delete (use-callback (item-id)
+                         (delete-item item-id))))
+    (vui-component 'item-button :on-click handle-delete))
+
+Note: Unlike React's useCallback, the BODY is the callback itself,
+not a function returning a callback."
+  (declare (indent 1))
+  `(vui--get-or-update-callback
+    (list ,@deps)
+    (lambda () ,@body)))
+
+(defun vui--get-or-update-callback (deps callback-fn)
+  "Return cached callback or update it if DEPS changed.
+Called from within a component's render function."
+  (unless vui--current-instance
+    (error "use-callback called outside of component context"))
+  (let* ((instance vui--current-instance)
+         (callback-id vui--callback-index)
+         (cache (or (vui-instance-callbacks instance)
+                    (let ((h (make-hash-table :test 'eq)))
+                      (setf (vui-instance-callbacks instance) h)
+                      h)))
+         (cached (gethash callback-id cache))
+         (cached-deps (car cached))
+         (cached-fn (cdr cached)))
+    ;; Increment callback counter for next use-callback call
+    (cl-incf vui--callback-index)
+    ;; Return cached callback if deps unchanged
+    (if (and cached (equal cached-deps deps))
+        cached-fn
+      ;; Create new callback and cache it
+      (let ((new-fn callback-fn))
+        (puthash callback-id (cons deps new-fn) cache)
+        new-fn))))
+
+;;; Memoized Values
+
+(defmacro use-memo (deps &rest body)
+  "Compute and cache a value that only changes when DEPS change.
+
+Similar to `use-callback' but for computed values rather than functions.
+BODY is evaluated only when DEPS change, and the result is cached.
+
+DEPS is a list of variables to watch. The value is recomputed when any
+dep changes (compared with `equal').
+
+Example:
+  ;; Expensive filtering only runs when items or filter change
+  (let ((filtered (use-memo (items filter)
+                    (seq-filter (lambda (i) (string-match filter i)) items))))
+    (vui-list filtered #'vui-text))"
+  (declare (indent 1))
+  `(vui--get-or-update-memo
+    (list ,@deps)
+    (lambda () ,@body)))
+
+(defun vui--get-or-update-memo (deps compute-fn)
+  "Return cached value or recompute if DEPS changed.
+Called from within a component's render function."
+  (unless vui--current-instance
+    (error "use-memo called outside of component context"))
+  (let* ((instance vui--current-instance)
+         (memo-id vui--memo-index)
+         (cache (or (vui-instance-memos instance)
+                    (let ((h (make-hash-table :test 'eq)))
+                      (setf (vui-instance-memos instance) h)
+                      h)))
+         (cached (gethash memo-id cache))
+         (cached-deps (car cached))
+         (cached-value (cdr cached)))
+    ;; Increment memo counter for next use-memo call
+    (cl-incf vui--memo-index)
+    ;; Return cached value if deps unchanged
+    (if (and cached (equal cached-deps deps))
+        cached-value
+      ;; Compute new value and cache it
+      (let ((new-value (funcall compute-fn)))
+        (puthash memo-id (cons deps new-value) cache)
+        new-value))))
+
 (defun vui--rerender-instance (instance)
   "Re-render INSTANCE and update the buffer."
   (let ((buffer (vui-instance-buffer instance)))
@@ -844,8 +946,10 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
-         (vui--effect-index 0)  ; Reset effect counter for this component
-         (vui--ref-index 0)     ; Reset ref counter for this component
+         (vui--effect-index 0)    ; Reset effect counter for this component
+         (vui--ref-index 0)       ; Reset ref counter for this component
+         (vui--callback-index 0)  ; Reset callback counter for this component
+         (vui--memo-index 0)      ; Reset memo counter for this component
          (old-children (vui-instance-children instance))
          (def (vui-instance-def instance))
          (render-fn (vui-component-def-render-fn def))

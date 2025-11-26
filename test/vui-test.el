@@ -817,4 +817,131 @@
               (expect captured-role :to-equal 'admin))
           (kill-buffer "*test-ctx4*"))))))
 
+(describe "use-callback"
+  (it "returns same function reference when deps unchanged"
+    (let ((captured-fns nil))
+      (defcomponent callback-stable ()
+        :state ((count 0))
+        :render (let ((cb (use-callback ()
+                            (message "clicked"))))
+                  (push cb captured-fns)
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'callback-stable) "*test-cb1*")))
+        (unwind-protect
+            (progn
+              ;; First render
+              (expect (length captured-fns) :to-equal 1)
+              ;; Re-render
+              (vui--rerender-instance instance)
+              ;; Same function should be returned (eq)
+              (expect (length captured-fns) :to-equal 2)
+              (expect (eq (nth 0 captured-fns) (nth 1 captured-fns)) :to-be-truthy))
+          (kill-buffer "*test-cb1*")))))
+
+  (it "returns new function when deps change"
+    (let ((captured-fns nil))
+      (defcomponent callback-deps ()
+        :state ((id 1))
+        :render (let ((cb (use-callback (id)
+                            (delete-item id))))
+                  (push cb captured-fns)
+                  (vui-text (number-to-string id))))
+      (let ((instance (vui-mount (vui-component 'callback-deps) "*test-cb2*")))
+        (unwind-protect
+            (progn
+              ;; First render
+              (expect (length captured-fns) :to-equal 1)
+              ;; Re-render with same deps
+              (vui--rerender-instance instance)
+              (expect (length captured-fns) :to-equal 2)
+              (expect (eq (nth 0 captured-fns) (nth 1 captured-fns)) :to-be-truthy)
+              ;; Change deps and re-render
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :id 2))
+              (vui--rerender-instance instance)
+              ;; Should get a NEW function (not eq)
+              (expect (length captured-fns) :to-equal 3)
+              (expect (eq (nth 0 captured-fns) (nth 2 captured-fns)) :to-be nil))
+          (kill-buffer "*test-cb2*")))))
+
+  (it "captures correct closure values"
+    (let ((result nil))
+      (defcomponent callback-closure ()
+        :state ((value 42))
+        :render (let ((cb (use-callback (value)
+                            (setq result value))))
+                  ;; Call the callback
+                  (funcall cb)
+                  (vui-text "test")))
+      (let ((instance (vui-mount (vui-component 'callback-closure) "*test-cb3*")))
+        (unwind-protect
+            (expect result :to-equal 42)
+          (kill-buffer "*test-cb3*"))))))
+
+(describe "use-memo"
+  (it "caches computed value across re-renders"
+    (let ((compute-count 0))
+      (defcomponent memo-test ()
+        :state ((count 0))
+        :render (let ((expensive (use-memo ()
+                                   (setq compute-count (1+ compute-count))
+                                   (* 2 42))))
+                  (vui-text (format "%d-%d" count expensive))))
+      (let ((instance (vui-mount (vui-component 'memo-test) "*test-memo1*")))
+        (unwind-protect
+            (progn
+              ;; First render computes
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "0-84")
+              ;; Re-render should NOT recompute (deps empty)
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :count 1))
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "1-84"))
+          (kill-buffer "*test-memo1*")))))
+
+  (it "recomputes when deps change"
+    (let ((compute-count 0))
+      (defcomponent memo-deps ()
+        :state ((multiplier 2))
+        :render (let ((result (use-memo (multiplier)
+                                (setq compute-count (1+ compute-count))
+                                (* multiplier 10))))
+                  (vui-text (number-to-string result))))
+      (let ((instance (vui-mount (vui-component 'memo-deps) "*test-memo2*")))
+        (unwind-protect
+            (progn
+              ;; First render
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "20")
+              ;; Re-render with same deps
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1)
+              ;; Change deps
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :multiplier 5))
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 2)
+              (expect (buffer-string) :to-equal "50"))
+          (kill-buffer "*test-memo2*")))))
+
+  (it "can memoize filtered lists"
+    (let ((filter-count 0))
+      (defcomponent memo-filter ()
+        :state ((items '("apple" "banana" "apricot")) (filter "ap"))
+        :render (let ((filtered (use-memo (items filter)
+                                  (setq filter-count (1+ filter-count))
+                                  (seq-filter (lambda (i) (string-prefix-p filter i)) items))))
+                  (vui-text (string-join filtered ", "))))
+      (let ((instance (vui-mount (vui-component 'memo-filter) "*test-memo3*")))
+        (unwind-protect
+            (progn
+              (expect filter-count :to-equal 1)
+              (expect (buffer-string) :to-equal "apple, apricot")
+              ;; Re-render without changing filter deps
+              (vui--rerender-instance instance)
+              (expect filter-count :to-equal 1))
+          (kill-buffer "*test-memo3*"))))))
+
 ;;; vui-test.el ends here
