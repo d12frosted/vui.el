@@ -215,7 +215,7 @@
 
                 ;; Terms checkbox
                 (vui-newline)
-                (vui-checkbox :value agree
+                (vui-checkbox :checked agree
                               :label "I agree to the terms and conditions"
                               :on-change (lambda (v)
                                            (vui-batch
@@ -454,12 +454,12 @@
                                :children
                                (vui-vstack :spacing 1
                                            (vui-checkbox
-                                            :value (plist-get settings :email-notify)
+                                            :checked (plist-get settings :email-notify)
                                             :label "Email notifications"
                                             :on-change (lambda (v)
                                                          (funcall set-setting :email-notify v)))
                                            (vui-checkbox
-                                            :value (plist-get settings :push-notify)
+                                            :checked (plist-get settings :push-notify)
                                             :label "Push notifications"
                                             :on-change (lambda (v)
                                                          (funcall set-setting :push-notify v)))))
@@ -472,12 +472,12 @@
                                :children
                                (vui-vstack :spacing 1
                                            (vui-checkbox
-                                            :value (plist-get settings :share-data)
+                                            :checked (plist-get settings :share-data)
                                             :label "Share usage data"
                                             :on-change (lambda (v)
                                                          (funcall set-setting :share-data v)))
                                            (vui-checkbox
-                                            :value (plist-get settings :public-profile)
+                                            :checked (plist-get settings :public-profile)
                                             :label "Public profile"
                                             :on-change (lambda (v)
                                                          (funcall set-setting :public-profile v)))))
