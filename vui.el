@@ -82,6 +82,16 @@
   face
   disabled-p)
 
+;; Primitive: editable text field
+(cl-defstruct (vui-vnode-field (:include vui-vnode)
+                               (:constructor vui-vnode-field--create))
+  "Virtual node representing an editable text field."
+  value
+  size
+  placeholder
+  on-change
+  face)
+
 ;;; Constructor Functions
 
 (defun vui-text (content &rest props)
@@ -115,6 +125,17 @@ PROPS is a plist accepting :on-click, :face, :disabled, :key."
    :on-click (plist-get props :on-click)
    :face (plist-get props :face)
    :disabled-p (plist-get props :disabled)
+   :key (plist-get props :key)))
+
+(defun vui-field (value &rest props)
+  "Create a field vnode with VALUE and optional PROPS.
+PROPS is a plist accepting :size, :placeholder, :on-change, :face, :key."
+  (vui-vnode-field--create
+   :value (or value "")
+   :size (plist-get props :size)
+   :placeholder (plist-get props :placeholder)
+   :on-change (plist-get props :on-change)
+   :face (plist-get props :face)
    :key (plist-get props :key)))
 
 ;;; Rendering
@@ -170,6 +191,21 @@ PROPS is a plist accepting :on-click, :face, :disabled, :key."
                 (when face (list :button-face face))
                 (list label))))))
 
+   ;; Field (editable text input)
+   ((vui-vnode-field-p vnode)
+    (let ((value (vui-vnode-field-value vnode))
+          (size (vui-vnode-field-size vnode))
+          (placeholder (vui-vnode-field-placeholder vnode))
+          (on-change (vui-vnode-field-on-change vnode)))
+      (widget-create 'editable-field
+                     :size (or size 20)
+                     :value (if (and (string-empty-p value) placeholder)
+                                placeholder
+                              value)
+                     :notify (lambda (widget &rest _)
+                               (when on-change
+                                 (funcall on-change (widget-value widget)))))))
+
    ;; String shorthand
    ((stringp vnode)
     (insert vnode))
@@ -213,6 +249,9 @@ Creates the buffer if it doesn't exist, switches to it."
 (defvar vui-demo--counter 0
   "Counter for the demo.")
 
+(defvar vui-demo--name ""
+  "Name for the demo greeting.")
+
 (defun vui-demo--render ()
   "Render the demo UI."
   (vui-fragment
@@ -221,9 +260,23 @@ Creates the buffer if it doesn't exist, switches to it."
    (vui-text "!" :face 'font-lock-keyword-face)
    (vui-newline)
    (vui-newline)
-   (vui-text "A declarative UI library for Emacs." :face 'font-lock-doc-face)
+   ;; Greeting section
+   (vui-text "Your name: " :face 'font-lock-function-name-face)
+   (vui-field vui-demo--name
+              :size 15
+              :placeholder "Enter name"
+              :on-change (lambda (value)
+                           (setq vui-demo--name value)))
+   (vui-space 2)
+   (vui-button "Greet"
+               :on-click (lambda ()
+                           (message "Hello, %s!"
+                                    (if (string-empty-p vui-demo--name)
+                                        "stranger"
+                                      vui-demo--name))))
    (vui-newline)
    (vui-newline)
+   ;; Counter section
    (vui-text "Counter: " :face 'font-lock-function-name-face)
    (vui-text (number-to-string vui-demo--counter) :face 'bold)
    (vui-newline)
@@ -244,7 +297,8 @@ Creates the buffer if it doesn't exist, switches to it."
                            (vui-demo)))
    (vui-newline)
    (vui-newline)
-   (vui-text "Use TAB to navigate, RET to click." :face 'font-lock-comment-face)))
+   (vui-text "TAB: navigate | RET: activate | Type in field to edit"
+             :face 'font-lock-comment-face)))
 
 (defun vui-demo ()
   "Show a demo of vui.el rendering capabilities."
