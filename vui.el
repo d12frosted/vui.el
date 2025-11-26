@@ -162,12 +162,13 @@ PROPS is a plist accepting :on-click, :face, :disabled, :key."
             (put-text-property start (point) 'face
                                (or face 'shadow)))
         ;; Render active button using widget
-        (widget-create 'push-button
-                       :notify (lambda (&rest _)
-                                 (when on-click
-                                   (funcall on-click)))
-                       :button-face (or face 'custom-button)
-                       label))))
+        (apply #'widget-create 'push-button
+               :notify (lambda (&rest _)
+                         (when on-click
+                           (funcall on-click)))
+               (append
+                (when face (list :button-face face))
+                (list label))))))
 
    ;; String shorthand
    ((stringp vnode)
@@ -187,10 +188,14 @@ PROPS is a plist accepting :on-click, :face, :disabled, :key."
 Clears the buffer before rendering."
   (with-current-buffer (or buffer (current-buffer))
     (let ((inhibit-read-only t))
+      (kill-all-local-variables)
+      (remove-overlays)
       (erase-buffer)
       (vui--render-vnode vnode)
       ;; Setup widgets for keyboard navigation
-      (widget-setup))))
+      (widget-setup)
+      (use-local-map widget-keymap)
+      (goto-char (point-min)))))
 
 (defun vui-render-to-buffer (buffer-name vnode)
   "Render VNODE into a buffer named BUFFER-NAME.
