@@ -226,24 +226,33 @@
       (expect (buffer-string) :to-equal "  x       "))))
 
 (describe "vui-list"
-  (it "renders a list of items"
+  (it "renders items vertically by default"
     (with-temp-buffer
       (vui-render (vui-list '("a" "b" "c")
                             (lambda (item) (vui-text item))))
+      (expect (buffer-string) :to-equal "a\nb\nc")))
+
+  (it "renders items horizontally when vertical is nil"
+    (with-temp-buffer
+      (vui-render (vui-list '("a" "b" "c")
+                            (lambda (item) (vui-text item))
+                            nil :vertical nil))
       (expect (buffer-string) :to-equal "abc")))
 
   (it "applies keys from key-fn"
     (let* ((items '((:id 1 :name "Alice") (:id 2 :name "Bob")))
+           ;; Use horizontal list for simpler testing
            (node (vui-list items
                            (lambda (item) (vui-text (plist-get item :name)))
-                           (lambda (item) (plist-get item :id)))))
+                           (lambda (item) (plist-get item :id))
+                           :vertical nil)))
       (expect (vui-vnode-fragment-p node) :to-be-truthy)
       (let ((children (vui-vnode-fragment-children node)))
         (expect (vui-vnode-key (nth 0 children)) :to-equal 1)
         (expect (vui-vnode-key (nth 1 children)) :to-equal 2))))
 
   (it "uses item as key when no key-fn provided"
-    (let* ((node (vui-list '("x" "y") #'vui-text)))
+    (let* ((node (vui-list '("x" "y") #'vui-text nil :vertical nil)))
       (let ((children (vui-vnode-fragment-children node)))
         (expect (vui-vnode-key (nth 0 children)) :to-equal "x")
         (expect (vui-vnode-key (nth 1 children)) :to-equal "y"))))

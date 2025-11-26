@@ -231,30 +231,30 @@ Create a checkbox.
 ** vui-select
 
 #+begin_src elisp
-(vui-select VALUE OPTIONS &rest PROPS) -> vnode
+(vui-select &rest ARGS) -> vnode
 #+end_src
 
 Create a selection button (minibuffer-based selection).
 
-| Property     | Type      | Description                      |
-|--------------+-----------+----------------------------------|
-| VALUE        | string    | Current selection                |
-| OPTIONS      | list      | List of options (strings or alist) |
-| =:on-change= | function  | Called with selected value       |
+| Property     | Type      | Description                        |
+|--------------+-----------+------------------------------------|
+| =:value=     | string    | Current selection                  |
+| =:options=   | list      | List of options (strings or alist) |
+| =:on-change= | function  | Called with selected value         |
 | =:prompt=    | string    | Minibuffer prompt (default "Select: ") |
-| =:key=       | any       | Reconciliation key               |
+| =:key=       | any       | Reconciliation key                 |
 
 #+begin_src elisp
 ;; Simple list
-(vui-select current-theme
-            '("light" "dark" "system")
+(vui-select :value current-theme
+            :options '("light" "dark" "system")
             :on-change (lambda (v) (vui-set-state :theme v)))
 
 ;; Alist with display values
-(vui-select status
-            '(("active" . "Active")
-              ("pending" . "Pending")
-              ("closed" . "Closed"))
+(vui-select :value status
+            :options '(("active" . "Active")
+                       ("pending" . "Pending")
+                       ("closed" . "Closed"))
             :on-change (lambda (v) (vui-set-state :status v)))
 #+end_src
 
@@ -355,7 +355,7 @@ Create a table layout.
 ** vui-list
 
 #+begin_src elisp
-(vui-list ITEMS RENDER-FN &optional KEY-FN) -> vnode
+(vui-list ITEMS RENDER-FN &optional KEY-FN &key VERTICAL) -> vnode
 #+end_src
 
 Render a list of items with proper reconciliation.
@@ -363,13 +363,23 @@ Render a list of items with proper reconciliation.
 - ITEMS :: List of items to render
 - RENDER-FN :: =(lambda (item) vnode)= — renders each item
 - KEY-FN :: =(lambda (item) key)= — extracts key (default: identity)
+- =:vertical= :: If non-nil (default t), adds newlines between items
+
+By default, items are rendered vertically (with newlines between them).
+Use =:vertical nil= for horizontal lists.
 
 #+begin_src elisp
+;; Vertical list (default) - each item on its own line
 (vui-list todos
           (lambda (todo)
             (vui-text (plist-get todo :text)))
           (lambda (todo)
             (plist-get todo :id)))
+
+;; Horizontal list - items on same line
+(vui-list tags
+          (lambda (tag) (vui-text (format "[%s]" tag)))
+          nil :vertical nil)
 #+end_src
 
 * Components

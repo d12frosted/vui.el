@@ -961,27 +961,36 @@ its children on the next render cycle."
   (when vui--root-instance
     (vui--rerender-instance vui--root-instance)))
 
-(defun vui-list (items render-fn &optional key-fn)
+(cl-defun vui-list (items render-fn &optional key-fn &key (vertical t))
   "Render a list of ITEMS using RENDER-FN.
 RENDER-FN is called with each item and should return a vnode.
 KEY-FN extracts a unique key from each item (default: item itself).
+VERTICAL if non-nil (default t), adds newlines between items.
 
 This ensures proper reconciliation when items are added, removed, or reordered.
 
 Usage:
   (vui-list items
             (lambda (item) (vui-text (plist-get item :name)))
-            (lambda (item) (plist-get item :id)))"
+            (lambda (item) (plist-get item :id)))
+
+  ;; Horizontal list (no newlines):
+  (vui-list items render-fn key-fn :vertical nil)"
   (let ((key-fn (or key-fn #'identity)))
     (vui-vnode-fragment--create
-     :children (mapcar (lambda (item)
-                         (let* ((key (funcall key-fn item))
-                                (vnode (funcall render-fn item)))
-                           ;; Set key on the vnode if it supports it
-                           (when (and vnode (vui-vnode-p vnode))
-                             (setf (vui-vnode-key vnode) key))
-                           vnode))
-                       items))))
+     :children (let ((result nil)
+                     (first t))
+                 (dolist (item items (nreverse result))
+                   (let* ((key (funcall key-fn item))
+                          (vnode (funcall render-fn item)))
+                     ;; Set key on the vnode if it supports it
+                     (when (and vnode (vui-vnode-p vnode))
+                       (setf (vui-vnode-key vnode) key))
+                     ;; Add newline before items (except first) if vertical
+                     (when (and vertical (not first))
+                       (push (vui-newline) result))
+                     (push vnode result)
+                     (setq first nil)))))))
 
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.

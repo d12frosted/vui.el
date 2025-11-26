@@ -135,13 +135,11 @@
                     (vui-text "(no items)" :face 'font-lock-comment-face)
                   (vui-list filtered
                             (lambda (todo)
-                              (vui-fragment
-                               (vui-component 'todo-item
-                                              :key (plist-get todo :id)
-                                              :todo todo
-                                              :on-toggle toggle-todo
-                                              :on-delete delete-todo)
-                               (vui-newline)))
+                              (vui-component 'todo-item
+                                             :key (plist-get todo :id)
+                                             :todo todo
+                                             :on-toggle toggle-todo
+                                             :on-delete delete-todo))
                             (lambda (todo) (plist-get todo :id))))
 
                 ;; Stats
@@ -246,13 +244,11 @@
                     (vui-text "(no items)" :face 'font-lock-comment-face)
                   (vui-list filtered
                             (lambda (todo)
-                              (vui-fragment
-                               (vui-component 'todo-item
-                                              :key (plist-get todo :id)
-                                              :todo todo
-                                              :on-toggle toggle-todo
-                                              :on-delete delete-todo)
-                               (vui-newline)))
+                              (vui-component 'todo-item
+                                             :key (plist-get todo :id)
+                                             :todo todo
+                                             :on-toggle toggle-todo
+                                             :on-delete delete-todo))
                             (lambda (todo) (plist-get todo :id))))
 
                 ;; Stats
