@@ -165,8 +165,9 @@
                  (vui-field :value username
                             :size 20
                             :on-change (lambda (v)
-                                         (funcall touch :username)
-                                         (vui-set-state :username v))))
+                                         (vui-batch
+                                          (funcall touch :username)
+                                          (vui-set-state :username v)))))
                 (when (funcall field-error :username)
                   (vui-text (concat "          " (funcall field-error :username))
                             :face 'error))
@@ -177,8 +178,9 @@
                  (vui-field :value email
                             :size 20
                             :on-change (lambda (v)
-                                         (funcall touch :email)
-                                         (vui-set-state :email v))))
+                                         (vui-batch
+                                          (funcall touch :email)
+                                          (vui-set-state :email v)))))
                 (when (funcall field-error :email)
                   (vui-text (concat "          " (funcall field-error :email))
                             :face 'error))
@@ -190,8 +192,9 @@
                             :size 20
                             :secret t
                             :on-change (lambda (v)
-                                         (funcall touch :password)
-                                         (vui-set-state :password v))))
+                                         (vui-batch
+                                          (funcall touch :password)
+                                          (vui-set-state :password v)))))
                 (when (funcall field-error :password)
                   (vui-text (concat "          " (funcall field-error :password))
                             :face 'error))
@@ -203,8 +206,9 @@
                             :size 20
                             :secret t
                             :on-change (lambda (v)
-                                         (funcall touch :confirm)
-                                         (vui-set-state :confirm v))))
+                                         (vui-batch
+                                          (funcall touch :confirm)
+                                          (vui-set-state :confirm v)))))
                 (when (funcall field-error :confirm)
                   (vui-text (concat "          " (funcall field-error :confirm))
                             :face 'error))
@@ -214,8 +218,9 @@
                 (vui-checkbox :value agree
                               :label "I agree to the terms and conditions"
                               :on-change (lambda (v)
-                                           (funcall touch :agree)
-                                           (vui-set-state :agree v)))
+                                           (vui-batch
+                                            (funcall touch :agree)
+                                            (vui-set-state :agree v))))
                 (when (funcall field-error :agree)
                   (vui-text (funcall field-error :agree) :face 'error))
 
