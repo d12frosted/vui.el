@@ -71,6 +71,121 @@ Same options as `vui-lifecycle-error-handler'."
 Stored as (TYPE ERROR CONTEXT) where TYPE is `lifecycle' or `event',
 ERROR is the error object, and CONTEXT is additional information.")
 
+;;; Timing Instrumentation
+
+(defcustom vui-timing-enabled nil
+  "When non-nil, collect timing data for render phases.
+This has a small performance cost, so only enable for profiling."
+  :type 'boolean
+  :group 'vui)
+
+(defvar vui--timing-data nil
+  "List of timing records.
+Each record is a plist with :phase, :component, :duration, :timestamp.")
+
+(defvar vui--timing-max-entries 100
+  "Maximum number of timing entries to keep.")
+
+(defvar vui--timing-start-time nil
+  "Start time of current timing measurement.")
+
+(defun vui--timing-start ()
+  "Start timing a phase.  Does nothing if timing is disabled."
+  (when vui-timing-enabled
+    (setq vui--timing-start-time (float-time))))
+
+(defun vui--timing-record (phase component)
+  "Record timing for PHASE of COMPONENT.
+PHASE is a symbol like `render', `commit', `mount', `update', `unmount'.
+Does nothing if timing is disabled or no timing was started."
+  (when (and vui-timing-enabled vui--timing-start-time)
+    (let ((duration (- (float-time) vui--timing-start-time)))
+      (push (list :phase phase
+                  :component component
+                  :duration duration
+                  :timestamp (current-time))
+            vui--timing-data)
+      ;; Trim to max entries
+      (when (> (length vui--timing-data) vui--timing-max-entries)
+        (setq vui--timing-data (cl-subseq vui--timing-data 0 vui--timing-max-entries))))
+    (setq vui--timing-start-time nil)))
+
+(defun vui-get-timing ()
+  "Return the collected timing data."
+  vui--timing-data)
+
+(defun vui-clear-timing ()
+  "Clear all collected timing data."
+  (setq vui--timing-data nil)
+  (setq vui--timing-start-time nil))
+
+(defun vui-report-timing (&optional last-n)
+  "Display a timing report for the last LAST-N entries (default all).
+Groups by component and shows total time per phase."
+  (interactive "P")
+  (let* ((data (if last-n
+                   (cl-subseq vui--timing-data 0 (min last-n (length vui--timing-data)))
+                 vui--timing-data))
+         (by-component (make-hash-table :test 'eq))
+         (total-render 0)
+         (total-commit 0)
+         (total-mount 0)
+         (total-update 0)
+         (total-unmount 0))
+    ;; Group by component
+    (dolist (entry data)
+      (let* ((component (plist-get entry :component))
+             (phase (plist-get entry :phase))
+             (duration (plist-get entry :duration))
+             (existing (gethash component by-component))
+             (phase-key (intern (format ":%s" phase))))
+        (unless existing
+          (setq existing (list :render 0 :commit 0 :mount 0 :update 0 :unmount 0 :count 0))
+          (puthash component existing by-component))
+        (plist-put existing phase-key (+ (plist-get existing phase-key) duration))
+        (plist-put existing :count (1+ (plist-get existing :count)))
+        ;; Totals
+        (cl-case phase
+          (render (cl-incf total-render duration))
+          (commit (cl-incf total-commit duration))
+          (mount (cl-incf total-mount duration))
+          (update (cl-incf total-update duration))
+          (unmount (cl-incf total-unmount duration)))))
+    ;; Display report
+    (with-current-buffer (get-buffer-create "*vui-timing*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "VUI Timing Report\n")
+        (insert (make-string 60 ?=) "\n\n")
+        (insert (format "Total entries: %d\n\n" (length data)))
+        (insert "Totals by Phase:\n")
+        (insert (format "  render:  %.4fs\n" total-render))
+        (insert (format "  commit:  %.4fs\n" total-commit))
+        (insert (format "  mount:   %.4fs\n" total-mount))
+        (insert (format "  update:  %.4fs\n" total-update))
+        (insert (format "  unmount: %.4fs\n" total-unmount))
+        (insert (format "  TOTAL:   %.4fs\n\n"
+                        (+ total-render total-commit total-mount total-update total-unmount)))
+        (insert "By Component:\n")
+        (insert (make-string 60 ?-) "\n")
+        (maphash (lambda (component times)
+                   (insert (format "\n%s (renders: %d)\n"
+                                   component (plist-get times :count)))
+                   (when (> (plist-get times :render) 0)
+                     (insert (format "  render:  %.4fs\n" (plist-get times :render))))
+                   (when (> (plist-get times :commit) 0)
+                     (insert (format "  commit:  %.4fs\n" (plist-get times :commit))))
+                   (when (> (plist-get times :mount) 0)
+                     (insert (format "  mount:   %.4fs\n" (plist-get times :mount))))
+                   (when (> (plist-get times :update) 0)
+                     (insert (format "  update:  %.4fs\n" (plist-get times :update))))
+                   (when (> (plist-get times :unmount) 0)
+                     (insert (format "  unmount: %.4fs\n" (plist-get times :unmount)))))
+                 by-component))
+      (goto-char (point-min))
+      (special-mode)
+      (display-buffer (current-buffer)))))
+
 ;;; Core Data Structures - Virtual Nodes
 
 ;; Base structure for all virtual nodes
@@ -1011,8 +1126,45 @@ not a function returning a callback."
     (list ,@deps)
     (lambda () ,@body)))
 
-(defun vui--get-or-update-callback (deps callback-fn)
+(defmacro use-callback* (deps &key compare &rest body)
+  "Like `use-callback' but with configurable comparison mode.
+
+DEPS is a list of variables to watch.
+COMPARE specifies comparison mode:
+  `eq'     - identity comparison (fastest, for symbols/numbers)
+  `equal'  - structural comparison (default)
+  function - custom (lambda (old-deps new-deps) bool)
+
+Example:
+  ;; Use eq for fast symbol comparison
+  (use-callback* (action-type)
+    :compare eq
+    (dispatch action-type))"
+  (declare (indent 1))
+  `(vui--get-or-update-callback
+    (list ,@deps)
+    (lambda () ,@body)
+    ,compare))
+
+(defun vui--deps-equal-p (old-deps new-deps compare)
+  "Compare OLD-DEPS and NEW-DEPS using COMPARE mode.
+COMPARE can be:
+  `eq'     - identity comparison (fastest)
+  `equal'  - structural comparison (default)
+  function - custom (lambda (old new) bool)"
+  (cond
+   ((eq compare 'eq)
+    (and (= (length old-deps) (length new-deps))
+         (cl-every #'eq old-deps new-deps)))
+   ((eq compare 'equal)
+    (equal old-deps new-deps))
+   ((functionp compare)
+    (funcall compare old-deps new-deps))
+   (t (equal old-deps new-deps))))
+
+(defun vui--get-or-update-callback (deps callback-fn &optional compare)
   "Return cached callback or update it if DEPS changed.
+COMPARE specifies comparison mode (default `equal').
 Called from within a component's render function."
   (unless vui--current-instance
     (error "use-callback called outside of component context"))
@@ -1024,11 +1176,12 @@ Called from within a component's render function."
                       h)))
          (cached (gethash callback-id cache))
          (cached-deps (car cached))
-         (cached-fn (cdr cached)))
+         (cached-fn (cdr cached))
+         (cmp (or compare 'equal)))
     ;; Increment callback counter for next use-callback call
     (cl-incf vui--callback-index)
     ;; Return cached callback if deps unchanged
-    (if (and cached (equal cached-deps deps))
+    (if (and cached (vui--deps-equal-p cached-deps deps cmp))
         cached-fn
       ;; Create new callback and cache it
       (let ((new-fn callback-fn))
@@ -1056,8 +1209,29 @@ Example:
     (list ,@deps)
     (lambda () ,@body)))
 
-(defun vui--get-or-update-memo (deps compute-fn)
+(defmacro use-memo* (deps &key compare &rest body)
+  "Like `use-memo' but with configurable comparison mode.
+
+DEPS is a list of variables to watch.
+COMPARE specifies comparison mode:
+  `eq'     - identity comparison (fastest, for symbols/numbers)
+  `equal'  - structural comparison (default)
+  function - custom (lambda (old-deps new-deps) bool)
+
+Example:
+  ;; Use eq for fast symbol comparison
+  (use-memo* (mode)
+    :compare eq
+    (expensive-lookup mode))"
+  (declare (indent 1))
+  `(vui--get-or-update-memo
+    (list ,@deps)
+    (lambda () ,@body)
+    ,compare))
+
+(defun vui--get-or-update-memo (deps compute-fn &optional compare)
   "Return cached value or recompute if DEPS changed.
+COMPARE specifies comparison mode (default `equal').
 Called from within a component's render function."
   (unless vui--current-instance
     (error "use-memo called outside of component context"))
@@ -1069,11 +1243,12 @@ Called from within a component's render function."
                       h)))
          (cached (gethash memo-id cache))
          (cached-deps (car cached))
-         (cached-value (cdr cached)))
+         (cached-value (cdr cached))
+         (cmp (or compare 'equal)))
     ;; Increment memo counter for next use-memo call
     (cl-incf vui--memo-index)
     ;; Return cached value if deps unchanged
-    (if (and cached (equal cached-deps deps))
+    (if (and cached (vui--deps-equal-p cached-deps deps cmp))
         cached-value
       ;; Compute new value and cache it
       (let ((new-value (funcall compute-fn)))
@@ -1238,6 +1413,7 @@ INSTANCE is the component instance."
          (vui--memo-index 0)      ; Reset memo counter for this component
          (old-children (vui-instance-children instance))
          (def (vui-instance-def instance))
+         (component-name (vui-component-def-name def))
          (render-fn (vui-component-def-render-fn def))
          (should-update-fn (vui-component-def-should-update def))
          (props (vui-instance-props instance))
@@ -1252,13 +1428,18 @@ INSTANCE is the component instance."
                               (funcall should-update-fn props state prev-props prev-state)))
          ;; Get vtree: either fresh render or cached
          (vtree (if should-render-p
-                    (let ((new-vtree (funcall render-fn props state)))
-                      (setf (vui-instance-cached-vtree instance) new-vtree)
-                      new-vtree)
+                    (progn
+                      (vui--timing-start)
+                      (let ((new-vtree (funcall render-fn props state)))
+                        (vui--timing-record 'render component-name)
+                        (setf (vui-instance-cached-vtree instance) new-vtree)
+                        new-vtree))
                   ;; Use cached vtree
                   (vui-instance-cached-vtree instance))))
     (when vtree
-      (vui--render-vnode vtree))
+      (vui--timing-start)
+      (vui--render-vnode vtree)
+      (vui--timing-record 'commit component-name))
     ;; Update children list for next reconciliation
     (let ((new-children (nreverse vui--new-children)))
       ;; Call on-unmount for children that were removed
@@ -1271,18 +1452,22 @@ INSTANCE is the component instance."
         ;; First render: call on-mount
         (progn
           (setf (vui-instance-mounted-p instance) t)
+          (vui--timing-start)
           (vui--call-lifecycle-hook
            "on-mount"
            (vui-component-def-on-mount def)
            instance
-           props state))
+           props state)
+          (vui--timing-record 'mount component-name))
       ;; Re-render: call on-update only if we actually rendered
       (when should-render-p
+        (vui--timing-start)
         (vui--call-lifecycle-hook
          "on-update"
          (vui-component-def-on-update def)
          instance
-         props state prev-props prev-state)))
+         props state prev-props prev-state)
+        (vui--timing-record 'update component-name)))
     ;; Store current props/state for next render's on-update
     ;; Use copy-tree to deep copy, since plist-put modifies in place
     (setf (vui-instance-prev-props instance) (copy-tree props))
@@ -1297,13 +1482,16 @@ INSTANCE is the component instance."
   (vui--cleanup-instance-effects instance)
   ;; Then call on-unmount hook (with error handling)
   (let* ((def (vui-instance-def instance))
+         (component-name (vui-component-def-name def))
          (vui--current-instance instance))
+    (vui--timing-start)
     (vui--call-lifecycle-hook
      "on-unmount"
      (vui-component-def-on-unmount def)
      instance
      (vui-instance-props instance)
-     (vui-instance-state instance))))
+     (vui-instance-state instance))
+    (vui--timing-record 'unmount component-name)))
 
 (defun vui--find-matching-child (parent type key index)
   "Find a child of PARENT matching TYPE and KEY or INDEX."

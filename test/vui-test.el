@@ -1515,4 +1515,191 @@
               (expect update-count :to-equal 0))
           (kill-buffer "*test-no-update*"))))))
 
+(describe "memo comparison modes"
+  (it "uses equal by default"
+    ;; Default should use equal (structural comparison)
+    (expect (vui--deps-equal-p '(1 2 3) '(1 2 3) 'equal) :to-be-truthy)
+    (expect (vui--deps-equal-p '(1 2 3) '(1 2 4) 'equal) :to-be nil)
+    (expect (vui--deps-equal-p '("a" "b") '("a" "b") 'equal) :to-be-truthy))
+
+  (it "supports eq comparison mode"
+    (let ((sym1 'foo)
+          (sym2 'foo)
+          (list1 '(1 2))
+          (list2 '(1 2)))
+      ;; Symbols are eq
+      (expect (vui--deps-equal-p (list sym1) (list sym2) 'eq) :to-be-truthy)
+      ;; Lists are not eq (different objects)
+      (expect (vui--deps-equal-p (list list1) (list list2) 'eq) :to-be nil)
+      ;; But lists are equal
+      (expect (vui--deps-equal-p (list list1) (list list2) 'equal) :to-be-truthy)))
+
+  (it "supports custom comparison function"
+    ;; Custom comparator that only checks first element
+    (let ((first-only (lambda (old new)
+                        (equal (car old) (car new)))))
+      (expect (vui--deps-equal-p '(1 2) '(1 99) first-only) :to-be-truthy)
+      (expect (vui--deps-equal-p '(1 2) '(2 2) first-only) :to-be nil)))
+
+  (it "works with use-memo* macro"
+    (let ((vui-idle-render-delay nil)
+          (compute-count 0))
+      (defcomponent memo-compare-test ()
+        :state ((mode 'view))
+        :render (let ((result (use-memo* (mode)
+                                :compare 'eq
+                                (cl-incf compute-count)
+                                (symbol-name mode))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-compare-test) "*test-memo-cmp*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; Re-render with same symbol - should use cached value
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1)
+              ;; Change to different symbol - should recompute
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :mode 'edit))
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 2))
+          (kill-buffer "*test-memo-cmp*"))))))
+
+(describe "timing instrumentation"
+  (before-each
+    (vui-clear-timing)
+    (setq vui-timing-enabled nil))
+
+  (after-each
+    (vui-clear-timing)
+    (setq vui-timing-enabled nil))
+
+  (it "does not collect data when disabled"
+    (setq vui-timing-enabled nil)
+    (defcomponent timing-disabled-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-disabled-test) "*test-timing1*")))
+      (unwind-protect
+          (expect (vui-get-timing) :to-be nil)
+        (kill-buffer "*test-timing1*"))))
+
+  (it "collects timing data when enabled"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-enabled-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-enabled-test) "*test-timing2*")))
+      (unwind-protect
+          (progn
+            (expect (vui-get-timing) :to-be-truthy)
+            (expect (length (vui-get-timing)) :to-be-greater-than 0))
+        (kill-buffer "*test-timing2*"))))
+
+  (it "records render phase"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-render-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-render-test) "*test-timing3*")))
+      (unwind-protect
+          (let ((render-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'render))
+                                          (vui-get-timing))))
+            (expect render-entry :to-be-truthy)
+            (expect (plist-get render-entry :component) :to-equal 'timing-render-test)
+            (expect (plist-get render-entry :duration) :to-be-greater-than 0))
+        (kill-buffer "*test-timing3*"))))
+
+  (it "records commit phase"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-commit-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-commit-test) "*test-timing4*")))
+      (unwind-protect
+          (let ((commit-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'commit))
+                                          (vui-get-timing))))
+            (expect commit-entry :to-be-truthy)
+            (expect (plist-get commit-entry :component) :to-equal 'timing-commit-test))
+        (kill-buffer "*test-timing4*"))))
+
+  (it "records mount phase"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-mount-test ()
+      :on-mount (message "mounted")
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-mount-test) "*test-timing5*")))
+      (unwind-protect
+          (let ((mount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'mount))
+                                         (vui-get-timing))))
+            (expect mount-entry :to-be-truthy)
+            (expect (plist-get mount-entry :component) :to-equal 'timing-mount-test))
+        (kill-buffer "*test-timing5*"))))
+
+  (it "records update phase"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-update-test ()
+      :state ((count 0))
+      :on-update (message "updated")
+      :render (vui-text (number-to-string count)))
+    (let ((instance (vui-mount (vui-component 'timing-update-test) "*test-timing6*")))
+      (unwind-protect
+          (progn
+            ;; Trigger re-render
+            (setf (vui-instance-state instance)
+                  (plist-put (vui-instance-state instance) :count 1))
+            (vui--rerender-instance instance)
+            (let ((update-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'update))
+                                            (vui-get-timing))))
+              (expect update-entry :to-be-truthy)
+              (expect (plist-get update-entry :component) :to-equal 'timing-update-test)))
+        (kill-buffer "*test-timing6*"))))
+
+  (it "records unmount phase"
+    (setq vui-timing-enabled t)
+    (let ((show-child t))
+      (defcomponent timing-unmount-child ()
+        :on-unmount (message "unmounted")
+        :render (vui-text "child"))
+      (defcomponent timing-unmount-parent ()
+        :render (if show-child
+                    (vui-component 'timing-unmount-child)
+                  (vui-text "no child")))
+      (let ((instance (vui-mount (vui-component 'timing-unmount-parent) "*test-timing7*")))
+        (unwind-protect
+            (progn
+              (setq show-child nil)
+              (vui--rerender-instance instance)
+              (let ((unmount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'unmount))
+                                               (vui-get-timing))))
+                (expect unmount-entry :to-be-truthy)
+                (expect (plist-get unmount-entry :component) :to-equal 'timing-unmount-child)))
+          (kill-buffer "*test-timing7*")))))
+
+  (it "clears timing data"
+    (setq vui-timing-enabled t)
+    (defcomponent timing-clear-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'timing-clear-test) "*test-timing8*")))
+      (unwind-protect
+          (progn
+            (expect (vui-get-timing) :to-be-truthy)
+            (vui-clear-timing)
+            (expect (vui-get-timing) :to-be nil))
+        (kill-buffer "*test-timing8*"))))
+
+  (it "limits entries to max"
+    (setq vui-timing-enabled t)
+    (let ((vui--timing-max-entries 5))
+      (defcomponent timing-limit-test ()
+        :state ((count 0))
+        :render (vui-text (number-to-string count)))
+      (let ((instance (vui-mount (vui-component 'timing-limit-test) "*test-timing9*")))
+        (unwind-protect
+            (progn
+              ;; Generate many entries by re-rendering
+              (dotimes (i 10)
+                (setf (vui-instance-state instance)
+                      (plist-put (vui-instance-state instance) :count i))
+                (vui--rerender-instance instance))
+              ;; Should be capped at max
+              (expect (length (vui-get-timing)) :to-equal 5))
+          (kill-buffer "*test-timing9*"))))))
+
 ;;; vui-test.el ends here
