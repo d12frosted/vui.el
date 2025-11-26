@@ -164,24 +164,32 @@ Create a clickable button.
 ** vui-field
 
 #+begin_src elisp
-(vui-field &key VALUE SIZE ON-CHANGE ON-SUBMIT KEY FACE) -> vnode
+(vui-field &key VALUE SIZE PLACEHOLDER ON-CHANGE ON-SUBMIT KEY FACE SECRET) -> vnode
 #+end_src
 
 Create a text input field.
 
-| Property     | Type     | Description                          |
-|--------------+----------+--------------------------------------|
-| =:value=     | string   | Initial content (default "")         |
-| =:size=      | integer  | Width in characters                  |
-| =:on-change= | function | Called with value on change          |
-| =:on-submit= | function | Called with value on RET             |
-| =:key=       | any      | Reconciliation key / lookup key      |
-| =:face=      | symbol   | Text face                            |
+| Property       | Type     | Description                          |
+|----------------+----------+--------------------------------------|
+| =:value=       | string   | Initial content (default "")         |
+| =:size=        | integer  | Width in characters                  |
+| =:placeholder= | string   | Hint text (not yet rendered)         |
+| =:on-change=   | function | Called with value on change          |
+| =:on-submit=   | function | Called with value on RET             |
+| =:key=         | any      | Reconciliation key / lookup key      |
+| =:face=        | symbol   | Text face                            |
+| =:secret=      | boolean  | Hide input (for passwords)           |
 
 #+begin_src elisp
 (vui-field :value name
            :size 20
            :on-change (lambda (v) (vui-set-state :name v)))
+
+;; Password field
+(vui-field :value password
+           :size 20
+           :secret t
+           :on-change (lambda (v) (vui-set-state :password v)))
 #+end_src
 
 ** vui-field-value

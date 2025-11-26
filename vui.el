@@ -425,7 +425,8 @@ Returns a list of instances."
   placeholder
   on-change
   on-submit  ; Called with value when user presses RET
-  face)
+  face
+  secret-p)  ; Hide input for passwords
 
 ;; Primitive: checkbox
 (cl-defstruct (vui-vnode-checkbox (:include vui-vnode)
@@ -733,15 +734,17 @@ PROPS is a plist accepting :on-click, :face, :disabled, :key."
    :disabled-p (plist-get props :disabled)
    :key (plist-get props :key)))
 
-(cl-defun vui-field (&key value size on-change on-submit key face)
+(cl-defun vui-field (&key value size placeholder on-change on-submit key face secret)
   "Create a field vnode.
 All arguments are keyword-based:
-  :value      - initial field content (defaults to empty string)
-  :size       - field width in characters
-  :on-change  - called with value on each change (triggers re-render)
-  :on-submit  - called with value when user presses RET (no re-render)
-  :key        - identifier for `vui-field-value' lookup
-  :face       - text face
+  :value       - initial field content (defaults to empty string)
+  :size        - field width in characters
+  :placeholder - hint text shown when field is empty (not yet rendered)
+  :on-change   - called with value on each change (triggers re-render)
+  :on-submit   - called with value when user presses RET (no re-render)
+  :key         - identifier for `vui-field-value' lookup
+  :face        - text face
+  :secret      - if non-nil, hide input (for passwords)
 
 Examples:
   (vui-field :size 20 :key \\='my-input)
@@ -749,9 +752,11 @@ Examples:
   (vui-vnode-field--create
    :value (or value "")
    :size size
+   :placeholder placeholder
    :on-change on-change
    :on-submit on-submit
    :face face
+   :secret-p secret
    :key key))
 
 (defun vui-field-value (key)
@@ -2071,6 +2076,7 @@ HEADER-P indicates if this is a header row."
            (field-key (vui-vnode-field-key vnode))
            (on-change (vui-vnode-field-on-change vnode))
            (on-submit (vui-vnode-field-on-submit vnode))
+           (secret-p (vui-vnode-field-secret-p vnode))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
@@ -2080,6 +2086,7 @@ HEADER-P indicates if this is a header row."
       (let ((w (widget-create 'editable-field
                               :size (or size 20)
                               :value value
+                              :secret (when secret-p ?*)
                               :notify (lambda (widget &rest _)
                                         (when wrapped-change
                                           (let ((vui--current-instance captured-instance)
