@@ -380,22 +380,21 @@ Optional PATH specifies starting directory."
                                         (funcall go-to "..")))
 
                 ;; File list
-                (vui-box :max-height 15
-                         (vui-list filtered
-                                   (lambda (entry)
-                                     (let* ((name (plist-get entry :name))
-                                            (is-dir (eq (plist-get entry :type) 'directory))
-                                            (is-selected (equal name selected)))
-                                       (vui-hstack
-                                        (vui-button (concat (if is-dir "📁 " "📄 ")
-                                                            name
-                                                            (when is-selected " ←"))
-                                                    :face (when is-selected 'bold)
-                                                    :on-click (lambda ()
-                                                                (if is-dir
-                                                                    (funcall go-to name)
-                                                                  (vui-set-state :selected name)))))))
-                                   (lambda (entry) (plist-get entry :name))))
+                (vui-list filtered
+                          (lambda (entry)
+                            (let* ((name (plist-get entry :name))
+                                   (is-dir (eq (plist-get entry :type) 'directory))
+                                   (is-selected (equal name selected)))
+                              (vui-hstack
+                               (vui-button (concat (if is-dir "📁 " "📄 ")
+                                                   name
+                                                   (when is-selected " ←"))
+                                           :face (when is-selected 'bold)
+                                           :on-click (lambda ()
+                                                       (if is-dir
+                                                           (funcall go-to name)
+                                                         (vui-set-state :selected name)))))))
+                          (lambda (entry) (plist-get entry :name)))
 
                 ;; Actions
                 (vui-newline)
