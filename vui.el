@@ -365,7 +365,10 @@ Must be called from within a component's event handler."
     (let ((label (vui-vnode-button-label vnode))
           (on-click (vui-vnode-button-on-click vnode))
           (face (vui-vnode-button-face vnode))
-          (disabled (vui-vnode-button-disabled-p vnode)))
+          (disabled (vui-vnode-button-disabled-p vnode))
+          ;; Capture instance context for callback
+          (captured-instance vui--current-instance)
+          (captured-root vui--root-instance))
       (if disabled
           ;; Render disabled button as inactive text
           (let ((start (point)))
@@ -376,7 +379,10 @@ Must be called from within a component's event handler."
         (apply #'widget-create 'push-button
                :notify (lambda (&rest _)
                          (when on-click
-                           (funcall on-click)))
+                           ;; Restore instance context for vui-set-state
+                           (let ((vui--current-instance captured-instance)
+                                 (vui--root-instance captured-root))
+                             (funcall on-click))))
                (append
                 (when face (list :button-face face))
                 (list label))))))
@@ -466,11 +472,21 @@ Returns the root instance."
 
 ;;; Demo
 
-;; A counter component with local state
-(defcomponent vui-demo-counter ()
+;; Demo app with state at the root level
+;; Note: Nested stateful components require reconciliation (future feature)
+(defcomponent vui-demo-app ()
   :state ((count 0))
   :render
   (vui-fragment
+   (vui-text "Welcome to " :face 'font-lock-keyword-face)
+   (vui-text "vui.el" :face 'bold)
+   (vui-text "!" :face 'font-lock-keyword-face)
+   (vui-newline)
+   (vui-newline)
+   (vui-text "A declarative, component-based UI library." :face 'font-lock-doc-face)
+   (vui-newline)
+   (vui-newline)
+   ;; Counter with state
    (vui-text "Counter: " :face 'font-lock-function-name-face)
    (vui-text (number-to-string count) :face 'bold)
    (vui-newline)
@@ -485,22 +501,7 @@ Returns the root instance."
    (vui-space 2)
    (vui-button "Reset"
                :on-click (lambda ()
-                           (vui-set-state :count 0)))))
-
-;; Main demo app component
-(defcomponent vui-demo-app ()
-  :render
-  (vui-fragment
-   (vui-text "Welcome to " :face 'font-lock-keyword-face)
-   (vui-text "vui.el" :face 'bold)
-   (vui-text "!" :face 'font-lock-keyword-face)
-   (vui-newline)
-   (vui-newline)
-   (vui-text "A declarative, component-based UI library." :face 'font-lock-doc-face)
-   (vui-newline)
-   (vui-newline)
-   ;; Nested stateful counter component
-   (vui-component 'vui-demo-counter)
+                           (vui-set-state :count 0)))
    (vui-newline)
    (vui-newline)
    (vui-text "TAB: navigate | RET: activate" :face 'font-lock-comment-face)))
