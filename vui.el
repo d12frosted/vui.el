@@ -1104,9 +1104,13 @@ Example:
        (when (and (= vui--batch-depth 0)
                   vui--render-pending-p
                   vui--root-instance)
-         ;; End of outermost batch - do single re-render
+         ;; End of outermost batch - schedule deferred re-render
+         ;; Using deferred rendering avoids re-rendering while still
+         ;; inside a widget callback, which can cause issues
          (setq vui--render-pending-p nil)
-         (vui--rerender-instance vui--root-instance)))))
+         (if vui-idle-render-delay
+             (vui--schedule-idle-render)
+           (vui--rerender-instance vui--root-instance))))))
 
 (defun vui-flush-sync ()
   "Force immediate re-render, bypassing any pending idle timers.
