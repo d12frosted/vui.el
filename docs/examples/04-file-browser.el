@@ -287,9 +287,8 @@
 
 (defcomponent file-browser (initial-path)
   :render
-  (file-browser-path-provider
-   :value (or initial-path (expand-file-name "~"))
-   :children (vui-component 'file-browser-main)))
+  (file-browser-path-provider (or initial-path (expand-file-name "~"))
+                              (vui-component 'file-browser-main)))
 
 
 ;;; Demo Function
