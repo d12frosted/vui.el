@@ -791,23 +791,24 @@ Usage: (vui-checkbox :checked t :on-change (lambda (v) ...))"
    :label (plist-get props :label)
    :key (plist-get props :key)))
 
-(defun vui-select (value options &rest props)
-  "Create a select vnode for choosing from OPTIONS.
-VALUE is the current selection (or nil).
-OPTIONS is a list of strings to choose from.
-PROPS is a plist accepting:
+(defun vui-select (&rest args)
+  "Create a select vnode for choosing from options.
+ARGS is a plist accepting:
+  :value VALUE - current selection (or nil)
+  :options OPTIONS - list of (value . label) cons cells or strings
   :on-change FN - called with selected value
   :prompt STRING - minibuffer prompt (default \"Select: \")
   :key KEY - for reconciliation
 
-Usage: (vui-select \"apple\" \\='(\"apple\" \"banana\" \"cherry\")
+Usage: (vui-select :value \"apple\"
+                   :options \\='((\"apple\" . \"Apple\") (\"banana\" . \"Banana\"))
                    :on-change (lambda (v) ...))"
   (vui-vnode-select--create
-   :value value
-   :options options
-   :on-change (plist-get props :on-change)
-   :prompt (or (plist-get props :prompt) "Select: ")
-   :key (plist-get props :key)))
+   :value (plist-get args :value)
+   :options (plist-get args :options)
+   :on-change (plist-get args :on-change)
+   :prompt (or (plist-get args :prompt) "Select: ")
+   :key (plist-get args :key)))
 
 (defun vui-hstack (&rest args)
   "Create a horizontal stack layout.

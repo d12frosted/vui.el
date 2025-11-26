@@ -120,27 +120,27 @@
 
 (describe "vui-select"
   (it "creates a select vnode"
-    (let ((node (vui-select "a" '("a" "b" "c"))))
+    (let ((node (vui-select :value "a" :options '("a" "b" "c"))))
       (expect (vui-vnode-select-p node) :to-be-truthy)
       (expect (vui-vnode-select-value node) :to-equal "a")
       (expect (vui-vnode-select-options node) :to-equal '("a" "b" "c"))))
 
   (it "accepts prompt property"
-    (let ((node (vui-select nil '("x") :prompt "Choose: ")))
+    (let ((node (vui-select :value nil :options '("x") :prompt "Choose: ")))
       (expect (vui-vnode-select-prompt node) :to-equal "Choose: ")))
 
   (it "defaults prompt to Select:"
-    (let ((node (vui-select nil '("x"))))
+    (let ((node (vui-select :value nil :options '("x"))))
       (expect (vui-vnode-select-prompt node) :to-equal "Select: ")))
 
   (it "renders as button with current value"
     (with-temp-buffer
-      (vui-render (vui-select "apple" '("apple" "banana")))
+      (vui-render (vui-select :value "apple" :options '("apple" "banana")))
       (expect (buffer-string) :to-match "apple")))
 
   (it "renders placeholder when no value"
     (with-temp-buffer
-      (vui-render (vui-select nil '("a" "b")))
+      (vui-render (vui-select :value nil :options '("a" "b")))
       (expect (buffer-string) :to-match "Select..."))))
 
 (describe "vui-hstack"
