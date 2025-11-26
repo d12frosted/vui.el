@@ -135,6 +135,14 @@
   padding-left
   padding-right)
 
+;; Layout: table
+(cl-defstruct (vui-vnode-table (:include vui-vnode)
+                               (:constructor vui-vnode-table--create))
+  "Table layout with rows and columns."
+  columns     ; List of column specs (plists with :header :width :align :min-width)
+  rows        ; List of rows, each row is list of cell content (strings or vnodes)
+  border)     ; nil, :ascii, :unicode
+
 ;; Component reference in vtree
 (cl-defstruct (vui-vnode-component (:include vui-vnode)
                                    (:constructor vui-vnode-component--create))
@@ -481,6 +489,43 @@ Usage: (vui-box (vui-text \"hello\") :width 20 :align :center)"
    :padding-left (or (plist-get props :padding-left) 0)
    :padding-right (or (plist-get props :padding-right) 0)
    :key (plist-get props :key)))
+
+(defun vui-table (&rest args)
+  "Create a table layout.
+
+ARGS should contain :columns and :rows.
+
+Column spec properties (each column is a plist):
+  :header STRING  - Header text (optional)
+  :width N        - Fixed width in characters
+  :min-width N    - Minimum width, expand for content (default 1)
+  :align ALIGN    - :left (default), :center, :right
+
+Table properties:
+  :columns LIST   - List of column specs
+  :rows LIST      - List of rows, each row is a list of cell contents
+  :border MODE    - nil (default), :ascii, :unicode
+  :key KEY        - for reconciliation
+
+Cell contents can be strings or vnodes.
+
+Example:
+  (vui-table
+    :columns \\='((:header \"Name\" :min-width 10)
+               (:header \"Price\" :width 8 :align :right)
+               (:header \"Qty\" :width 5 :align :right))
+    :rows \\='((\"Apple\" \"$1.50\" \"10\")
+            (\"Banana\" \"$0.75\" \"25\"))
+    :border :ascii)"
+  (let ((columns (plist-get args :columns))
+        (rows (plist-get args :rows))
+        (border (plist-get args :border))
+        (key (plist-get args :key)))
+    (vui-vnode-table--create
+     :columns columns
+     :rows rows
+     :border border
+     :key key)))
 
 (defun vui-list (items render-fn &optional key-fn)
   "Render a list of ITEMS using RENDER-FN.
@@ -1055,6 +1100,124 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
 
 ;;; Rendering
 
+;; Table rendering helpers
+
+(defun vui--cell-to-string (cell)
+  "Convert CELL content to string for width calculation."
+  (cond
+   ((stringp cell) cell)
+   ((null cell) "")
+   ((vui-vnode-text-p cell) (vui-vnode-text-content cell))
+   (t (with-temp-buffer
+        (vui--render-vnode cell)
+        (buffer-string)))))
+
+(defun vui--calculate-table-widths (columns rows)
+  "Calculate column widths from COLUMNS specs and ROWS data."
+  (let* ((col-count (length columns))
+         (widths (make-vector col-count 0)))
+    ;; Check each column spec
+    (cl-loop for col in columns
+             for i from 0
+             do (let ((fixed-width (plist-get col :width))
+                      (min-width (or (plist-get col :min-width) 1))
+                      (header (plist-get col :header)))
+                  (if fixed-width
+                      ;; Fixed width
+                      (aset widths i fixed-width)
+                    ;; Calculate from content
+                    (let ((max-w min-width))
+                      ;; Check header width
+                      (when header
+                        (setq max-w (max max-w (string-width header))))
+                      ;; Check all rows
+                      (dolist (row rows)
+                        (when (< i (length row))
+                          (let ((cell-w (string-width (vui--cell-to-string (nth i row)))))
+                            (setq max-w (max max-w cell-w)))))
+                      (aset widths i max-w)))))
+    (append widths nil)))
+
+(defun vui--render-table-border (col-widths border-style position)
+  "Render a table border line.
+COL-WIDTHS is list of column widths.
+BORDER-STYLE is :ascii or :unicode.
+POSITION is \\='top, \\='bottom, or \\='separator."
+  (let* ((chars (pcase border-style
+                  (:ascii
+                   (pcase position
+                     ('top '("+" "-" "+"))
+                     ('bottom '("+" "-" "+"))
+                     ('separator '("+" "-" "+"))))
+                  (:unicode
+                   (pcase position
+                     ('top '("┌" "─" "┬" "┐"))
+                     ('bottom '("└" "─" "┴" "┘"))
+                     ('separator '("├" "─" "┼" "┤"))))))
+         (left (nth 0 chars))
+         (fill (nth 1 chars))
+         (mid (nth 2 chars))
+         (right (or (nth 3 chars) (nth 0 chars))))
+    (insert left)
+    (cl-loop for width in col-widths
+             for i from 0
+             do (progn
+                  (insert (make-string width (string-to-char fill)))
+                  (if (< i (1- (length col-widths)))
+                      (insert mid)
+                    (insert right))))
+    (insert "\n")))
+
+(defun vui--render-table-row (cells col-widths columns border-style header-p)
+  "Render a table row.
+CELLS is list of cell contents.
+COL-WIDTHS is list of column widths.
+COLUMNS is list of column specs.
+BORDER-STYLE is nil, :ascii, or :unicode.
+HEADER-P indicates if this is a header row."
+  (let ((sep (pcase border-style
+               (:ascii "|")
+               (:unicode "│")
+               (_ " "))))
+    (when border-style
+      (insert sep))
+    (cl-loop for cell in cells
+             for width in col-widths
+             for col in columns
+             for i from 0
+             do (let* ((content (vui--cell-to-string cell))
+                       (align (or (plist-get col :align) :left))
+                       (content-width (string-width content))
+                       (padding (max 0 (- width content-width)))
+                       (face (when header-p 'bold)))
+                  ;; Render cell content with alignment
+                  (pcase align
+                    (:left
+                     (if face
+                         (insert (propertize content 'face face))
+                       (insert content))
+                     (insert (make-string padding ?\s)))
+                    (:right
+                     (insert (make-string padding ?\s))
+                     (if face
+                         (insert (propertize content 'face face))
+                       (insert content)))
+                    (:center
+                     (let ((left-pad (/ padding 2))
+                           (right-pad (- padding (/ padding 2))))
+                       (insert (make-string left-pad ?\s))
+                       (if face
+                           (insert (propertize content 'face face))
+                         (insert content))
+                       (insert (make-string right-pad ?\s)))))
+                  ;; Column separator
+                  (when border-style
+                    (insert sep))
+                  (unless border-style
+                    (when (< i (1- (length cells)))
+                      (insert " ")))))
+    (insert "\n")))
+
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
   (cond
@@ -1207,6 +1370,32 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
            (insert (make-string right-pad ?\s)))))
       ;; Insert right padding
       (insert (make-string pad-right ?\s))))
+
+   ;; Table layout
+   ((vui-vnode-table-p vnode)
+    (let* ((columns (vui-vnode-table-columns vnode))
+           (rows (vui-vnode-table-rows vnode))
+           (border (vui-vnode-table-border vnode))
+           (col-count (length columns))
+           ;; Calculate column widths
+           (col-widths (vui--calculate-table-widths columns rows)))
+      ;; Render header if any column has one
+      (when (cl-some (lambda (c) (plist-get c :header)) columns)
+        (when border
+          (vui--render-table-border col-widths border 'top))
+        (vui--render-table-row
+         (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
+         col-widths columns border 'header)
+        (when border
+          (vui--render-table-border col-widths border 'separator)))
+      ;; Render data rows
+      (let ((first-row (not (cl-some (lambda (c) (plist-get c :header)) columns))))
+        (when (and border first-row)
+          (vui--render-table-border col-widths border 'top))
+        (dolist (row rows)
+          (vui--render-table-row row col-widths columns border nil))
+        (when border
+          (vui--render-table-border col-widths border 'bottom)))))
 
    ;; Field (editable text input)
    ((vui-vnode-field-p vnode)

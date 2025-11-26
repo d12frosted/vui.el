@@ -944,4 +944,70 @@
               (expect filter-count :to-equal 1))
           (kill-buffer "*test-memo3*"))))))
 
+(describe "vui-table"
+  (it "creates a table vnode"
+    (let ((node (vui-table
+                  :columns '((:header "A") (:header "B"))
+                  :rows '(("1" "2")))))
+      (expect (vui-vnode-table-p node) :to-be-truthy)
+      (expect (length (vui-vnode-table-columns node)) :to-equal 2)
+      (expect (length (vui-vnode-table-rows node)) :to-equal 1)))
+
+  (it "renders simple table without borders"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:min-width 4) (:min-width 4))
+                    :rows '(("A" "B") ("C" "D"))))
+      (expect (buffer-string) :to-equal "A    B   \nC    D   \n")))
+
+  (it "renders table with headers"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:header "X" :min-width 3) (:header "Y" :min-width 3))
+                    :rows '(("1" "2"))))
+      (expect (buffer-string) :to-match "X")
+      (expect (buffer-string) :to-match "Y")
+      (expect (buffer-string) :to-match "1")
+      (expect (buffer-string) :to-match "2")))
+
+  (it "renders table with ascii borders"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:header "A" :width 3) (:header "B" :width 3))
+                    :rows '(("1" "2"))
+                    :border :ascii))
+      (expect (buffer-string) :to-match "\\+---\\+---\\+")
+      (expect (buffer-string) :to-match "|A  |B  |")
+      (expect (buffer-string) :to-match "|1  |2  |")))
+
+  (it "renders table with unicode borders"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:header "A" :width 3) (:header "B" :width 3))
+                    :rows '(("1" "2"))
+                    :border :unicode))
+      (expect (buffer-string) :to-match "┌")
+      (expect (buffer-string) :to-match "│")
+      (expect (buffer-string) :to-match "└")))
+
+  (it "respects column alignment"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:width 5 :align :left)
+                               (:width 5 :align :right)
+                               (:width 5 :align :center))
+                    :rows '(("L" "R" "C"))))
+      (expect (buffer-string) :to-match "L    ")
+      (expect (buffer-string) :to-match "    R")
+      (expect (buffer-string) :to-match "  C  ")))
+
+  (it "auto-calculates column widths from content"
+    (with-temp-buffer
+      (vui-render (vui-table
+                    :columns '((:min-width 1) (:min-width 1))
+                    :rows '(("short" "longer-text"))))
+      ;; Content should fit without truncation
+      (expect (buffer-string) :to-match "short")
+      (expect (buffer-string) :to-match "longer-text"))))
+
 ;;; vui-test.el ends here
