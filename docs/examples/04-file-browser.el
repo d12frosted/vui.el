@@ -294,11 +294,15 @@ Must be called from within a file-browser component tree."
 ;;; Root App with Context Provider
 
 (defcomponent file-browser (initial-path)
-  :state ((path (or initial-path (expand-file-name "~"))))
+  :state ((path nil))
+
+  :on-mount
+  (unless path
+    (vui-set-state :path (or initial-path (expand-file-name "~"))))
 
   :render
   (file-browser-path-provider
-   path
+   (or path (expand-file-name "~"))
    (file-browser-set-path-provider
     (lambda (new-path) (vui-set-state :path new-path))
     (vui-component 'file-browser-main))))
