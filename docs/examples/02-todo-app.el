@@ -71,7 +71,7 @@
 (defcomponent todo-stats (todos)
   :render
   (let* ((total (length todos))
-         (done (length (seq-filter (lambda (t) (plist-get t :done)) todos)))
+         (done (length (seq-filter (lambda (td) (plist-get td :done)) todos)))
          (remaining (- total done)))
     (vui-text (format "%d items left, %d completed" remaining done)
               :face 'font-lock-comment-face)))
@@ -88,8 +88,8 @@
   (let* (;; Filter todos based on current filter
          (filtered (pcase filter
                      ('all todos)
-                     ('active (seq-filter (lambda (t) (not (plist-get t :done))) todos))
-                     ('completed (seq-filter (lambda (t) (plist-get t :done)) todos))))
+                     ('active (seq-filter (lambda (td) (not (plist-get td :done))) todos))
+                     ('completed (seq-filter (lambda (td) (plist-get td :done)) todos))))
          ;; Callbacks
          (add-todo (lambda (text)
                      (vui-batch
@@ -102,16 +102,16 @@
          (toggle-todo (lambda (id)
                         (vui-set-state
                          :todos
-                         (mapcar (lambda (t)
-                                   (if (= (plist-get t :id) id)
-                                       (plist-put (copy-sequence t) :done
-                                                  (not (plist-get t :done)))
-                                     t))
+                         (mapcar (lambda (td)
+                                   (if (= (plist-get td :id) id)
+                                       (plist-put (copy-sequence td) :done
+                                                  (not (plist-get td :done)))
+                                     td))
                                  todos))))
          (delete-todo (lambda (id)
                         (vui-set-state
                          :todos
-                         (seq-filter (lambda (t) (/= (plist-get t :id) id))
+                         (seq-filter (lambda (td) (/= (plist-get td :id) id))
                                      todos))))
          (set-filter (lambda (f) (vui-set-state :filter f))))
 
@@ -188,8 +188,8 @@
   :render
   (let* ((filtered (pcase filter
                      ('all todos)
-                     ('active (seq-filter (lambda (t) (not (plist-get t :done))) todos))
-                     ('completed (seq-filter (lambda (t) (plist-get t :done)) todos))))
+                     ('active (seq-filter (lambda (td) (not (plist-get td :done))) todos))
+                     ('completed (seq-filter (lambda (td) (plist-get td :done)) todos))))
          (add-todo (lambda (text)
                      (vui-batch
                       (vui-set-state :todos
@@ -201,22 +201,22 @@
          (toggle-todo (lambda (id)
                         (vui-set-state
                          :todos
-                         (mapcar (lambda (t)
-                                   (if (= (plist-get t :id) id)
-                                       (plist-put (copy-sequence t) :done
-                                                  (not (plist-get t :done)))
-                                     t))
+                         (mapcar (lambda (td)
+                                   (if (= (plist-get td :id) id)
+                                       (plist-put (copy-sequence td) :done
+                                                  (not (plist-get td :done)))
+                                     td))
                                  todos))))
          (delete-todo (lambda (id)
                         (vui-set-state
                          :todos
-                         (seq-filter (lambda (t) (/= (plist-get t :id) id))
+                         (seq-filter (lambda (td) (/= (plist-get td :id) id))
                                      todos))))
          (set-filter (lambda (f) (vui-set-state :filter f)))
          (clear-completed (lambda ()
                             (vui-set-state
                              :todos
-                             (seq-filter (lambda (t) (not (plist-get t :done)))
+                             (seq-filter (lambda (td) (not (plist-get td :done)))
                                          todos)))))
 
     (vui-vstack :spacing 1

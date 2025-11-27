@@ -1,4 +1,4 @@
-;;; vui.el --- Declarative, component-based UI library for Emacs -*- lexical-binding: t; -*-
+;;; vui.el --- Declarative, component-based UI library -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Boris
 
@@ -33,6 +33,10 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'wid-edit)
+
+;;; Forward Declarations
+
+(defvar vui--root-instance)
 
 ;;; Custom Variables
 
@@ -129,7 +133,8 @@ Debug output goes to the *vui-debug* buffer."
 
 (defcustom vui-debug-log-phases '(render mount update unmount state-change)
   "List of phases to log when debugging.
-Possible values: render, commit, mount, update, unmount, reconcile, state-change."
+Possible values: render, commit, mount, update, unmount, reconcile,
+state-change."
   :type '(repeat symbol)
   :group 'vui)
 
@@ -141,7 +146,8 @@ Possible values: render, commit, mount, update, unmount, reconcile, state-change
 
 (defun vui--debug-log (phase format-string &rest args)
   "Log debug message for PHASE with FORMAT-STRING and ARGS.
-Only logs if `vui-debug-enabled' is non-nil and PHASE is in `vui-debug-log-phases'."
+Only logs if `vui-debug-enabled' is non-nil and PHASE is in
+`vui-debug-log-phases'."
   (when (and vui-debug-enabled (memq phase vui-debug-log-phases))
     (let ((indent (make-string (* vui--debug-indent 2) ?\s))
           (timestamp (format-time-string "%H:%M:%S.%3N")))
@@ -607,14 +613,14 @@ ARGS is a list of prop names the component accepts.
 BODY contains keyword sections:
   :state ((var initial) ...) - local state variables
   :on-mount FORM - called after first render (optional)
-  :on-update FORM - called after re-render with prev-props, prev-state (optional)
+  :on-update FORM - called after re-render (optional)
   :on-unmount FORM - called before removal (optional)
-  :should-update FORM - return t to allow re-render, nil to skip (optional)
+  :should-update FORM - return t to re-render, nil to skip (optional)
   :render FORM - the render expression (required)
 
 All forms have access to props as variables, state variables,
-and `children' for nested content. on-update and should-update have access to
-`prev-props' and `prev-state' for the previous values.
+and `children' for nested content.  on-update and should-update
+have access to `prev-props' and `prev-state'.
 
 Example:
   (defcomponent greeting (name)
@@ -661,6 +667,7 @@ Example:
           (state-inits (mapcar #'cadr state-spec)))
       (cl-flet ((make-body-fn (form)
                   `(lambda (--props-- --state--)
+                     (ignore --state--)
                      (let (,@(mapcar (lambda (arg)
                                        `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
                                      args)
@@ -668,9 +675,11 @@ Example:
                                        `(,var (plist-get --state-- ,(intern (format ":%s" var)))))
                                      state-vars)
                            (children (plist-get --props-- :children)))
+                       (ignore children ,@args ,@state-vars)
                        ,form)))
                 (make-update-fn (form)
                   `(lambda (--props-- --state-- --prev-props-- --prev-state--)
+                     (ignore --props-- --state-- --prev-props-- --prev-state--)
                      (let (,@(mapcar (lambda (arg)
                                        `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
                                      args)
@@ -680,6 +689,7 @@ Example:
                            (children (plist-get --props-- :children))
                            (prev-props --prev-props--)
                            (prev-state --prev-state--))
+                       (ignore children prev-props prev-state ,@args ,@state-vars)
                        ,form))))
         `(progn
            (vui--register-component
@@ -1318,19 +1328,19 @@ Returns default-value if no provider found."
   "Create a memoized callback that only changes when DEPS change.
 
 Returns a function that remains stable (eq-identical) across re-renders
-as long as DEPS don't change. This is useful for optimizing child
+as long as DEPS do not change.  This is useful for optimizing child
 components that depend on callback reference equality.
 
-DEPS is a list of variables to watch. The callback is regenerated when
+DEPS is a list of variables to watch.  The callback is regenerated when
 any dep changes (compared with `equal').
 
 Example:
   ;; Stable callback that only changes when item-id changes
   (let ((handle-delete (use-callback (item-id)
                          (delete-item item-id))))
-    (vui-component 'item-button :on-click handle-delete))
+    (vui-component \\='item-button :on-click handle-delete))
 
-Note: Unlike React's useCallback, the BODY is the callback itself,
+Note: Unlike React useCallback, the BODY is the callback itself,
 not a function returning a callback."
   (declare (indent 1))
   `(vui--get-or-update-callback
@@ -1407,14 +1417,14 @@ Called from within a component's render function."
 Similar to `use-callback' but for computed values rather than functions.
 BODY is evaluated only when DEPS change, and the result is cached.
 
-DEPS is a list of variables to watch. The value is recomputed when any
+DEPS is a list of variables to watch.  The value is recomputed when any
 dep changes (compared with `equal').
 
 Example:
   ;; Expensive filtering only runs when items or filter change
   (let ((filtered (use-memo (items filter)
                     (seq-filter (lambda (i) (string-match filter i)) items))))
-    (vui-list filtered #'vui-text))"
+    (vui-list filtered #\\='vui-text))"
   (declare (indent 1))
   `(vui--get-or-update-memo
     (list ,@deps)
@@ -1786,47 +1796,100 @@ INSTANCE is the component instance."
 
 ;; Table rendering helpers
 
-(defun vui--cell-to-string (cell)
-  "Convert CELL content to string for width calculation.
-For component vnodes, only estimate width without instantiating."
+(defun vui--cell-visual-width (cell)
+  "Get the visual width of CELL by rendering it.
+This is the two-pass approach: render to measure, then render for real.
+Simple cases (string, nil) are optimized to avoid temp buffer overhead."
   (cond
-   ((stringp cell) cell)
-   ((null cell) "")
-   ((vui-vnode-text-p cell) (vui-vnode-text-content cell))
-   ;; For component vnodes, don't instantiate during width calculation
-   ;; Just return empty string - width will be determined by column spec
-   ((vui-vnode-component-p cell) "")
+   ((null cell) 0)
+   ((stringp cell) (string-width cell))
+   ;; For any vnode: render to temp buffer and measure
+   ;; This is the universal approach that works for any component
    (t (with-temp-buffer
-        ;; Temporarily disable component instantiation context
+        (let ((vui--current-instance nil)
+              (vui--root-instance nil))
+          (vui--render-vnode cell))
+        (string-width (buffer-string))))))
+
+(defun vui--cell-to-string (cell)
+  "Convert CELL to string content by rendering it.
+For strings, returns as-is. For vnodes, renders to temp buffer."
+  (cond
+   ((null cell) "")
+   ((stringp cell) cell)
+   ;; For vnodes, render to temp buffer and get string
+   (t (with-temp-buffer
         (let ((vui--current-instance nil)
               (vui--root-instance nil))
           (vui--render-vnode cell))
         (buffer-string)))))
 
+(defun vui--truncate-string (str width)
+  "Truncate STR to WIDTH characters, adding ... if truncated."
+  (if (<= (string-width str) width)
+      str
+    (concat (substring str 0 (max 0 (- width 3))) "...")))
+
 (defun vui--calculate-table-widths (columns rows)
-  "Calculate column widths from COLUMNS specs and ROWS data."
+  "Calculate column widths from COLUMNS specs and ROWS data.
+Uses two-pass rendering: cells are rendered to measure their visual width.
+
+Column options:
+  :width W    - Target width for the VALUE portion of cell
+  :grow       - If t, pad short content to :width (minimum width behavior)
+  :truncate   - If t, truncate long content; if nil, overflow with ¦
+
+Width calculation:
+  - :width nil           -> auto-size to max(content)
+  - :width W :grow t     -> column width = W (enforced minimum)
+  - :width W :grow nil   -> column width = max(content) if all fit, else W"
   (let* ((col-count (length columns))
          (widths (make-vector col-count 0)))
-    ;; Check each column spec
     (cl-loop for col in columns
              for i from 0
-             do (let ((fixed-width (plist-get col :width))
-                      (min-width (or (plist-get col :min-width) 1))
+             do (let ((declared-width (plist-get col :width))
+                      (grow (plist-get col :grow))
+                      (truncate-p (plist-get col :truncate))
                       (header (plist-get col :header)))
-                  (if fixed-width
-                      ;; Fixed width
-                      (aset widths i fixed-width)
-                    ;; Calculate from content
-                    (let ((max-w min-width))
-                      ;; Check header width
-                      (when header
-                        (setq max-w (max max-w (string-width header))))
-                      ;; Check all rows
-                      (dolist (row rows)
-                        (when (< i (length row))
-                          (let ((cell-w (string-width (vui--cell-to-string (nth i row)))))
-                            (setq max-w (max max-w cell-w)))))
-                      (aset widths i max-w)))))
+                  (if (null declared-width)
+                      ;; No :width - auto-size to max content
+                      (let ((max-w 1))
+                        (when header
+                          (setq max-w (max max-w (string-width header))))
+                        (dolist (row rows)
+                          (when (and (listp row) (< i (length row)))
+                            (let ((cell-w (vui--cell-visual-width (nth i row))))
+                              (setq max-w (max max-w cell-w)))))
+                        (aset widths i max-w))
+                    ;; Has :width
+                    (if grow
+                        ;; :grow t - column is at least :width
+                        (let ((max-w declared-width))
+                          ;; Can still grow beyond :width if content is larger
+                          ;; (unless :truncate is set)
+                          (unless truncate-p
+                            (when header
+                              (setq max-w (max max-w (string-width header))))
+                            (dolist (row rows)
+                              (when (and (listp row) (< i (length row)))
+                                (let ((cell-w (vui--cell-visual-width (nth i row))))
+                                  (setq max-w (max max-w cell-w))))))
+                          (aset widths i max-w))
+                      ;; :grow nil - column is max(content), overflow/truncate at :width
+                      (let ((max-w 1)
+                            (has-overflow nil))
+                        (when header
+                          (setq max-w (max max-w (string-width header))))
+                        (dolist (row rows)
+                          (when (and (listp row) (< i (length row)))
+                            (let ((cell-w (vui--cell-visual-width (nth i row))))
+                              (if (> cell-w declared-width)
+                                  (setq has-overflow t)
+                                (setq max-w (max max-w cell-w))))))
+                        ;; If any overflow/truncate needed, use declared-width; else shrink to max-w
+                        (aset widths i (if has-overflow
+                                           declared-width
+                                         max-w)))))))
     (append widths nil)))
 
 (defun vui--render-table-border (col-widths border-style position &optional cell-padding)
@@ -1867,11 +1930,19 @@ CELLS is list of cell contents.
 COL-WIDTHS is list of column widths.
 COLUMNS is list of column specs.
 BORDER-STYLE is nil, :ascii, or :unicode.
-HEADER-P indicates if this is a header row."
+HEADER-P indicates if this is a header row.
+
+Handles :truncate and overflow:
+- If content > width and :truncate t: show truncated content with ...
+- If content > width and :truncate nil: show content up to width, use ¦ separator"
   (let ((sep (pcase border-style
                (:ascii "|")
                (:unicode "│")
                (_ " ")))
+        (overflow-sep (pcase border-style
+                        (:ascii "¦")
+                        (:unicode "¦")
+                        (_ " ")))
         (cell-padding (if border-style 1 0)))
     (when border-style
       (insert sep))
@@ -1879,58 +1950,77 @@ HEADER-P indicates if this is a header row."
              for width in col-widths
              for col in columns
              for i from 0
-             do (let* ((align (or (plist-get col :align) :left))
-                       (is-vnode (and (not (stringp cell))
-                                      (not (null cell))
-                                      (not header-p)))
-                       ;; For component vnodes, width returns 0 so skip padding
-                       (is-component (and is-vnode (vui-vnode-component-p cell)))
-                       (content (if is-vnode
-                                    (vui--cell-to-string cell)
-                                  (cond ((stringp cell) cell)
-                                        ((null cell) "")
-                                        (t (format "%s" cell)))))
+             do (let* ((align (if header-p :left (or (plist-get col :align) :left)))
+                       (truncate-p (plist-get col :truncate))
+                       (grow (plist-get col :grow))
+                       (declared-width (plist-get col :width))
+                       (face (when header-p 'bold))
+                       ;; Get content as string (works for both vnodes and strings)
+                       (content (vui--cell-to-string cell))
                        (content-width (string-width content))
-                       (padding (if is-component 0 (max 0 (- width content-width))))
-                       (face (when header-p 'bold)))
+                       ;; Check for overflow (content exceeds declared width)
+                       ;; No overflow if :grow t (column expands) or :truncate t (content truncated)
+                       (has-overflow (and declared-width
+                                          (not grow)
+                                          (> content-width declared-width)
+                                          (not truncate-p)))
+                       ;; Handle truncation or overflow
+                       (display-content
+                        (cond
+                         ;; Truncate if content exceeds width and :truncate is set
+                         ((and truncate-p declared-width (> content-width declared-width))
+                          (vui--truncate-string content declared-width))
+                         ;; Overflow: show content up to width
+                         (has-overflow
+                          (substring content 0 (min (length content) declared-width)))
+                         ;; Normal case
+                         (t content)))
+                       (overflow-content
+                        (when has-overflow
+                          (substring content (min (length content) declared-width))))
+                       (display-width (string-width display-content))
+                       (padding (max 0 (- width display-width))))
                   ;; Left cell padding
                   (when (> cell-padding 0)
                     (insert (make-string cell-padding ?\s)))
                   ;; Render cell content with alignment
                   (pcase align
                     (:left
-                     (if is-vnode
-                         (vui--render-vnode cell)
-                       (if face
-                           (insert (propertize content 'face face))
-                         (insert content)))
+                     (if face
+                         (insert (propertize display-content 'face face))
+                       (insert display-content))
                      (insert (make-string padding ?\s)))
                     (:right
                      (insert (make-string padding ?\s))
-                     (if is-vnode
-                         (vui--render-vnode cell)
-                       (if face
-                           (insert (propertize content 'face face))
-                         (insert content))))
+                     (if face
+                         (insert (propertize display-content 'face face))
+                       (insert display-content)))
                     (:center
                      (let ((left-pad (/ padding 2))
                            (right-pad (- padding (/ padding 2))))
                        (insert (make-string left-pad ?\s))
-                       (if is-vnode
-                           (vui--render-vnode cell)
-                         (if face
-                             (insert (propertize content 'face face))
-                           (insert content)))
+                       (if face
+                           (insert (propertize display-content 'face face))
+                         (insert display-content))
                        (insert (make-string right-pad ?\s)))))
-                  ;; Right cell padding
-                  (when (> cell-padding 0)
-                    (insert (make-string cell-padding ?\s)))
-                  ;; Column separator
-                  (when border-style
+                  ;; Right cell padding and column separator
+                  ;; When overflow, use padding + overflow separator + trimmed overflow content
+                  (cond
+                   ;; Overflow case: padding + overflow separator + overflow content (trimmed)
+                   ((and border-style has-overflow)
+                    (when (> cell-padding 0)
+                      (insert (make-string cell-padding ?\s)))
+                    (insert overflow-sep)
+                    (insert (string-trim-left overflow-content)))
+                   ;; Normal case with border: padding + separator
+                   (border-style
+                    (when (> cell-padding 0)
+                      (insert (make-string cell-padding ?\s)))
                     (insert sep))
-                  (unless border-style
+                   ;; No border: space between cells
+                   (t
                     (when (< i (1- (length cells)))
-                      (insert " ")))))
+                      (insert " "))))))
     (insert "\n")))
 
 (defun vui--render-vnode (vnode)
@@ -1977,20 +2067,31 @@ HEADER-P indicates if this is a header row."
       (if disabled
           ;; Render disabled button as inactive text
           (let ((start (point)))
-            (insert "[" label "]")
-            (put-text-property start (point) 'face
-                               (or face 'shadow)))
-        ;; Render active button using widget
-        (apply #'widget-create 'push-button
-               :notify (lambda (&rest _)
-                         (when wrapped-click
-                           ;; Restore instance context for vui-set-state
-                           (let ((vui--current-instance captured-instance)
-                                 (vui--root-instance captured-root))
-                             (funcall wrapped-click))))
-               (append
-                (when face (list :button-face face))
-                (list label))))))
+            (insert label)
+            (put-text-property start (point) 'face (or face 'shadow)))
+        ;; Render active button as clickable text (not widget)
+        ;; This gives us exact control over visual width
+        (let ((start (point))
+              (map (make-sparse-keymap)))
+          (define-key map [mouse-1]
+            (lambda (_event)
+              (interactive "e")
+              (when wrapped-click
+                (let ((vui--current-instance captured-instance)
+                      (vui--root-instance captured-root))
+                  (funcall wrapped-click)))))
+          (define-key map (kbd "RET")
+            (lambda ()
+              (interactive)
+              (when wrapped-click
+                (let ((vui--current-instance captured-instance)
+                      (vui--root-instance captured-root))
+                  (funcall wrapped-click)))))
+          (insert label)
+          (put-text-property start (point) 'face (or face 'link))
+          (put-text-property start (point) 'mouse-face 'highlight)
+          (put-text-property start (point) 'keymap map)
+          (put-text-property start (point) 'help-echo "mouse-1: click")))))
 
    ;; Checkbox
    ((vui-vnode-checkbox-p vnode)
@@ -2103,7 +2204,6 @@ HEADER-P indicates if this is a header row."
     (let* ((columns (vui-vnode-table-columns vnode))
            (rows (vui-vnode-table-rows vnode))
            (border (vui-vnode-table-border vnode))
-           (col-count (length columns))
            ;; Calculate column widths
            (col-widths (vui--calculate-table-widths columns rows)))
       ;; Cell padding when borders are enabled
@@ -2122,7 +2222,12 @@ HEADER-P indicates if this is a header row."
           (when (and border first-row)
             (vui--render-table-border col-widths border 'top cell-padding))
           (dolist (row rows)
-            (vui--render-table-row row col-widths columns border nil))
+            (if (eq row :separator)
+                ;; Render separator line
+                (when border
+                  (vui--render-table-border col-widths border 'separator cell-padding))
+              ;; Render data row
+              (vui--render-table-row row col-widths columns border nil)))
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding))))))
 

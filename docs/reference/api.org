@@ -340,12 +340,28 @@ side for readability (e.g., =| value |= instead of =|value|=).
 
 *** Column Spec Properties
 
-| Property     | Type    | Description                     |
-|--------------+---------+---------------------------------|
-| =:header=    | string  | Header text                     |
-| =:width=     | integer | Fixed width                     |
-| =:min-width= | integer | Minimum width, expand as needed |
-| =:align=     | keyword | :left (default), :center, :right |
+| Property     | Type    | Description                             |
+|--------------+---------+-----------------------------------------|
+| =:header=    | string  | Header text                             |
+| =:width=     | integer | Target width for cell content           |
+| =:min-width= | integer | Minimum width, expand as needed         |
+| =:grow=      | boolean | Pad short content, expand for long      |
+| =:truncate=  | boolean | Truncate long content with "..."        |
+| =:align=     | keyword | :left (default), :center, :right        |
+
+*** Width Behavior Table
+
+| =:width= | =:grow= | =:truncate= | Content vs Width | Result                                    |
+|----------+---------+-------------+------------------+-------------------------------------------|
+| W        | nil     | nil         | content < W      | Column shrinks to content size            |
+| W        | nil     | nil         | content > W      | Overflow with broken bar (¦)              |
+| W        | t       | nil         | content < W      | Column = W, content padded                |
+| W        | t       | nil         | content > W      | Column expands to fit content             |
+| W        | nil     | t           | content < W      | Column shrinks to content size            |
+| W        | nil     | t           | content > W      | Column = W, content truncated with "..."  |
+| W        | t       | t           | content < W      | Column = W, content padded                |
+| W        | t       | t           | content > W      | Column = W, content truncated with "..."  |
+| nil      | -       | -           | any              | Column auto-sizes to content              |
 
 *** Basic Example
 

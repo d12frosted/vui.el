@@ -9,6 +9,15 @@
 (require 'buttercup)
 (require 'vui)
 
+;; Helper to click buttons (which are now text with keymap, not widgets)
+(defun vui-test--click-button-at (pos)
+  "Invoke the button at POS.
+Buttons are now rendered as text with keymap, so we invoke the RET binding."
+  (let* ((keymap (get-text-property pos 'keymap))
+         (binding (when keymap (lookup-key keymap (kbd "RET")))))
+    (when binding
+      (funcall binding))))
+
 (describe "vui.el"
   (it "loads successfully"
     (expect (featurep 'vui) :to-be-truthy)))
@@ -315,16 +324,15 @@
   (it "renders disabled button as text"
     (with-temp-buffer
       (vui-render (vui-button "Disabled" :disabled t))
-      (expect (buffer-string) :to-equal "[Disabled]")))
+      ;; Buttons now render as plain text without brackets
+      (expect (buffer-string) :to-equal "Disabled")))
 
   (it "triggers on-click callback when button is activated"
     (with-temp-buffer
       (let ((clicked nil))
         (vui-render (vui-button "Click" :on-click (lambda () (setq clicked t))))
-        ;; Find and activate the widget
-        (goto-char (point-min))
-        (widget-forward 1)
-        (widget-button-press (point))
+        ;; Buttons are now text with keymap, not widgets
+        (vui-test--click-button-at (point-min))
         (expect clicked :to-be-truthy))))
 
   (it "renders field with value"
@@ -822,7 +830,7 @@
                   (vui-text (format "theme: %s" captured-theme))))
       (defcomponent app ()
         :render (theme-provider 'dark
-                  (vui-component 'themed-button)))
+                                (vui-component 'themed-button)))
       (let ((instance (vui-mount (vui-component 'app) "*test-ctx2*")))
         (unwind-protect
             (progn
@@ -839,10 +847,10 @@
                   (vui-text (number-to-string (use-indent-level)))))
       (defcomponent nested-providers ()
         :render (vui-fragment
-                  (indent-level-provider 1
-                    (vui-component 'level-display)
-                    (indent-level-provider 2
-                      (vui-component 'level-display)))))
+                 (indent-level-provider 1
+                                        (vui-component 'level-display)
+                                        (indent-level-provider 2
+                                                               (vui-component 'level-display)))))
       (let ((instance (vui-mount (vui-component 'nested-providers) "*test-ctx3*")))
         (unwind-protect
             (progn
@@ -864,8 +872,8 @@
                   (vui-text "test")))
       (defcomponent multi-ctx-provider ()
         :render (user-name-provider "alice"
-                  (user-role-provider 'admin
-                    (vui-component 'multi-ctx-consumer))))
+                                    (user-role-provider 'admin
+                                                        (vui-component 'multi-ctx-consumer))))
       (let ((instance (vui-mount (vui-component 'multi-ctx-provider) "*test-ctx4*")))
         (unwind-protect
             (progn
@@ -1003,8 +1011,8 @@
 (describe "vui-table"
   (it "creates a table vnode"
     (let ((node (vui-table
-                  :columns '((:header "A") (:header "B"))
-                  :rows '(("1" "2")))))
+                 :columns '((:header "A") (:header "B"))
+                 :rows '(("1" "2")))))
       (expect (vui-vnode-table-p node) :to-be-truthy)
       (expect (length (vui-vnode-table-columns node)) :to-equal 2)
       (expect (length (vui-vnode-table-rows node)) :to-equal 1)))
@@ -1012,15 +1020,15 @@
   (it "renders simple table without borders"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:min-width 4) (:min-width 4))
-                    :rows '(("A" "B") ("C" "D"))))
+                   :columns '((:width 4 :grow t) (:width 4 :grow t))
+                   :rows '(("A" "B") ("C" "D"))))
       (expect (buffer-string) :to-equal "A    B   \nC    D   \n")))
 
   (it "renders table with headers"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:header "X" :min-width 3) (:header "Y" :min-width 3))
-                    :rows '(("1" "2"))))
+                   :columns '((:header "X" :width 3 :grow t) (:header "Y" :width 3 :grow t))
+                   :rows '(("1" "2"))))
       (expect (buffer-string) :to-match "X")
       (expect (buffer-string) :to-match "Y")
       (expect (buffer-string) :to-match "1")
@@ -1029,9 +1037,9 @@
   (it "renders table with ascii borders"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:header "A" :width 3) (:header "B" :width 3))
-                    :rows '(("1" "2"))
-                    :border :ascii))
+                   :columns '((:header "A" :width 3 :grow t) (:header "B" :width 3 :grow t))
+                   :rows '(("1" "2"))
+                   :border :ascii))
       ;; Width 3 + padding 1 on each side = 5 per column
       (expect (buffer-string) :to-match "\\+-----\\+-----\\+")
       (expect (buffer-string) :to-match "| A   | B   |")
@@ -1040,9 +1048,9 @@
   (it "renders table with unicode borders"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:header "A" :width 3) (:header "B" :width 3))
-                    :rows '(("1" "2"))
-                    :border :unicode))
+                   :columns '((:header "A" :width 3 :grow t) (:header "B" :width 3 :grow t))
+                   :rows '(("1" "2"))
+                   :border :unicode))
       (expect (buffer-string) :to-match "┌")
       (expect (buffer-string) :to-match "│")
       (expect (buffer-string) :to-match "└")))
@@ -1050,10 +1058,10 @@
   (it "respects column alignment"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:width 5 :align :left)
-                               (:width 5 :align :right)
-                               (:width 5 :align :center))
-                    :rows '(("L" "R" "C"))))
+                   :columns '((:width 5 :grow t :align :left)
+                              (:width 5 :grow t :align :right)
+                              (:width 5 :grow t :align :center))
+                   :rows '(("L" "R" "C"))))
       (expect (buffer-string) :to-match "L    ")
       (expect (buffer-string) :to-match "    R")
       (expect (buffer-string) :to-match "  C  ")))
@@ -1061,17 +1069,127 @@
   (it "auto-calculates column widths from content"
     (with-temp-buffer
       (vui-render (vui-table
-                    :columns '((:min-width 1) (:min-width 1))
-                    :rows '(("short" "longer-text"))))
+                   :columns '(nil nil)
+                   :rows '(("short" "longer-text"))))
       ;; Content should fit without truncation
       (expect (buffer-string) :to-match "short")
-      (expect (buffer-string) :to-match "longer-text"))))
+      (expect (buffer-string) :to-match "longer-text")))
+
+  ;; Cell structure tests - verify "| VALUE |" format
+  (it "surrounds cell content with proper separators"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 5 :grow t))
+                   :rows '(("hello"))
+                   :border :ascii))
+      ;; Cell should be: "| " + content + " |"
+      (expect (buffer-string) :to-match "| hello |")))
+
+  ;; Truncation tests
+  (it "truncates content when :truncate is set"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 8 :truncate t))
+                   :rows '(("hello world"))
+                   :border :ascii))
+      ;; "hello world" (11 chars) -> "hello..." (8 chars)
+      (expect (buffer-string) :to-match "| hello\\.\\.\\. |")
+      (expect (buffer-string) :not :to-match "world")))
+
+  (it "does not truncate when content fits width"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 8 :truncate t))
+                   :rows '(("short"))
+                   :border :ascii))
+      ;; Content fits, no truncation needed
+      (expect (buffer-string) :to-match "| short |")))
+
+  ;; Overflow tests
+  (it "overflows with broken bar when content exceeds width"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 5))
+                   :rows '(("hello world"))
+                   :border :ascii))
+      ;; Content up to width, then " ¦" (space + broken bar) + overflow content
+      (expect (buffer-string) :to-match "| hello ¦world")))
+
+  (it "shrinks column to content when content is shorter than width without grow"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10))
+                   :rows '(("hi"))
+                   :border :ascii))
+      ;; Without :grow, column shrinks to content size
+      ;; Cell: "| hi |" not "| hi         |"
+      (expect (buffer-string) :to-match "| hi |")))
+
+  ;; Grow tests
+  (it "does not overflow when :grow t expands column"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 5 :grow t))
+                   :rows '(("hello world"))
+                   :border :ascii))
+      ;; With :grow t, column expands to fit content - no overflow
+      (expect (buffer-string) :to-match "| hello world |")
+      ;; Should NOT have overflow indicator
+      (expect (buffer-string) :not :to-match "¦")))
+
+  (it "uses :grow t to enforce minimum width with padding"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :grow t))
+                   :rows '(("hi"))
+                   :border :ascii))
+      ;; With :grow t, column is at least width 10, content padded
+      (expect (buffer-string) :to-match "| hi         |")))
+
+  (it "pads columns without borders when :grow t is set"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :grow t) (:width 10 :grow t))
+                   :rows '(("A" "B"))))
+      ;; Columns should be padded to width 10 (no borders = space separator)
+      (expect (buffer-string) :to-match "A         ")
+      (expect (buffer-string) :to-match "B         ")))
+
+  ;; Grow + Truncate combination
+  (it "truncates even with :grow when :truncate is set"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 8 :grow t :truncate t))
+                   :rows '(("hello world"))
+                   :border :ascii))
+      ;; :truncate wins - content is truncated, not expanded
+      (expect (buffer-string) :to-match "| hello\\.\\.\\. |")
+      (expect (buffer-string) :not :to-match "world")))
+
+  (it "pads with :grow :truncate when content is shorter"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :grow t :truncate t))
+                   :rows '(("hi"))
+                   :border :ascii))
+      ;; Content shorter than width, :grow pads it
+      (expect (buffer-string) :to-match "| hi         |")))
+
+  ;; Content exactly equal to width
+  (it "handles content exactly equal to width"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 5 :grow t))
+                   :rows '(("hello"))
+                   :border :ascii))
+      ;; Content exactly fits, no padding or truncation
+      (expect (buffer-string) :to-match "| hello |"))))
 
 (describe "vui-error-boundary"
   (it "creates an error boundary vnode"
     (let ((node (vui-error-boundary
-                  :fallback (lambda (_) (vui-text "Error"))
-                  :children (list (vui-text "OK")))))
+                 :fallback (lambda (_) (vui-text "Error"))
+                 :children (list (vui-text "OK")))))
       (expect (vui-vnode-error-boundary-p node) :to-be-truthy)
       (expect (vui-vnode-error-boundary-fallback node) :to-be-truthy)
       (expect (vui-vnode-error-boundary-children node) :to-equal (list (vui-text "OK")))))
@@ -1080,9 +1198,9 @@
     (with-temp-buffer
       (clrhash vui--error-boundary-errors)
       (vui-render (vui-error-boundary
-                    :id 'test-no-error
-                    :fallback (lambda (_) (vui-text "Error occurred"))
-                    :children (list (vui-text "Hello World"))))
+                   :id 'test-no-error
+                   :fallback (lambda (_) (vui-text "Error occurred"))
+                   :children (list (vui-text "Hello World"))))
       (expect (buffer-string) :to-equal "Hello World")))
 
   (it "catches errors and renders fallback"
@@ -1091,10 +1209,10 @@
       (defcomponent error-component ()
         :render (error "Test error"))
       (vui-render (vui-error-boundary
-                    :id 'test-catch-error
-                    :fallback (lambda (err)
-                                (vui-text (format "Caught: %s" (cadr err))))
-                    :children (list (vui-component 'error-component))))
+                   :id 'test-catch-error
+                   :fallback (lambda (err)
+                               (vui-text (format "Caught: %s" (cadr err))))
+                   :children (list (vui-component 'error-component))))
       (expect (buffer-string) :to-match "Caught: Test error")))
 
   (it "calls on-error callback when error is caught"
@@ -1104,11 +1222,11 @@
         (defcomponent error-component2 ()
           :render (error "Logged error"))
         (vui-render (vui-error-boundary
-                      :id 'test-on-error
-                      :on-error (lambda (err)
-                                  (setq error-log err))
-                      :fallback (lambda (_) (vui-text "Fallback"))
-                      :children (list (vui-component 'error-component2))))
+                     :id 'test-on-error
+                     :on-error (lambda (err)
+                                 (setq error-log err))
+                     :fallback (lambda (_) (vui-text "Fallback"))
+                     :children (list (vui-component 'error-component2))))
         (expect error-log :to-be-truthy)
         (expect (cadr error-log) :to-equal "Logged error"))))
 
@@ -1121,8 +1239,8 @@
                   (error "Count is positive"))
                 (vui-text (number-to-string count))))
     (let ((instance (vui-mount
-                      (vui-component 'error-counter)
-                      "*test-persist-error*")))
+                     (vui-component 'error-counter)
+                     "*test-persist-error*")))
       (unwind-protect
           (progn
             ;; Initially no error
@@ -1232,8 +1350,8 @@
            (vui-lifecycle-error-handler
             (lambda (hook-name err instance)
               (setq handler-called (list hook-name (cadr err)
-                                          (vui-component-def-name
-                                           (vui-instance-def instance)))))))
+                                         (vui-component-def-name
+                                          (vui-instance-def instance)))))))
       (defcomponent custom-handler-test ()
         :on-mount (error "Custom error")
         :render (vui-text "OK"))
@@ -1251,14 +1369,14 @@
     (let ((vui-event-error-handler 'ignore))
       (defcomponent click-error ()
         :render (vui-button "Click"
-                  :on-click (lambda () (error "Click error"))))
+                            :on-click (lambda () (error "Click error"))))
       (setq vui-last-error nil)
       (let ((instance (vui-mount (vui-component 'click-error) "*test-click-error*")))
         (unwind-protect
             (progn
-              ;; Simulate button click
+              ;; Simulate button click (buttons are now text with keymap)
               (with-current-buffer "*test-click-error*"
-                (widget-apply (widget-at (point-min)) :notify))
+                (vui-test--click-button-at (point-min)))
               ;; Error should be caught
               (expect vui-last-error :to-be-truthy)
               (expect (car vui-last-error) :to-equal 'event)
@@ -1270,9 +1388,9 @@
       (setq vui-last-error nil)
       (with-temp-buffer
         (vui-render (vui-checkbox
-                      :checked nil
-                      :on-change (lambda (_) (error "Checkbox error"))))
-        ;; Simulate checkbox toggle
+                     :checked nil
+                     :on-change (lambda (_) (error "Checkbox error"))))
+        ;; Simulate checkbox toggle (checkboxes are still widgets)
         (widget-apply (widget-at (point-min)) :notify nil))
       (expect vui-last-error :to-be-truthy)
       (expect (plist-get (caddr vui-last-error) :hook) :to-equal "on-change")))
@@ -1282,9 +1400,9 @@
       (setq vui-last-error nil)
       (with-temp-buffer
         (vui-render (vui-button "Test"
-                      :on-click (lambda () (error "Silent error"))))
-        ;; Should not signal error
-        (widget-apply (widget-at (point-min)) :notify))
+                                :on-click (lambda () (error "Silent error"))))
+        ;; Should not signal error (buttons are now text with keymap)
+        (vui-test--click-button-at (point-min)))
       ;; Error stored but not signaled
       (expect vui-last-error :to-be-truthy)))
 
@@ -1292,9 +1410,9 @@
     (let ((vui-event-error-handler 'signal))
       (with-temp-buffer
         (vui-render (vui-button "Test"
-                      :on-click (lambda () (error "Should propagate"))))
-        ;; Should signal error
-        (expect (widget-apply (widget-at (point-min)) :notify)
+                                :on-click (lambda () (error "Should propagate"))))
+        ;; Should signal error (buttons are now text with keymap)
+        (expect (vui-test--click-button-at (point-min))
                 :to-throw 'error))))
 
   (it "calls custom handler for events"
@@ -1304,8 +1422,8 @@
               (setq handler-called (list hook-name (cadr err))))))
       (with-temp-buffer
         (vui-render (vui-button "Test"
-                      :on-click (lambda () (error "Custom event error"))))
-        (widget-apply (widget-at (point-min)) :notify))
+                                :on-click (lambda () (error "Custom event error"))))
+        (vui-test--click-button-at (point-min)))
       (expect handler-called :to-be-truthy)
       (expect (car handler-called) :to-equal "on-click")
       (expect (cadr handler-called) :to-equal "Custom event error"))))
@@ -1329,8 +1447,8 @@
                 (let ((vui--current-instance instance)
                       (vui--root-instance instance))
                   (vui-batch
-                    (vui-set-state :a 1)
-                    (vui-set-state :b 2))))
+                   (vui-set-state :a 1)
+                   (vui-set-state :b 2))))
               ;; Should only have one additional render (total 2)
               (expect render-count :to-equal 2)
               (expect (with-current-buffer "*test-batch*" (buffer-string))
@@ -1353,10 +1471,10 @@
                 (let ((vui--current-instance instance)
                       (vui--root-instance instance))
                   (vui-batch
-                    (vui-set-state :x 1)
-                    (vui-batch
-                      (vui-set-state :x 2))
-                    (vui-set-state :x 3))))
+                   (vui-set-state :x 1)
+                   (vui-batch
+                    (vui-set-state :x 2))
+                   (vui-set-state :x 3))))
               ;; Only one render at the end of outermost batch
               (expect render-count :to-equal 2)
               (expect (with-current-buffer "*test-nested-batch*" (buffer-string))
@@ -1742,8 +1860,8 @@
     (defcomponent inspect-parent ()
       :state ((label "outer"))
       :render (vui-fragment
-                (vui-text label)
-                (vui-component 'inspect-child)))
+               (vui-text label)
+               (vui-component 'inspect-child)))
     (let ((instance (vui-mount (vui-component 'inspect-parent) "*test-inspect2*")))
       (unwind-protect
           (progn
@@ -1784,8 +1902,8 @@
     (defcomponent state-viewer-parent ()
       :state ((parent-val "parent"))
       :render (vui-fragment
-                (vui-component 'stateless-comp)
-                (vui-component 'stateful-comp)))
+               (vui-component 'stateless-comp)
+               (vui-component 'stateful-comp)))
     (let ((instance (vui-mount (vui-component 'state-viewer-parent) "*test-state1*")))
       (unwind-protect
           (progn
@@ -1827,9 +1945,9 @@
       :render (vui-text "item"))
     (defcomponent list-comp ()
       :render (vui-fragment
-                (vui-component 'item-comp)
-                (vui-component 'item-comp)
-                (vui-component 'item-comp)))
+               (vui-component 'item-comp)
+               (vui-component 'item-comp)
+               (vui-component 'item-comp)))
     (let ((instance (vui-mount (vui-component 'list-comp) "*test-lookup3*")))
       (unwind-protect
           (let ((items (vui-get-component-instances 'item-comp)))
@@ -1889,13 +2007,13 @@
     (defcomponent debug-state-test ()
       :state ((count 0))
       :render (vui-button "+"
-                :on-click (lambda () (vui-set-state :count (1+ count)))))
+                          :on-click (lambda () (vui-set-state :count (1+ count)))))
     (let ((instance (vui-mount (vui-component 'debug-state-test) "*test-debug4*")))
       (unwind-protect
           (progn
-            ;; Trigger state change
+            ;; Trigger state change (buttons are now text with keymap)
             (with-current-buffer "*test-debug4*"
-              (widget-apply (widget-at (point-min)) :notify))
+              (vui-test--click-button-at (point-min)))
             (with-current-buffer "*vui-debug*"
               (let ((content (buffer-string)))
                 (expect content :to-match "state-change:")

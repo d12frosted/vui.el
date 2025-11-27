@@ -298,12 +298,37 @@ Output:
 
 ** Column Properties
 
-| Property     | Description                      |
-|--------------+----------------------------------|
-| =:header=    | Column header text               |
-| =:width=     | Fixed width in characters        |
-| =:min-width= | Minimum width, expands as needed |
-| =:align=     | =:left=, =:center=, or =:right=  |
+| Property     | Description                                    |
+|--------------+------------------------------------------------|
+| =:header=    | Column header text                             |
+| =:width=     | Target width for cell content                  |
+| =:min-width= | Minimum width, expands as needed               |
+| =:grow=      | If t, pad short content and expand for long    |
+| =:truncate=  | If t, truncate long content with "..."         |
+| =:align=     | =:left=, =:center=, or =:right=                |
+
+*** Width Behavior
+
+The =:width=, =:grow=, and =:truncate= options interact to control how columns
+handle content that doesn't match the declared width:
+
+| =:width= | =:grow= | =:truncate= | Content vs Width | Result                                    |
+|----------+---------+-------------+------------------+-------------------------------------------|
+| W        | nil     | nil         | content < W      | Column shrinks to content size            |
+| W        | nil     | nil         | content > W      | Overflow with broken bar (¦)              |
+| W        | t       | nil         | content < W      | Column = W, content padded                |
+| W        | t       | nil         | content > W      | Column expands to fit content             |
+| W        | nil     | t           | content < W      | Column shrinks to content size            |
+| W        | nil     | t           | content > W      | Column = W, content truncated with "..."  |
+| W        | t       | t           | content < W      | Column = W, content padded                |
+| W        | t       | t           | content > W      | Column = W, content truncated with "..."  |
+| nil      | -       | -           | any              | Column auto-sizes to content              |
+
+*Notes:*
+- =:grow t= acts as a minimum width guarantee
+- =:truncate t= acts as a maximum width guarantee
+- Without =:grow=, short content shrinks the column
+- Without =:truncate=, long content either overflows (¦) or expands the column
 
 ** Interactive Cells
 

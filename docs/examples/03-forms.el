@@ -383,7 +383,7 @@
 ;;; Example 4: Settings Form with Sections
 ;; Organized form with collapsible sections
 
-(defcomponent settings-section (title expanded children on-toggle)
+(defcomponent settings-section (title expanded content on-toggle)
   :render
   (vui-vstack
    (vui-hstack
@@ -391,7 +391,7 @@
                 :on-click on-toggle)
     (vui-text (format " %s" title) :face 'bold))
    (when expanded
-     (vui-box children :padding-left 2))))
+     (vui-box content :padding-left 2))))
 
 
 (defcomponent settings-form ()
@@ -423,7 +423,7 @@
                                :title "General"
                                :expanded (plist-get sections :general)
                                :on-toggle (lambda () (funcall toggle-section :general))
-                               :children
+                               :content
                                (vui-vstack :spacing 1
                                            (vui-hstack
                                             (vui-text "Theme: ")
@@ -451,7 +451,7 @@
                                :title "Notifications"
                                :expanded (plist-get sections :notifications)
                                :on-toggle (lambda () (funcall toggle-section :notifications))
-                               :children
+                               :content
                                (vui-vstack :spacing 1
                                            (vui-checkbox
                                             :checked (plist-get settings :email-notify)
@@ -469,7 +469,7 @@
                                :title "Privacy"
                                :expanded (plist-get sections :privacy)
                                :on-toggle (lambda () (funcall toggle-section :privacy))
-                               :children
+                               :content
                                (vui-vstack :spacing 1
                                            (vui-checkbox
                                             :checked (plist-get settings :share-data)
