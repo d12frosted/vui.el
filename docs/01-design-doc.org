@@ -6,47 +6,29 @@
 *vui.el* (Virtual UI) is a declarative, component-based UI library for Emacs. It brings React-like patterns to buffer-based interfaces: define components as functions of state, compose them into trees, and let the library handle efficient updates through reconciliation. Built on top of =widget.el= for battle-tested input handling, vui.el adds state management, automatic re-rendering, cursor preservation, and layout primitives for building complex, interactive UIs in Emacs buffers.
 
 * Introduction
-:PROPERTIES:
-:CUSTOM_ID: introduction
-:END:
+
 ** Motivation
-:PROPERTIES:
-:CUSTOM_ID: motivation
-:END:
-Emacs's built-in =widget.el= library provides a foundation for creating
-interactive UI elements in buffers. However, it has limitations when
-building complex, dynamic interfaces:
 
-- *Imperative updates*: Widgets are created and modified imperatively,
-  making it hard to reason about UI state.
-- *No diffing*: Changes require manual deletion and recreation of
-  widgets.
+Emacs's built-in =widget.el= library provides a foundation for creating interactive UI elements in buffers. However, it has limitations when building complex, dynamic interfaces:
+
+- *Imperative updates*: Widgets are created and modified imperatively, making it hard to reason about UI state.
+- *No diffing*: Changes require manual deletion and recreation of widgets.
 - *Coupled state*: Widget state is mixed with rendering logic.
-- *Limited composition*: Composing widgets into complex layouts is
-  cumbersome.
+- *Limited composition*: Composing widgets into complex layouts is cumbersome.
 
-vui.el aims to bring React's declarative, component-based model to
-Emacs, enabling developers to build complex UIs by describing /what/
-should be rendered, not /how/ to update it.
+vui.el aims to bring React's declarative, component-based model to Emacs, enabling developers to build complex UIs by describing /what/ should be rendered, not /how/ to update it.
 
 ** Core Philosophy
-:PROPERTIES:
-:CUSTOM_ID: core-philosophy
-:END:
-1. *Declarative*: Describe the UI as a function of state, not as a
-   sequence of mutations.
-2. *Component-based*: Build complex UIs from small, reusable, composable
-   pieces.
-3. *Unidirectional data flow*: Data flows down through props; events
-   flow up through callbacks.
+
+1. *Declarative*: Describe the UI as a function of state, not as a sequence of mutations.
+2. *Component-based*: Build complex UIs from small, reusable, composable pieces.
+3. *Unidirectional data flow*: Data flows down through props; events flow up through callbacks.
 4. *Predictable*: Same props + state always produces the same output.
 5. *Emacs-native*: Respect Emacs conventions (point, markers, keymaps,
    faces).
 
 ** Key Differences from React
-:PROPERTIES:
-:CUSTOM_ID: key-differences-from-react
-:END:
+
 | Aspect           | React                     | This Library                        |
 |------------------+---------------------------+-------------------------------------|
 | Render target    | DOM (tree of nodes)       | Buffer (linear text with overlays)  |
@@ -57,13 +39,9 @@ should be rendered, not /how/ to update it.
 
 
 * Goals and Non-Goals
-:PROPERTIES:
-:CUSTOM_ID: goals-and-non-goals
-:END:
+
 ** Goals
-:PROPERTIES:
-:CUSTOM_ID: goals
-:END:
+
 - *Declarative component model* with props, state, and render functions
 - *Efficient reconciliation* that minimises buffer mutations
 - *Cursor preservation* across re-renders (critical for Emacs UX)
@@ -73,32 +51,20 @@ should be rendered, not /how/ to update it.
 - *Lifecycle hooks* for mount, unmount, and update events
 - *Batched updates* to avoid redundant re-renders
 - *Error boundaries* for graceful failure handling
-- *Interoperability* with existing Emacs facilities (keymaps, faces,
-  hooks)
+- *Interoperability* with existing Emacs facilities (keymaps, faces, hooks)
 
 ** Non-Goals
-:PROPERTIES:
-:CUSTOM_ID: non-goals
-:END:
-- *Full CSS-like layout*: We work within buffer constraints (monospace,
-  linear text)
-- *Animation*: No built-in animation system (though hooks could enable
-  it)
-- *Server-side rendering*: Not applicable to Emacs
-- *Concurrent rendering*: Emacs is single-threaded; we use idle timers
-  instead
-- *Backward compatibility with widget.el*: Clean break, though we may
-  wrap widgets
 
+- *Full CSS-like layout*: We work within buffer constraints (monospace, linear text)
+- *Animation*: No built-in animation system (though hooks could enable it)
+- *Server-side rendering*: Not applicable to Emacs
+- *Concurrent rendering*: Emacs is single-threaded; we use idle timers instead
+- *Backward compatibility with widget.el*: Clean break, though we may wrap widgets
 
 * Foundational Architecture
-:PROPERTIES:
-:CUSTOM_ID: foundational-architecture
-:END:
+
 ** High-Level Overview
-:PROPERTIES:
-:CUSTOM_ID: high-level-overview
-:END:
+
 #+begin_example
 +-----------------------------------------------------------------+
 |                        User Code                                |
@@ -140,9 +106,7 @@ should be rendered, not /how/ to update it.
 #+end_example
 
 ** The Render Cycle
-:PROPERTIES:
-:CUSTOM_ID: the-render-cycle
-:END:
+
 #+begin_example
 State Change
      |
@@ -173,49 +137,25 @@ State Change
 #+end_example
 
 ** Key Design Decisions
-:PROPERTIES:
-:CUSTOM_ID: key-design-decisions
-:END:
-*Decision 1: Immutable props, mutable state* - Props flow down from
-parent, are read-only to child - State is owned by component, changes
-trigger re-render
 
-*Decision 2: Render functions are pure* - Given same props and state,
-produce same virtual tree - No direct buffer manipulation in render
+*Decision 1: Immutable props, mutable state* - Props flow down from parent, are read-only to child - State is owned by component, changes trigger re-render
 
-*Decision 3: Virtual tree is a simple data structure* - Easy to diff,
-serialise, inspect - No circular references in the tree itself (parent
-refs stored separately)
+*Decision 2: Render functions are pure* - Given same props and state, produce same virtual tree - No direct buffer manipulation in render
 
-*Decision 4: Buffer is the "DOM"* - Text content + overlays + text
-properties - All buffer mutations go through the renderer, never direct
+*Decision 3: Virtual tree is a simple data structure* - Easy to diff, serialise, inspect - No circular references in the tree itself (parent refs stored separately)
 
-*Decision 5: Build on widget.el for input primitives* - =vui-field= wraps
-widget field (not raw text + overlays) - =vui-button= wraps widget
-button - =vui-select= may use widget-choice internally - TAB navigation,
-field editing come free from widget library - Reconciler updates widget
-values rather than delete/recreate where possible - We provide:
-component model, state management, layout, reconciliation - Widget.el
-provides: battle-tested input handling, keyboard navigation
+*Decision 4: Buffer is the "DOM"* - Text content + overlays + text properties - All buffer mutations go through the renderer, never direct
 
-*Decision 6: Two-pass rendering architecture* - *Pass 1 (Measure)*:
-Calculate dimensions without buffer mutation - Width of each vnode (for
-tables, boxes) - [Future: Height for multi-line support in horizontal
-layouts] - *Pass 2 (Render)*: Insert into buffer with known dimensions -
-Even if MVP only uses pass 1 for width, the infrastructure exists for
-future multi-line support
+*Decision 5: Build on widget.el for input primitives* - =vui-field= wraps widget field (not raw text + overlays) - =vui-button= wraps widget button - =vui-select= may use widget-choice internally - TAB navigation, field editing come free from widget library - Reconciler updates widget values rather than delete/recreate where possible - We provide: component model, state management, layout, reconciliation - Widget.el provides: battle-tested input handling, keyboard navigation
+
+*Decision 6: Two-pass rendering architecture* - *Pass 1 (Measure)*: Calculate dimensions without buffer mutation - Width of each vnode (for tables, boxes) - [Future: Height for multi-line support in horizontal layouts] - *Pass 2 (Render)*: Insert into buffer with known dimensions - Even if MVP only uses pass 1 for width, the infrastructure exists for future multi-line support
 
 
 * Core Data Structures
-:PROPERTIES:
-:CUSTOM_ID: core-data-structures
-:END:
+
 ** Component Definition
-:PROPERTIES:
-:CUSTOM_ID: component-definition
-:END:
-A component definition is a template---it describes /how/ to create
-instances.
+
+A component definition is a template - it describes /how/ to create instances.
 
 #+begin_src elisp
 (cl-defstruct (vui-component-def (:constructor vui-component-def--create))
@@ -239,11 +179,8 @@ instances.
 #+end_src
 
 ** Component Instance
-:PROPERTIES:
-:CUSTOM_ID: component-instance
-:END:
-An instance is a live component in the tree with actual props, state,
-and buffer position.
+
+An instance is a live component in the tree with actual props, state, and buffer position.
 
 #+begin_src elisp
 (cl-defstruct (vui-instance (:constructor vui-instance--create))
@@ -277,11 +214,8 @@ and buffer position.
 #+end_src
 
 ** Virtual Tree Nodes
-:PROPERTIES:
-:CUSTOM_ID: virtual-tree-nodes
-:END:
-The virtual tree is what render functions produce. It's a pure data
-structure.
+
+The virtual tree is what render functions produce. It's a pure data structure.
 
 #+begin_src elisp
 ;; Base structure for all virtual nodes
@@ -343,9 +277,7 @@ structure.
 #+end_src
 
 ** Diff Operations
-:PROPERTIES:
-:CUSTOM_ID: diff-operations
-:END:
+
 The reconciler produces a list of operations to transform the buffer.
 
 #+begin_src elisp
@@ -386,9 +318,7 @@ The reconciler produces a list of operations to transform the buffer.
 #+end_src
 
 ** Context
-:PROPERTIES:
-:CUSTOM_ID: context
-:END:
+
 For passing data deeply without prop drilling.
 
 #+begin_src elisp
@@ -404,9 +334,7 @@ For passing data deeply without prop drilling.
 #+end_src
 
 ** Render Context
-:PROPERTIES:
-:CUSTOM_ID: render-context
-:END:
+
 Passed through the tree during rendering, carrying inherited state.
 
 #+begin_src elisp
@@ -445,9 +373,7 @@ Passed through the tree during rendering, carrying inherited state.
 #+end_src
 
 ** Scheduler
-:PROPERTIES:
-:CUSTOM_ID: scheduler
-:END:
+
 Manages batched updates.
 
 #+begin_src elisp
@@ -461,13 +387,9 @@ Manages batched updates.
 
 
 * Component Definition DSL
-:PROPERTIES:
-:CUSTOM_ID: component-definition-dsl
-:END:
+
 ** The =defcomponent= Macro
-:PROPERTIES:
-:CUSTOM_ID: the-defcomponent-macro
-:END:
+
 #+begin_src elisp
 (defcomponent todo-item
   "A single todo item with checkbox and text."
@@ -520,9 +442,7 @@ Manages batched updates.
 #+end_src
 
 ** Macro Expansion
-:PROPERTIES:
-:CUSTOM_ID: macro-expansion
-:END:
+
 The =defcomponent= macro expands to:
 
 #+begin_src elisp
@@ -563,9 +483,7 @@ The =defcomponent= macro expands to:
 #+end_src
 
 ** State Mutation with =let-state=
-:PROPERTIES:
-:CUSTOM_ID: state-mutation-with-let-state
-:END:
+
 State variables need special handling to trigger re-renders on mutation:
 
 #+begin_src elisp
@@ -595,13 +513,9 @@ Expansion:
     (vui-button :on-click (lambda () (cl-incf count)))))
 #+end_src
 
-Where =vui--state-accessor= is a generalised variable that: 1. Reads from
-instance state 2. On =setf=, updates state and marks instance dirty
+Where =vui--state-accessor= is a generalised variable that: 1. Reads from instance state 2. On =setf=, updates state and marks instance dirty
 
 ** Primitive Constructors
-:PROPERTIES:
-:CUSTOM_ID: primitive-constructors
-:END:
 #+begin_src elisp
 (defun vui-text (content &rest props)
   "Create a text vnode.
@@ -658,11 +572,8 @@ WIDTH defaults to 1."
 #+end_src
 
 ** Input Capturing Primitives
-:PROPERTIES:
-:CUSTOM_ID: input-capturing-primitives
-:END:
-Beyond inline-editable fields, we need components that capture input via
-prompts:
+
+Beyond inline-editable fields, we need components that capture input via prompts:
 
 #+begin_src elisp
 ;; Selection from options (uses completing-read)
@@ -766,11 +677,8 @@ PROPS:
 #+end_src
 
 ** Hidden Component
-:PROPERTIES:
-:CUSTOM_ID: hidden-component
-:END:
-Components can be hidden without being destroyed, preserving their
-state:
+
+Components can be hidden without being destroyed, preserving their state:
 
 #+begin_src elisp
 (cl-defstruct (vui-vnode-hidden (:include vui-vnode)
@@ -825,35 +733,25 @@ losing component state."
   (detail-panel :data data))
 #+end_src
 
-Use =vui-hidden= when: - Toggling visibility frequently (tabs,
-accordions) - Component has expensive initialization - You want to
-preserve user input in hidden forms
+Use =vui-hidden= when: - Toggling visibility frequently (tabs, accordions) - Component has expensive initialization - You want to preserve user input in hidden forms
 
 
 * Reconciliation Algorithm
-:PROPERTIES:
-:CUSTOM_ID: reconciliation-algorithm
-:END:
+
 ** Overview
-:PROPERTIES:
-:CUSTOM_ID: overview
-:END:
-The reconciler's job is to take two virtual trees (old and new) and
-produce the minimal set of operations to transform the buffer from the
-old state to the new state.
 
-React's reconciliation is based on two heuristics: 1. *Elements of
-different types produce different trees* --- if a node type changes,
-tear down the old subtree entirely 2. *Keys provide stable identity* ---
-children with the same key are the "same" element across renders
+The reconciler's job is to take two virtual trees (old and new) and produce the minimal set of operations to transform the buffer from the old state to the new state.
 
-For Emacs, we add a third concern: 3. *Preserve cursor position* ---
-track which component owns point and restore it after mutations
+React's reconciliation is based on two heuristics:
+
+- *Elements of different types produce different trees* - if a node type changes, tear down the old subtree entirely
+- *Keys provide stable identity* - children with the same key are the "same" element across renders
+
+For Emacs, we add a third concern:
+
+- *Preserve cursor position* - track which component owns point and restore it after mutations
 
 ** Algorithm Structure
-:PROPERTIES:
-:CUSTOM_ID: algorithm-structure
-:END:
 #+begin_example
 reconcile(old-instance, new-vnode) -> list of operations
 
@@ -875,9 +773,6 @@ reconcile(old-instance, new-vnode) -> list of operations
 #+end_example
 
 ** Detailed Reconciliation Logic
-:PROPERTIES:
-:CUSTOM_ID: detailed-reconciliation-logic
-:END:
 #+begin_src elisp
 (defun vui--reconcile (old-instance new-vnode parent-instance)
   "Reconcile OLD-INSTANCE with NEW-VNODE.
@@ -936,9 +831,7 @@ PARENT-INSTANCE is used for context when creating new instances."
 #+end_src
 
 ** Reconciling Same-Type Components
-:PROPERTIES:
-:CUSTOM_ID: reconciling-same-type-components
-:END:
+
 #+begin_src elisp
 (defun vui--reconcile-same-type (old-instance new-vnode)
   "Reconcile when types match. Returns list of operations."
@@ -985,11 +878,8 @@ PARENT-INSTANCE is used for context when creating new instances."
 #+end_src
 
 ** Reconciling Children Lists (The Key Algorithm)
-:PROPERTIES:
-:CUSTOM_ID: reconciling-children-lists-the-key-algorithm
-:END:
-This is where keys become critical. Without keys, inserting at the
-beginning of a list would cause all children to be "replaced".
+
+This is where keys become critical. Without keys, inserting at the beginning of a list would cause all children to be "replaced".
 
 #+begin_src elisp
 (defun vui--reconcile-children (old-children new-vnodes parent-instance)
@@ -1057,9 +947,7 @@ Uses keys for efficient matching. Returns list of operations."
 #+end_src
 
 ** Reconciling Primitives
-:PROPERTIES:
-:CUSTOM_ID: reconciling-primitives
-:END:
+
 Primitive vnodes (text, button, field) have simpler reconciliation:
 
 #+begin_src elisp
@@ -1119,11 +1007,8 @@ Primitive vnodes (text, button, field) have simpler reconciliation:
 #+end_src
 
 ** Operation Ordering
-:PROPERTIES:
-:CUSTOM_ID: operation-ordering
-:END:
-Operations must be applied in the correct order to maintain valid buffer
-positions:
+
+Operations must be applied in the correct order to maintain valid buffer positions:
 
 #+begin_src elisp
 (defun vui--sort-operations (ops)
@@ -1161,54 +1046,32 @@ This prevents position shifts from invalidating later operations."
 #+end_src
 
 ** Complexity Analysis
-:PROPERTIES:
-:CUSTOM_ID: complexity-analysis
-:END:
-- *Best case (no changes)*: O(n) where n is tree depth (just prop
-  comparison)
-- *Typical case*: O(n) where n is number of changed nodes\\
+
+- *Best case (no changes)*: O(n) where n is tree depth (just prop comparison)
+- *Typical case*: O(n) where n is number of changed nodes
 - *Worst case (all keys changed)*: O(n) where n is total nodes
 
-The key insight from React: by assuming different types produce
-different trees, we avoid the O(n³) tree-edit-distance algorithm.
-
+The key insight from React: by assuming different types produce different trees, we avoid the O(n³) tree-edit-distance algorithm.
 
 * Cursor Preservation
-:PROPERTIES:
-:CUSTOM_ID: cursor-preservation
-:END:
-** The Problem
-:PROPERTIES:
-:CUSTOM_ID: the-problem
-:END:
-In React/browser contexts, focus management is relatively simple ---
-elements have a =focus()= method and the browser tracks which element is
-focused. In Emacs, *point* (the cursor position) is the primary
-interaction mechanism, and it's always somewhere in the buffer.
 
-When we re-render components: - Text may be inserted before point ->
-point should stay on the same logical content - Text may be deleted ->
-point might need to move to a valid position\\
-- The component containing point might be replaced -> we need to restore
-to equivalent position - The component containing point might be deleted
-entirely -> we need a fallback
+** The Problem
+
+In React/browser contexts, focus management is relatively simple --- elements have a =focus()= method and the browser tracks which element is focused. In Emacs, *point* (the cursor position) is the primary interaction mechanism, and it's always somewhere in the buffer.
+
+When we re-render components:
+
+- Text may be inserted before point -> point should stay on the same logical content - Text may be deleted -> point might need to move to a valid position
+- The component containing point might be replaced -> we need to restore to equivalent position - The component containing point might be deleted entirely -> we need a fallback
 
 ** Goals
-:PROPERTIES:
-:CUSTOM_ID: goals-1
-:END:
-1. *Semantic preservation*: Point should stay on the "same thing" after
-   re-render
-2. *Field continuity*: If editing a field, don't disrupt the editing
-   experience
-3. *Graceful degradation*: If exact position is impossible, choose
-   sensible fallback
+
+1. *Semantic preservation*: Point should stay on the "same thing" after re-render
+2. *Field continuity*: If editing a field, don't disrupt the editing experience
+3. *Graceful degradation*: If exact position is impossible, choose sensible fallback
 4. *No flicker*: User should not perceive point jumping around
 
 ** Cursor Context Structure
-:PROPERTIES:
-:CUSTOM_ID: cursor-context-structure
-:END:
 Before any buffer mutations, we capture the cursor context:
 
 #+begin_src elisp
@@ -1239,9 +1102,7 @@ Before any buffer mutations, we capture the cursor context:
 #+end_src
 
 ** Capturing Cursor Context
-:PROPERTIES:
-:CUSTOM_ID: capturing-cursor-context
-:END:
+
 #+begin_src elisp
 (defun vui--capture-cursor-context (root-instance)
   "Capture cursor context before re-render.
@@ -1301,16 +1162,10 @@ Returns a vui-cursor-context or nil if point is outside ROOT-INSTANCE."
 #+end_src
 
 ** Restoring Cursor Context
-:PROPERTIES:
-:CUSTOM_ID: restoring-cursor-context
-:END:
-After mutations are applied, we restore point using the captured
-context.
 
-*Key principle*: When the component owning cursor is destroyed, place
-cursor at the position where that component /was/ --- i.e., at the start
-of where the destroyed component lived within its parent. This feels
-most natural to users.
+After mutations are applied, we restore point using the captured context.
+
+*Key principle*: When the component owning cursor is destroyed, place cursor at the position where that component /was/ - i.e., at the start of where the destroyed component lived within its parent. This feels most natural to users.
 
 #+begin_src elisp
 (defun vui--restore-cursor-context (context root-instance)
@@ -1470,9 +1325,7 @@ would be (based on original sibling index)."
 #+end_src
 
 ** Special Handling for Editable Fields
-:PROPERTIES:
-:CUSTOM_ID: special-handling-for-editable-fields
-:END:
+
 Fields require extra care because the user may be mid-edit:
 
 #+begin_src elisp
@@ -1526,9 +1379,7 @@ This function returns the vnode to actually render."
 #+end_src
 
 ** Mark and Region Preservation
-:PROPERTIES:
-:CUSTOM_ID: mark-and-region-preservation
-:END:
+
 #+begin_src elisp
 (defun vui--restore-mark (context root-instance)
   "Restore mark position if possible."
@@ -1541,9 +1392,7 @@ This function returns the vnode to actually render."
 #+end_src
 
 ** Integration with Render Cycle
-:PROPERTIES:
-:CUSTOM_ID: integration-with-render-cycle
-:END:
+
 The cursor preservation wraps the entire commit phase:
 
 #+begin_src elisp
@@ -1566,37 +1415,28 @@ The cursor preservation wraps the entire commit phase:
 
 
 * Layout System
-:PROPERTIES:
-:CUSTOM_ID: layout-system
-:END:
+
 ** Buffer Constraints
-:PROPERTIES:
-:CUSTOM_ID: buffer-constraints
-:END:
+
 Unlike CSS/browser layout, Emacs buffers have fundamental constraints:
 
 - *Monospace*: All characters occupy the same width (mostly)
 - *Linear*: Text flows left-to-right, top-to-bottom
-- *No absolute positioning*: Can't place text at arbitrary x,y
-  coordinates
+- *No absolute positioning*: Can't place text at arbitrary x,y coordinates
 - *No overlap*: Text can't overlap (overlays can, but not content)
 - *Line-based*: Vertical positioning is in lines, not pixels
 
-However, we can achieve flexible layouts using: - Whitespace for
-horizontal spacing - Newlines for vertical separation - Display
-properties for advanced alignment - Tables (using =org-table= or custom
-formatting)
+However, we can achieve flexible layouts using:
+
+- Whitespace for horizontal spacing
+- Newlines for vertical separation
+- Display properties for advanced alignment
+- Tables (using =org-table= or custom formatting)
 
 ** Layout Primitives
-:PROPERTIES:
-:CUSTOM_ID: layout-primitives
-:END:
+
 *** Render Context
-:PROPERTIES:
-:CUSTOM_ID: render-context-1
-:END:
-Layout primitives need access to a render context that tracks the
-current indentation level:
+Layout primitives need access to a render context that tracks the current indentation level:
 
 #+begin_src elisp
 (cl-defstruct (vui-render-context (:constructor vui-render-context--create))
@@ -1637,9 +1477,7 @@ current indentation level:
 #+end_src
 
 *** Indent Component
-:PROPERTIES:
-:CUSTOM_ID: indent-component
-:END:
+
 The =indent= component establishes a left margin for all descendants:
 
 #+begin_src elisp
@@ -1735,9 +1573,7 @@ Usage:
 #+end_src
 
 *** Fragment (No Layout)
-:PROPERTIES:
-:CUSTOM_ID: fragment-no-layout
-:END:
+
 Simply concatenates children:
 
 #+begin_src elisp
@@ -1748,9 +1584,7 @@ Simply concatenates children:
 #+end_src
 
 *** Horizontal Stack (h-stack)
-:PROPERTIES:
-:CUSTOM_ID: horizontal-stack-h-stack
-:END:
+
 Places children horizontally with optional spacing:
 
 #+begin_src elisp
@@ -1809,9 +1643,7 @@ Rendering h-stack:
 #+end_src
 
 *** Vertical Stack (v-stack)
-:PROPERTIES:
-:CUSTOM_ID: vertical-stack-v-stack
-:END:
+
 Places children vertically:
 
 #+begin_src elisp
@@ -1871,9 +1703,7 @@ Rendering v-stack:
 #+end_src
 
 *** Box (Fixed-Width Container)
-:PROPERTIES:
-:CUSTOM_ID: box-fixed-width-container
-:END:
+
 A container with fixed width, supporting alignment:
 
 #+begin_src elisp
@@ -1919,15 +1749,11 @@ Usage: (vui-box :width 20 :align :center child)"
 #+end_src
 
 ** Table Layout
-:PROPERTIES:
-:CUSTOM_ID: table-layout
-:END:
+
 Tables are common in Emacs UIs (think =tabulated-list-mode=).
 
 *** Column Specification
-:PROPERTIES:
-:CUSTOM_ID: column-specification
-:END:
+
 Each column can specify:
 
 | Property     | Values                       | Description                               |
@@ -1939,18 +1765,16 @@ Each column can specify:
 | =:align=     | =:left=, =:center=, =:right= | Text alignment                            |
 | =:header=    | String                       | Header text                               |
 
-*Layout behaviour*: - If only =:width= specified: fixed width, truncate
-overflow - If =:min-width= specified: auto-size to content, but at least
-this wide - If =:max-width= specified: auto-size but truncate beyond
-this - If both =:min-width= and =:max-width=: auto-size within range
+*Layout behaviour*:
 
-*Re-measurement*: By default, tables re-measure all cell widths on every
-render. This ensures the layout adapts when content changes (e.g., a
-score updates from "4.1" to "4.12", or a name gets longer).
+- If only =:width= specified: fixed width, truncate overflow
+- If =:min-width= specified: auto-size to content, but at least this wide
+- If =:max-width= specified: auto-size but truncate beyond this
+- If both =:min-width= and =:max-width=: auto-size within range
 
-*Static optimisation*: For tables with fixed content, =:static t= skips
-re-measurement and reuses cached column widths. Use when you know
-content won't change size.
+*Re-measurement*: By default, tables re-measure all cell widths on every render. This ensures the layout adapts when content changes (e.g., a score updates from "4.1" to "4.12", or a name gets longer).
+
+*Static optimisation*: For tables with fixed content, =:static t= skips re-measurement and reuses cached column widths. Use when you know content won't change size.
 
 #+begin_src elisp
 (cl-defstruct (vui-vnode-table (:include vui-vnode)
@@ -2138,9 +1962,7 @@ Returns the final column width."
 #+end_src
 
 ** List Layout
-:PROPERTIES:
-:CUSTOM_ID: list-layout
-:END:
+
 For rendering lists with bullets or numbers:
 
 #+begin_src elisp
@@ -2183,9 +2005,7 @@ Usage:
 #+end_src
 
 ** Conditional Layout
-:PROPERTIES:
-:CUSTOM_ID: conditional-layout
-:END:
+
 For responsive layouts based on buffer/window width:
 
 #+begin_src elisp
@@ -2218,9 +2038,7 @@ Usage:
 #+end_src
 
 ** Spacing and Alignment Utilities
-:PROPERTIES:
-:CUSTOM_ID: spacing-and-alignment-utilities
-:END:
+
 #+begin_src elisp
 (defun vui-pad (padding child)
   "Add PADDING around CHILD.
@@ -2250,22 +2068,16 @@ ALIGNMENT is :left, :center, or :right."
 #+end_src
 
 ** Layout Edge Cases and Constraints
-:PROPERTIES:
-:CUSTOM_ID: layout-edge-cases-and-constraints
-:END:
+
 *** Multi-line Content in Horizontal Layouts
-:PROPERTIES:
-:CUSTOM_ID: multi-line-content-in-horizontal-layouts
-:END:
-When a child in =h-stack= contains newlines, the layout breaks. We have
-options:
+
+When a child in =h-stack= contains newlines, the layout breaks. We have options:
 
 1. *Forbid*: Throw error if child contains newlines (simplest)
 2. *Flatten*: Replace newlines with spaces
 3. *Complex layout*: Track columns and align subsequent lines (complex)
 
-*Decision*: For MVP, we forbid newlines in h-stack children. Use v-stack
-for multi-line content.
+*Decision*: For MVP, we forbid newlines in h-stack children. Use v-stack for multi-line content.
 
 #+begin_src elisp
 (defun vui--validate-hstack-child (vnode)
@@ -2276,20 +2088,16 @@ for multi-line content.
 #+end_src
 
 *** Text Wrapping
-:PROPERTIES:
-:CUSTOM_ID: text-wrapping
-:END:
-vui.el does *not* handle text wrapping. Content that exceeds window
-width will either: - Extend beyond visible area (if =truncate-lines= is
-t) - Wrap at window edge (if =truncate-lines= is nil)
 
-For controlled wrapping, use =fill-region= on content before passing to
-components, or implement a =vui-wrapped-text= component that pre-wraps.
+vui.el does *not* handle text wrapping. Content that exceeds window width will either:
+
+- Extend beyond visible area (if =truncate-lines= is t)
+- Wrap at window edge (if =truncate-lines= is nil)
+
+For controlled wrapping, use =fill-region= on content before passing to components, or implement a =vui-wrapped-text= component that pre-wraps.
 
 *** Read-Only Regions
-:PROPERTIES:
-:CUSTOM_ID: read-only-regions
-:END:
+
 Text that shouldn't be edited needs protection:
 
 #+begin_src elisp
@@ -2311,17 +2119,11 @@ Text that shouldn't be edited needs protection:
 
 Fields explicitly remove read-only in their region.
 
-
 * Focus and Navigation
-:PROPERTIES:
-:CUSTOM_ID: focus-and-navigation
-:END:
+
 ** Keyboard Navigation
-:PROPERTIES:
-:CUSTOM_ID: keyboard-navigation
-:END:
-Users expect TAB/S-TAB to move between interactive elements (fields,
-buttons):
+
+Users expect TAB/S-TAB to move between interactive elements (fields, buttons):
 
 #+begin_src elisp
 (defvar vui-mode-map
@@ -2366,9 +2168,7 @@ buttons):
 #+end_src
 
 ** Focus Tracking
-:PROPERTIES:
-:CUSTOM_ID: focus-tracking
-:END:
+
 #+begin_src elisp
 (defvar-local vui--focused-instance nil
   "Currently focused instance, if any.")
@@ -2385,9 +2185,7 @@ buttons):
 
 
 ** Undo Integration
-:PROPERTIES:
-:CUSTOM_ID: undo-integration
-:END:
+
 Buffer changes should integrate with Emacs undo:
 
 #+begin_src elisp
@@ -2406,24 +2204,17 @@ Buffer changes should integrate with Emacs undo:
     (undo-boundary)))
 #+end_src
 
-*Limitation*: Undo will restore buffer text but not component state.
-After undo, the UI may be inconsistent. Options:
+*Limitation*: Undo will restore buffer text but not component state. After undo, the UI may be inconsistent. Options:
 
 1. *Disable undo* in UI buffers (=buffer-undo-list= = t)
-2. *State snapshots*: Store state before changes, restore on undo
-   (complex)
+2. *State snapshots*: Store state before changes, restore on undo (complex)
 3. *Accept inconsistency*: Document that undo may break UI (pragmatic)
 
-For MVP, we disable undo in UI buffers and provide explicit undo-like
-actions (e.g., "Undo last change" button).
-
+For MVP, we disable undo in UI buffers and provide explicit undo-like actions (e.g., "Undo last change" button).
 
 ** Buffer Narrowing
-:PROPERTIES:
-:CUSTOM_ID: buffer-narrowing
-:END:
-Our markers should work correctly with narrowing, but rendering assumes
-full buffer access:
+
+Our markers should work correctly with narrowing, but rendering assumes full buffer access:
 
 #+begin_src elisp
 (defun vui-render (vnode &optional buffer position)
@@ -2436,16 +2227,12 @@ full buffer access:
 
 
 ** Multiple Roots Interaction
-:PROPERTIES:
-:CUSTOM_ID: multiple-roots-interaction
-:END:
+
 When multiple independent UI trees exist in one buffer:
 
-1. *Non-overlapping regions*: Each root has exclusive markers; they
-   shouldn't overlap
+1. *Non-overlapping regions*: Each root has exclusive markers; they shouldn't overlap
 2. *Independent updates*: Re-rendering one root doesn't affect others
-3. *Potential issue*: Inserting text in one tree shifts positions of
-   later trees
+3. *Potential issue*: Inserting text in one tree shifts positions of later trees
 
 #+begin_src elisp
 (defun vui--validate-non-overlapping (new-root buffer)
@@ -2500,13 +2287,9 @@ When multiple independent UI trees exist in one buffer:
 
 
 * State Management
-:PROPERTIES:
-:CUSTOM_ID: state-management
-:END:
+
 ** State Model Overview
-:PROPERTIES:
-:CUSTOM_ID: state-model-overview
-:END:
+
 State in this system follows React's model:
 
 1. *Local state*: Owned by a component, triggers re-render when changed
@@ -2536,11 +2319,8 @@ State in this system follows React's model:
 #+end_example
 
 ** Local State Implementation
-:PROPERTIES:
-:CUSTOM_ID: local-state-implementation
-:END:
-Each component instance has a state slot. Changes to state mark the
-instance dirty and schedule a re-render.
+
+Each component instance has a state slot. Changes to state mark the instance dirty and schedule a re-render.
 
 #+begin_src elisp
 (defvar vui--current-instance nil
@@ -2571,9 +2351,7 @@ instance dirty and schedule a re-render.
 #+end_src
 
 ** The =let-state= Macro
-:PROPERTIES:
-:CUSTOM_ID: the-let-state-macro
-:END:
+
 Provides convenient syntax for declaring and using state:
 
 #+begin_src elisp
@@ -2649,11 +2427,8 @@ Example:
 #+end_src
 
 ** Derived State (Computed Values)
-:PROPERTIES:
-:CUSTOM_ID: derived-state-computed-values
-:END:
-Sometimes state is derived from props or other state. We provide a
-memoisation helper:
+
+Sometimes state is derived from props or other state. We provide a memoisation helper:
 
 #+begin_src elisp
 (defmacro let-memo (bindings &rest body)
@@ -2705,9 +2480,7 @@ Example:
 #+end_src
 
 ** Effects (Side Effects on State Change)
-:PROPERTIES:
-:CUSTOM_ID: effects-side-effects-on-state-change
-:END:
+
 Effects run after render when dependencies change:
 
 #+begin_src elisp
@@ -2775,9 +2548,7 @@ Example:
 #+end_src
 
 ** Refs (Mutable References Without Re-render)
-:PROPERTIES:
-:CUSTOM_ID: refs-mutable-references-without-re-render
-:END:
+
 Sometimes you need mutable state that doesn't trigger re-render:
 
 #+begin_src elisp
@@ -2813,9 +2584,7 @@ Example:
 #+end_src
 
 ** Callbacks (Stable Function References)
-:PROPERTIES:
-:CUSTOM_ID: callbacks-stable-function-references
-:END:
+
 To avoid re-renders when passing callbacks, we stabilise them:
 
 #+begin_src elisp
@@ -2852,9 +2621,7 @@ Example:
 #+end_src
 
 ** State Update Batching
-:PROPERTIES:
-:CUSTOM_ID: state-update-batching
-:END:
+
 Multiple state changes should be batched into a single re-render:
 
 #+begin_src elisp
@@ -2900,9 +2667,7 @@ Multiple state changes should be batched into a single re-render:
 #+end_src
 
 ** Reducer Pattern (Complex State Logic)
-:PROPERTIES:
-:CUSTOM_ID: reducer-pattern-complex-state-logic
-:END:
+
 For complex state transitions, a reducer pattern can help:
 
 #+begin_src elisp
@@ -2953,8 +2718,7 @@ Example:
                                   (equal (plist-get todo :id) id))
                                 (plist-get state :todos)))))
     (_ state)))
-
----
+#+end_src
 
 * Context System
 
@@ -2963,18 +2727,16 @@ Example:
 Context solves the "prop drilling" problem — passing data through many layers of components that don't need it, just to reach a deeply nested component.
 
 Without context:
-#+end_src
-
-App (theme) -> Layout (theme) -> Sidebar (theme) -> Button (uses theme)
 
 #+begin_example
-
-With context:
+App (theme) -> Layout (theme) -> Sidebar (theme) -> Button (uses theme)
 #+end_example
 
-App (provides theme) -> ... -> Button (consumes theme directly)
+With context:
 
 #+begin_example
+App (provides theme) -> ... -> Button (consumes theme directly)
+#+end_example
 
 ** Creating a Context
 
@@ -3016,12 +2778,10 @@ Example:
        (defun ,consumer-fn ()
          ,(format "Get current %s context value." name)
          (vui--consume-context ,context-var)))))
-#+end_example
+#+end_src
 
 ** Context Data Structures
-:PROPERTIES:
-:CUSTOM_ID: context-data-structures
-:END:
+
 #+begin_src elisp
 (cl-defstruct (vui-context (:constructor vui-context--create))
   "A context definition."
@@ -3043,9 +2803,7 @@ Example:
 #+end_src
 
 ** Context Resolution
-:PROPERTIES:
-:CUSTOM_ID: context-resolution
-:END:
+
 During render, we maintain a stack of context bindings:
 
 #+begin_src elisp
@@ -3075,9 +2833,7 @@ Returns default-value if no provider found."
 #+end_src
 
 ** Rendering Providers
-:PROPERTIES:
-:CUSTOM_ID: rendering-providers
-:END:
+
 #+begin_src elisp
 (defun vui--render-provider (vnode)
   "Render a context provider vnode."
@@ -3092,9 +2848,7 @@ Returns default-value if no provider found."
 #+end_src
 
 ** Context Change Detection
-:PROPERTIES:
-:CUSTOM_ID: context-change-detection
-:END:
+
 When a context value changes, all consumers need to re-render:
 
 #+begin_src elisp
@@ -3120,9 +2874,7 @@ When a context value changes, all consumers need to re-render:
 #+end_src
 
 ** Optimising Context Updates
-:PROPERTIES:
-:CUSTOM_ID: optimising-context-updates
-:END:
+
 To avoid re-rendering the entire subtree when context changes:
 
 #+begin_src elisp
@@ -3147,9 +2899,7 @@ To avoid re-rendering the entire subtree when context changes:
 #+end_src
 
 ** Multiple Contexts
-:PROPERTIES:
-:CUSTOM_ID: multiple-contexts
-:END:
+
 Components can consume multiple contexts:
 
 #+begin_src elisp
@@ -3168,9 +2918,7 @@ Components can consume multiple contexts:
 #+end_src
 
 ** Context Composition Pattern
-:PROPERTIES:
-:CUSTOM_ID: context-composition-pattern
-:END:
+
 For many contexts, a composition helper:
 
 #+begin_src elisp
@@ -3197,9 +2945,7 @@ Example:
 #+end_src
 
 ** Example: Theme Context
-:PROPERTIES:
-:CUSTOM_ID: example-theme-context
-:END:
+
 #+begin_src elisp
 ;; Define theme context
 (defcontext theme 'light "Current color theme.")
@@ -3250,25 +2996,23 @@ Example:
 #+end_src
 
 ** Context vs Props Guidelines
-:PROPERTIES:
-:CUSTOM_ID: context-vs-props-guidelines
-:END:
-Use *props* when: - Data is needed by immediate children - Explicit data
-flow is clearer - Component reusability is important
 
-Use *context* when: - Data is needed by many components at different
-levels - Data changes infrequently (theme, locale, auth) - Prop drilling
-would be excessive (>3 levels)
+Use *props* when:
 
+- Data is needed by immediate children
+- Explicit data flow is clearer
+- Component reusability is important
+
+Use *context* when:
+
+- Data is needed by many components at different levels
+- Data changes infrequently (theme, locale, auth)
+- Prop drilling would be excessive (>3 levels)
 
 * Lifecycle Hooks
-:PROPERTIES:
-:CUSTOM_ID: lifecycle-hooks
-:END:
+
 ** Lifecycle Overview
-:PROPERTIES:
-:CUSTOM_ID: lifecycle-overview
-:END:
+
 Components go through distinct phases:
 
 #+begin_example
@@ -3305,9 +3049,7 @@ Components go through distinct phases:
 #+end_example
 
 ** Hook Definitions in defcomponent
-:PROPERTIES:
-:CUSTOM_ID: hook-definitions-in-defcomponent
-:END:
+
 #+begin_src elisp
 (defcomponent my-component
   :props ((id :required t))
@@ -3339,9 +3081,7 @@ Components go through distinct phases:
 #+end_src
 
 ** Hook Execution
-:PROPERTIES:
-:CUSTOM_ID: hook-execution
-:END:
+
 #+begin_src elisp
 (defun vui--run-mount-hooks (instance)
   "Run mount hooks for INSTANCE and its descendants."
@@ -3394,9 +3134,7 @@ Components go through distinct phases:
 #+end_src
 
 ** Effect Lifecycle
-:PROPERTIES:
-:CUSTOM_ID: effect-lifecycle
-:END:
+
 Effects have their own lifecycle interleaved with component lifecycle:
 
 #+begin_src elisp
@@ -3437,9 +3175,7 @@ Effects have their own lifecycle interleaved with component lifecycle:
 #+end_src
 
 ** Timing Guarantees
-:PROPERTIES:
-:CUSTOM_ID: timing-guarantees
-:END:
+
 vui.el provides these timing guarantees:
 
 1. *on-mount* is called after the component is visible in the buffer
@@ -3448,15 +3184,10 @@ vui.el provides these timing guarantees:
 4. *Effect cleanups* run before their corresponding effects
 5. *Parent hooks* run after all children (mount) or before (unmount)
 
-
 * Scheduler and Batching
-:PROPERTIES:
-:CUSTOM_ID: scheduler-and-batching
-:END:
+
 ** The Problem
-:PROPERTIES:
-:CUSTOM_ID: the-problem-1
-:END:
+
 Without batching, each state change would trigger a full re-render:
 
 #+begin_src elisp
@@ -3478,9 +3209,7 @@ With batching:
 #+end_src
 
 ** Scheduler Structure
-:PROPERTIES:
-:CUSTOM_ID: scheduler-structure
-:END:
+
 #+begin_src elisp
 (cl-defstruct (vui-scheduler (:constructor vui-scheduler--create))
   "Manages the render queue and update batching."
@@ -3522,9 +3251,7 @@ With batching:
 #+end_src
 
 ** Marking Dirty
-:PROPERTIES:
-:CUSTOM_ID: marking-dirty
-:END:
+
 #+begin_src elisp
 (defun vui--mark-dirty (instance)
   "Mark INSTANCE as needing re-render."
@@ -3551,9 +3278,7 @@ With batching:
 #+end_src
 
 ** Scheduling Renders
-:PROPERTIES:
-:CUSTOM_ID: scheduling-renders
-:END:
+
 #+begin_src elisp
 (defun vui--schedule-render ()
   "Schedule a render cycle, batching rapid changes."
@@ -3633,9 +3358,7 @@ With batching:
 #+end_src
 
 ** Batching API
-:PROPERTIES:
-:CUSTOM_ID: batching-api
-:END:
+
 #+begin_src elisp
 (defmacro vui-batch (&rest body)
   "Batch all state updates in BODY into a single render.
@@ -3669,9 +3392,7 @@ Example:
 #+end_src
 
 ** Immediate vs Deferred Rendering
-:PROPERTIES:
-:CUSTOM_ID: immediate-vs-deferred-rendering
-:END:
+
 Sometimes you need immediate rendering (e.g., for testing):
 
 #+begin_src elisp
@@ -3698,9 +3419,7 @@ immediate visual feedback."
 #+end_src
 
 ** Priority Scheduling (Advanced)
-:PROPERTIES:
-:CUSTOM_ID: priority-scheduling-advanced
-:END:
+
 For complex UIs, different updates can have different priorities:
 
 #+begin_src elisp
@@ -3737,9 +3456,7 @@ For complex UIs, different updates can have different priorities:
 #+end_src
 
 ** Render Metrics
-:PROPERTIES:
-:CUSTOM_ID: render-metrics
-:END:
+
 #+begin_src elisp
 (defun vui-render-metrics ()
   "Return metrics about rendering performance."
@@ -3759,14 +3476,14 @@ For complex UIs, different updates can have different priorities:
                            (* 1000 (vui-scheduler-last-render-time
                                     (vui--get-scheduler))))
                   result))))
-
----
+#+end_src
 
 * Buffer Renderer
 
 ** Overview
 
 The buffer renderer is responsible for:
+
 1. Translating vnodes into buffer content
 2. Applying diff operations to the buffer
 3. Managing overlays and text properties
@@ -3849,9 +3566,7 @@ Returns the root instance."
 #+end_src
 
 ** Rendering Primitives
-:PROPERTIES:
-:CUSTOM_ID: rendering-primitives
-:END:
+
 #+begin_src elisp
 (defun vui--render-text (vnode parent-instance)
   "Render a text vnode."
@@ -3948,9 +3663,7 @@ and consistent keyboard handling across all interactive elements."
 #+end_src
 
 ** Applying Diff Operations
-:PROPERTIES:
-:CUSTOM_ID: applying-diff-operations
-:END:
+
 #+begin_src elisp
 (defun vui--commit-operations (operations root-instance)
   "Apply OPERATIONS to buffer."
@@ -4064,9 +3777,7 @@ and consistent keyboard handling across all interactive elements."
 #+end_src
 
 ** Instance <-> Buffer Mapping
-:PROPERTIES:
-:CUSTOM_ID: instance-buffer-mapping
-:END:
+
 #+begin_src elisp
 (defun vui--instance-at-point (&optional pos)
   "Find the leaf instance at POS (default: point)."
@@ -4107,9 +3818,7 @@ and consistent keyboard handling across all interactive elements."
 #+end_src
 
 ** Overlay Management
-:PROPERTIES:
-:CUSTOM_ID: overlay-management
-:END:
+
 #+begin_src elisp
 (defun vui--clean-instance-overlays (instance)
   "Remove all overlays belonging to INSTANCE."
@@ -4132,9 +3841,7 @@ and consistent keyboard handling across all interactive elements."
 #+end_src
 
 ** Buffer Teardown
-:PROPERTIES:
-:CUSTOM_ID: buffer-teardown
-:END:
+
 #+begin_src elisp
 (defun vui-unmount (instance)
   "Unmount INSTANCE and remove from buffer."
@@ -4162,8 +3869,7 @@ and consistent keyboard handling across all interactive elements."
   (let ((buffer (or buffer (current-buffer))))
     (dolist (root (vui--buffer-roots buffer))
       (vui-unmount root))))
-
----
+#+end_src
 
 * Error Handling
 
@@ -4176,12 +3882,7 @@ Errors can occur at different phases:
 3. **Effect errors**: Exception in effect or cleanup function
 4. **Event handler errors**: Exception in on-click/on-change callbacks
 
-*Implementation Note*: The pseudocode below shows errors stored in
-instance slots (=vui-instance-error=). The actual implementation uses a
-global hash table =vui--error-boundary-errors= keyed by boundary ID for
-simpler state management. This avoids adding an =error= slot to every
-instance. Recovery is done via =vui-reset-error-boundary= which takes a
-boundary ID.
+*Implementation Note*: The pseudocode below shows errors stored in instance slots (=vui-instance-error=). The actual implementation uses a global hash table =vui--error-boundary-errors= keyed by boundary ID for simpler state management. This avoids adding an =error= slot to every instance. Recovery is done via =vui-reset-error-boundary= which takes a boundary ID.
 
 ** Error Boundary Pattern
 
@@ -4226,9 +3927,7 @@ Usage:
 #+end_src
 
 ** Error Boundary Implementation
-:PROPERTIES:
-:CUSTOM_ID: error-boundary-implementation
-:END:
+
 #+begin_src elisp
 (defun vui--render-error-boundary (vnode parent-instance)
   "Render an error boundary."
@@ -4271,9 +3970,7 @@ Usage:
 #+end_src
 
 ** Catching Lifecycle Errors
-:PROPERTIES:
-:CUSTOM_ID: catching-lifecycle-errors
-:END:
+
 #+begin_src elisp
 (defun vui--handle-lifecycle-error (instance phase error)
   "Handle error in lifecycle hook."
@@ -4309,9 +4006,7 @@ Usage:
 #+end_src
 
 ** Catching Effect Errors
-:PROPERTIES:
-:CUSTOM_ID: catching-effect-errors
-:END:
+
 #+begin_src elisp
 (defun vui--handle-effect-error (instance effect-id phase error)
   "Handle error in effect."
@@ -4333,9 +4028,7 @@ Usage:
 #+end_src
 
 ** Event Handler Error Handling
-:PROPERTIES:
-:CUSTOM_ID: event-handler-error-handling
-:END:
+
 Event handlers run outside the render cycle, so we wrap them:
 
 #+begin_src elisp
@@ -4366,9 +4059,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 ** Development Mode Helpers
-:PROPERTIES:
-:CUSTOM_ID: development-mode-helpers
-:END:
+
 #+begin_src elisp
 (defvar vui-debug-mode nil
   "When non-nil, enable verbose error reporting.")
@@ -4391,9 +4082,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 ** Recovery Strategies
-:PROPERTIES:
-:CUSTOM_ID: recovery-strategies
-:END:
+
 #+begin_src elisp
 (defun vui-reset-component (instance)
   "Reset INSTANCE to initial state, clearing errors."
@@ -4418,8 +4107,7 @@ Signature: (lambda (error instance phase) ...)")
   (vui--walk-instance-tree
    root-instance
    #'vui-reset-component))
-
----
+#+end_src
 
 * API Reference
 
@@ -4436,15 +4124,12 @@ Signature: (lambda (error instance phase) ...)")
   :render RENDER-BODY)
 #+end_src
 
-*PROPS-SPEC*: List of
-=(NAME :type TYPE :default DEFAULT :required BOOL)=
+*PROPS-SPEC*: List of =(NAME :type TYPE :default DEFAULT :required BOOL)=
 
 *STATE-SPEC*: List of =(NAME INITIAL-VALUE)=
 
 ** Primitive VNodes
-:PROPERTIES:
-:CUSTOM_ID: primitive-vnodes
-:END:
+
 | Function                         | Description           | Key Props                                  |
 |----------------------------------+-----------------------+--------------------------------------------|
 | =(vui-text CONTENT &rest PROPS)= | Plain text            | =:face=, =:properties=                     |
@@ -4455,9 +4140,7 @@ Signature: (lambda (error instance phase) ...)")
 | =(vui-fragment &rest CHILDREN)=  | Group without wrapper |                                            |
 
 ** Layout VNodes
-:PROPERTIES:
-:CUSTOM_ID: layout-vnodes
-:END:
+
 | Function                  | Description            | Key Props                      |
 |---------------------------+------------------------+--------------------------------|
 | =(vui-hstack &rest ARGS)= | Horizontal layout      | =:spacing=, =:align=           |
@@ -4467,9 +4150,7 @@ Signature: (lambda (error instance phase) ...)")
 | =(vui-list &rest ARGS)=   | Bulleted/numbered list | =:marker=, =:indent=           |
 
 ** State Hooks
-:PROPERTIES:
-:CUSTOM_ID: state-hooks
-:END:
+
 #+begin_src elisp
 ;; Declare state with setf support
 (let-state ((NAME INITIAL) ...)
@@ -4496,9 +4177,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 ** Context
-:PROPERTIES:
-:CUSTOM_ID: context-1
-:END:
+
 #+begin_src elisp
 ;; Define context
 (defcontext NAME DEFAULT-VALUE DOCSTRING)
@@ -4511,9 +4190,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 ** Rendering
-:PROPERTIES:
-:CUSTOM_ID: rendering
-:END:
+
 #+begin_src elisp
 ;; Mount tree into a named buffer (common entry point)
 (vui-mount VNODE BUFFER-OR-NAME) -> INSTANCE
@@ -4533,9 +4210,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 * Error Handling
-:PROPERTIES:
-:CUSTOM_ID: error-handling
-:END:
+
 #+begin_src elisp
 ;; Error boundary
 (vui-error-boundary
@@ -4549,9 +4224,7 @@ Signature: (lambda (error instance phase) ...)")
 #+end_src
 
 ** Utilities
-:PROPERTIES:
-:CUSTOM_ID: utilities
-:END:
+
 #+begin_src elisp
 ;; Find instance at point
 (vui--instance-at-point &optional POS)
@@ -4565,135 +4238,154 @@ Signature: (lambda (error instance phase) ...)")
 
 
 * Implementation Roadmap
-:PROPERTIES:
-:CUSTOM_ID: implementation-roadmap
-:END:
+
 ** Phase 1: Core Foundation (MVP) ✓
-:PROPERTIES:
-:CUSTOM_ID: phase-1-core-foundation-mvp
-:END:
+
 *Goal*: Render static component trees with basic interactivity
 
-*1.1 Data Structures* - [X] Define all cl-defstructs (vnode types,
-instance, context, scheduler) - [X] Component registry (hash-table
-mapping name -> definition) - [X] Basic =defcomponent= macro (props and
-state)
+*1.1 Data Structures*
 
-*1.2 Initial Rendering* - [X] Render primitives: text, button, newline,
-space - [X] Fragment support - [X] Marker-based region tracking
-(start/end per instance) - [X] Overlay creation for buttons - [X]
-Read-only text protection
+- [X] Define all cl-defstructs (vnode types, instance, context, scheduler)
+- [X] Component registry (hash-table mapping name -> definition)
+- [X] Basic =defcomponent= macro (props and state)
 
-*1.3 Basic Interactivity* - [X] Button click handling via widget.el - [X]
-Field editing with on-change callback - [X] Checkbox and select widgets - [X]
-TAB/S-TAB navigation between interactive elements (via widget.el)
+*1.2 Initial Rendering*
 
-*1.4 Simple State* - [X] =:state= in defcomponent - [X] =vui-set-state= for
-state mutation triggering re-render - [X] Full tree re-render
+- [X] Render primitives: text, button, newline, space
+- [X] Fragment support
+- [X] Marker-based region tracking (start/end per instance)
+- [X] Overlay creation for buttons
+- [X] Read-only text protection
 
-*Deliverable*: Can render a static form with buttons and fields that
-respond to user input.
+*1.3 Basic Interactivity*
 
+- [X] Button click handling via widget.el
+- [X] Field editing with on-change callback
+- [X] Checkbox and select widgets
+- [X] TAB/S-TAB navigation between interactive elements (via widget.el)
+
+*1.4 Simple State*
+
+- [X] =:state= in defcomponent
+- [X] =vui-set-state= for state mutation triggering re-render
+- [X] Full tree re-render
+
+*Deliverable*: Can render a static form with buttons and fields that respond to user input.
 
 ** Phase 2: Reconciliation ✓
-:PROPERTIES:
-:CUSTOM_ID: phase-2-reconciliation
-:END:
+
 *Goal*: Efficient updates via diffing
 
-*2.1 Virtual Tree Diffing* - [X] Implement =vui--reconcile-component= - [X]
-Type comparison logic - [X] Key-based child matching - [X] Index-based
-fallback matching
+*2.1 Virtual Tree Diffing*
 
-*2.2 Commit Phase* - [X] Clear and re-render approach with widget reuse -
-[X] Unmount callbacks for removed children - [X] Efficient widget.el
-integration
+- [X] Implement =vui--reconcile-component=
+- [X] Type comparison logic
+- [X] Key-based child matching
+- [X] Index-based fallback matching
 
-*2.3 Cursor Preservation* - [X] Widget index tracking before mutations -
-[X] Restore cursor to same widget index after render - [X] Fallback to
-buffer start if widget removed
+*2.2 Commit Phase*
 
-*Deliverable*: Can add/remove items from a list without full re-render;
-cursor stays in place.
+- [X] Clear and re-render approach with widget reuse
+- [X] Unmount callbacks for removed children
+- [X] Efficient widget.el integration
 
+*2.3 Cursor Preservation*
+
+- [X] Widget index tracking before mutations
+- [X] Restore cursor to same widget index after render
+- [X] Fallback to buffer start if widget removed
+
+*Deliverable*: Can add/remove items from a list without full re-render; cursor stays in place.
 
 ** Phase 3: Advanced State ✓
-:PROPERTIES:
-:CUSTOM_ID: phase-3-advanced-state
-:END:
+
 *Goal*: Full state management capabilities
 
-*3.1 Effects System* - [X] =use-effect= implementation - [X] Dependency
-array tracking - [X] Cleanup function support - [X] Effect execution
-after commit
+*3.1 Effects System*
 
-*3.2 Additional Hooks* - [X] =use-ref= (mutable reference without
-re-render) - [X] =use-callback= (memoised callbacks) - [X] =use-memo=
-(memoised computed values) - [X] =use-callback*= and =use-memo*= with
-custom comparison modes
+- [X] =use-effect= implementation
+- [X] Dependency array tracking
+- [X] Cleanup function support
+- [X] Effect execution after commit
 
-*3.3 Context System* - [X] =defcontext= macro - [X] Provider vnode and
-rendering - [X] Context consumption via auto-generated =use-NAME= - [X]
-Context change propagation to consumers
+*3.2 Additional Hooks*
 
-*Deliverable*: Can build components with side effects, shared state, and
-deep data passing.
+- [X] =use-ref= (mutable reference without re-render)
+- [X] =use-callback= (memoised callbacks)
+- [X] =use-memo= (memoised computed values)
+- [X] =use-callback*= and =use-memo*= with custom comparison modes
 
+*3.3 Context System*
+
+- [X] =defcontext= macro
+- [X] Provider vnode and rendering
+- [X] Context consumption via auto-generated =use-NAME=
+- [X] Context change propagation to consumers
+
+*Deliverable*: Can build components with side effects, shared state, and deep data passing.
 
 ** Phase 4: Layout & Polish ✓
-:PROPERTIES:
-:CUSTOM_ID: phase-4-layout-polish
-:END:
+
 *Goal*: Production-ready features
 
-*4.1 Layout Primitives* - [X] =vui-hstack= with spacing - [X] =vui-vstack=
-with spacing and indent - [X] =vui-box= with fixed width and alignment -
-[X] =vui-table= with headers, borders (ascii/unicode), column alignment -
-[X] =vui-list= for dynamic list rendering with key function
+*4.1 Layout Primitives*
 
-*4.2 Lifecycle Hooks* - [X] =on-mount= (after first render) - [X]
-=on-update= (after re-render, with prev props/state) - [X] =on-unmount=
-(before removal) - [X] Proper hook ordering (children first for unmount)
+- [X] =vui-hstack= with spacing
+- [X] =vui-vstack= with spacing and indent
+- [X] =vui-box= with fixed width and alignment
+- [X] =vui-table= with headers, borders (ascii/unicode), column alignment
+- [X] =vui-list= for dynamic list rendering with key function
 
-*4.3 Error Handling* - [X] =vui-error-boundary= component - [X] Lifecycle
-error catching with configurable handlers - [X] Event handler error
-wrapping - [X] =vui-reset-error-boundary= for recovery
+*4.2 Lifecycle Hooks*
 
-*4.4 Scheduler Improvements* - [X] =vui-batch= for grouping state
-updates - [X] Idle-time rendering via =vui-idle-render-delay= - [X]
-=vui-flush-sync= for immediate updates
+- [X] =on-mount= (after first render)
+- [X] =on-update= (after re-render, with prev props/state)
+- [X] =on-unmount= (before removal)
+- [X] Proper hook ordering (children first for unmount)
 
-*Deliverable*: Full-featured UI library with layouts, error handling,
-and optimised updates.
+*4.3 Error Handling*
 
+- [X] =vui-error-boundary= component
+- [X] Lifecycle error catching with configurable handlers
+- [X] Event handler error wrapping
+- [X] =vui-reset-error-boundary= for recovery
+
+*4.4 Scheduler Improvements*
+
+- [X] =vui-batch= for grouping state updates
+- [X] Idle-time rendering via =vui-idle-render-delay=
+- [X] =vui-flush-sync= for immediate updates
+
+*Deliverable*: Full-featured UI library with layouts, error handling, and optimised updates.
 
 ** Phase 5: Optimisation & Tooling ✓
-:PROPERTIES:
-:CUSTOM_ID: phase-5-optimisation-tooling
-:END:
+
 *Goal*: Performance and developer experience
 
-*5.1 Performance* - [X] =should-update= optimisation (skip re-render if
-no changes) - [X] Memo comparison modes (eq, equal, custom) - [X] Render
-timing instrumentation (=vui-timing-enabled=, =vui-report-timing=)
+*5.1 Performance*
 
-*5.2 Developer Tools* - [X] Component inspector (=vui-inspect=) -
-[X] State viewer (=vui-inspect-state=) - [X] Render cycle
-debugging/logging (=vui-debug-enabled=, =vui-debug-show=)
+- [X] =should-update= optimisation (skip re-render if no changes)
+- [X] Memo comparison modes (eq, equal, custom)
+- [X] Render timing instrumentation (=vui-timing-enabled=, =vui-report-timing=)
 
-*5.3 Documentation & Examples* - [X] API documentation with docstrings -
-[X] User guide (=docs/guide/=) - [X] Tutorial: building a todo app
-(=docs/examples/02-todo-app.el=) - [X] Example: file browser
-(=docs/examples/04-file-browser.el=) - [X] Example: form with validation
-(=docs/examples/03-forms.el=)
+*5.2 Developer Tools*
+
+- [X] Component inspector (=vui-inspect=)
+- [X] State viewer (=vui-inspect-state=)
+- [X] Render cycle debugging/logging (=vui-debug-enabled=, =vui-debug-show=)
+
+*5.3 Documentation & Examples*
+
+- [X] API documentation with docstrings
+- [X] User guide (=docs/guide/=)
+- [X] Tutorial: building a todo app (=docs/examples/02-todo-app.el=)
+- [X] Example: file browser (=docs/examples/04-file-browser.el=)
+- [X] Example: form with validation (=docs/examples/03-forms.el=)
 
 *Deliverable*: Production-ready library with tooling and documentation.
 
-
 ** Milestones
-:PROPERTIES:
-:CUSTOM_ID: milestones
-:END:
+
 | Milestone              | Phase | Deliverable                                                  | Status |
 |------------------------+-------+--------------------------------------------------------------+--------|
 | *M1: Hello World*      |     1 | Static components with basic state and interaction           | ✓      |
@@ -4701,14 +4393,9 @@ debugging/logging (=vui-debug-enabled=, =vui-debug-show=)
 | *M3: Feature Complete* |     4 | All core features working                                    | ✓      |
 | *M4: Production Ready* |     5 | Optimised, documented, tested                                | ✓      |
 
-
 ** Implementation Status
-:PROPERTIES:
-:CUSTOM_ID: implementation-status
-:END:
 
-This section tracks what has been implemented versus what remains from
-the original design.
+This section tracks what has been implemented versus what remains from the original design.
 
 *** Achieved (matching design)
 
@@ -4744,8 +4431,7 @@ the original design.
 
 *** Not Implemented (deferred)
 
-These features are described in the design but not yet implemented.
-They may be added in future versions if needed.
+These features are described in the design but not yet implemented. They may be added in future versions if needed.
 
 | Feature               | Design Section      | Notes                          |
 |-----------------------+---------------------+--------------------------------|
@@ -4758,47 +4444,48 @@ They may be added in future versions if needed.
 | =vui-reset-tree=      | Recovery Strategies | Reset entire tree              |
 | Fine-grained diff ops | Diff Operations     | =vui-op-*= structs (see note)  |
 
-*Note on Reconciliation*: The design describes fine-grained diff
-operations (insert, delete, replace, move, update-props). The current
-implementation uses a simpler clear-and-rerender approach with widget
-preservation. This prioritises correctness and simplicity. Once the API
-is mature and well-tested, fine-grained diffing can be added as an
-optimisation if needed.
+*Note on Reconciliation*: The design describes fine-grained diff operations (insert, delete, replace, move, update-props). The current implementation uses a simpler clear-and-rerender approach with widget preservation. This prioritises correctness and simplicity. Once the API is mature and well-tested, fine-grained diffing can be added as an optimisation if needed.
 
 ** Testing Strategy
-:PROPERTIES:
-:CUSTOM_ID: testing-strategy
-:END:
-*Unit Tests* - Each data structure constructor - Macro expansions -
-Individual reconciliation operations
 
-*Integration Tests* - Multi-component render scenarios - State change ->
-re-render -> correct output - Cursor preservation across various
-mutations
+*Unit Tests*
 
-*Visual/Buffer Tests* - Render component -> verify buffer contents -
-Compare before/after for operations
+- Each data structure constructor
+- Macro expansions
+- Individual reconciliation operations
 
-*Property-Based Testing* (optional) - Random trees -> reconcile -> correct
-result - Random state changes -> consistent state
+*Integration Tests*
 
+- Multi-component render scenarios
+- State change -> re-render -> correct output
+- Cursor preservation across various mutations
+
+*Visual/Buffer Tests*
+
+- Render component -> verify buffer contents
+- Compare before/after for operations
+
+*Property-Based Testing* (optional)
+
+- Random trees -> reconcile -> correct result
+- Random state changes -> consistent state
 
 ** Dependencies
-:PROPERTIES:
-:CUSTOM_ID: dependencies
-:END:
-*Required (built-in)*: - =cl-lib= --- structures, loop, utilities -
-=subr-x= --- when-let, if-let, thread macros
 
-*Optional*: - =ert= --- for testing
+*Required (built-in)*:
+
+- =cl-lib=- structures, loop, utilities
+- =subr-x= - when-let, if-let, thread macros
+- =widget= - UI library
+
+*Optional*:
+
+- =ert= - for testing
 
 *No external packages required.*
 
-
 * Appendix A: Comparison with widget.el
-:PROPERTIES:
-:CUSTOM_ID: appendix-a-comparison-with-widget.el
-:END:
+
 | Aspect      | widget.el            | This Library             |
 |-------------+----------------------+--------------------------|
 | Model       | Imperative           | Declarative              |
@@ -4809,10 +4496,8 @@ result - Random state changes -> consistent state
 | Cursor      | Per-widget handling  | Automatic preservation   |
 
 ** Migration Path
-:PROPERTIES:
-:CUSTOM_ID: migration-path
-:END:
-Existing widget.el code can coexist. To wrap a widget:
+
+Existing =widget.el= code can coexist. To wrap a widget:
 
 #+begin_src elisp
 (defcomponent widget-wrapper
@@ -4827,13 +4512,9 @@ Existing widget.el code can coexist. To wrap a widget:
 
 
 * Appendix B: Example Applications
-:PROPERTIES:
-:CUSTOM_ID: appendix-b-example-applications
-:END:
+
 ** B.1 Todo Application
-:PROPERTIES:
-:CUSTOM_ID: b.1-todo-application
-:END:
+
 #+begin_src elisp
 (defcontext todos nil)
 
@@ -4899,9 +4580,7 @@ Existing widget.el code can coexist. To wrap a widget:
 #+end_src
 
 ** B.2 File Browser
-:PROPERTIES:
-:CUSTOM_ID: b.2-file-browser
-:END:
+
 #+begin_src elisp
 (defcomponent file-item
   :props ((path :required t)
@@ -4956,11 +4635,8 @@ Existing widget.el code can coexist. To wrap a widget:
           (vui-text (format "Selected: %s" selected) :face 'success))))))
 #+end_src
 
-
 * Appendix C: Naming Conventions
-:PROPERTIES:
-:CUSTOM_ID: appendix-c-naming-conventions
-:END:
+
 | Prefix          | Meaning                   |
 |-----------------+---------------------------|
 | =vui-=          | Public API                |
@@ -4972,22 +4648,15 @@ Existing widget.el code can coexist. To wrap a widget:
 | =let-=          | Binding forms             |
 | =def=           | Definition forms          |
 
-
 * Appendix D: Open Questions & Future Work
-:PROPERTIES:
-:CUSTOM_ID: appendix-d-open-questions-future-work
-:END:
-These are areas identified during design that need further exploration
-or are deferred to future versions.
+
+These are areas identified during design that need further exploration or are deferred to future versions.
 
 ** D.1 Multi-line Content in Horizontal Layouts
-:PROPERTIES:
-:CUSTOM_ID: d.1-multi-line-content-in-horizontal-layouts
-:END:
+
 *Current decision*: Forbid newlines in =h-stack= children.
 
-*Future option*: Support proper column alignment where multi-line
-content extends the "row height":
+*Future option*: Support proper column alignment where multi-line content extends the "row height":
 
 #+begin_example
 | comp1 | comp2.1 | comp3 |
@@ -4995,29 +4664,27 @@ content extends the "row height":
 |       | comp2.3 |       |
 #+end_example
 
-This requires two-pass rendering (measure then render) and is
-significantly more complex.
+This requires two-pass rendering (measure then render) and is significantly more complex.
 
 ** D.2 Table Multi-line Cells
-:PROPERTIES:
-:CUSTOM_ID: d.2-table-multi-line-cells
-:END:
-Similarly, tables currently assume single-line cells. Multi-line cells
-would require: - Cell height calculation - Row height = max(cell
-heights) - Padding shorter cells
+
+Similarly, tables currently assume single-line cells. Multi-line cells would require:
+
+- Cell height calculation
+- Row height = max(cell heights)
+- Padding shorter cells
 
 *Decision*: Out of scope for v1. Tables are single-line per row.
 
 ** D.3 Responsive Layout
-:PROPERTIES:
-:CUSTOM_ID: d.3-responsive-layout
-:END:
-*Current approach*: Layout is fixed. If content exceeds window width, it
-overflows.
 
-*Potential enhancements*: - =h-stack :wrap t= --- wrap overflowing
-children to next line - =vui-table :stretch t= --- proportionally
-stretch/shrink columns - Breakpoint-based layout selection
+*Current approach*: Layout is fixed. If content exceeds window width, it overflows.
+
+*Potential enhancements*:
+
+- =h-stack :wrap t= - wrap overflowing children to next line
+- =vui-table :stretch t= - proportionally stretch/shrink columns
+- Breakpoint-based layout selection
 
 #+begin_src elisp
 (vui-responsive
@@ -5026,35 +4693,31 @@ stretch/shrink columns - Breakpoint-based layout selection
   t (narrow-layout))
 #+end_src
 
-*Question*: When does responsive layout recalculate? On window resize?
-This would need hooks into =window-size-change-functions=.
+*Question*: When does responsive layout recalculate? On window resize? This would need hooks into =window-size-change-functions=.
 
 ** D.4 Undo Integration
-:PROPERTIES:
-:CUSTOM_ID: d.4-undo-integration
-:END:
+
 React doesn't have undo. Neither do we, initially.
 
-Future exploration: - State snapshots on each change - Integration with
-=undo-tree= - "Time travel" debugging
+Future exploration:
+
+- State snapshots on each change
+- Integration with =undo-tree=
+- "Time travel" debugging
 
 ** D.5 Keyboard Navigation
-:PROPERTIES:
-:CUSTOM_ID: d.5-keyboard-navigation
-:END:
-*Current approach*: Rely on widget.el's overlay properties for TAB
-navigation.
 
-*If that's insufficient*: Implement =vui-forward= / =vui-backward= that
-traverse instance tree for focusable components.
+*Current approach*: Rely on widget.el's overlay properties for TAB navigation.
+
+*If that's insufficient*: Implement =vui-forward= / =vui-backward= that traverse instance tree for focusable components.
 
 ** D.6 Transient Integration
-:PROPERTIES:
-:CUSTOM_ID: d.6-transient-integration
-:END:
-For complex command palettes, integration with =transient.el= could
-provide: - Rich keyboard-driven menus - Persisted prefixes - Better than
-basic completing-read for complex choices
+
+For complex command palettes, integration with =transient.el= could provide:
+
+- Rich keyboard-driven menus
+- Persisted prefixes
+- Better than basic completing-read for complex choices
 
 #+begin_src elisp
 (vui-transient :spec my-transient-spec
@@ -5062,55 +4725,53 @@ basic completing-read for complex choices
 #+end_src
 
 ** D.7 Animation
-:PROPERTIES:
-:CUSTOM_ID: d.7-animation
-:END:
-Currently no animation support. Potential future work: - Transition on
-show/hide - Smooth content changes - Uses idle timers + overlay
-manipulation
+
+Currently no animation support. Potential future work:
+
+- Transition on show/hide
+- Smooth content changes
+- Uses idle timers + overlay manipulation
 
 ** D.8 Accessibility
-:PROPERTIES:
-:CUSTOM_ID: d.8-accessibility
-:END:
-Consider: - Screen reader compatibility - High contrast mode via face
-inheritance - Keyboard-only operation (already mostly there)
+
+Consider:
+
+- Screen reader compatibility
+- High contrast mode via face inheritance
+- Keyboard-only operation (already mostly there)
 
 ** D.9 Effects for Hidden Components
-:PROPERTIES:
-:CUSTOM_ID: d.9-effects-for-hidden-components
-:END:
-When a component is hidden via =vui-hidden=: - Should effects continue
-running? (Current: yes) - Should they be paused? - What about effects
-with visual side effects?
 
-React's "offscreen" API has similar questions. For now, effects
-continue.
+When a component is hidden via =vui-hidden=:
+
+- Should effects continue running? (Current: yes)
+- Should they be paused?
+- What about effects with visual side effects?
+
+React's "offscreen" API has similar questions. For now, effects continue.
 
 ** D.10 Server Rendering / Serialisation
-:PROPERTIES:
-:CUSTOM_ID: d.10-server-rendering-serialisation
-:END:
-Not applicable to Emacs in the traditional sense, but: - Could we
-serialise a component tree? - Restore from serialisation? - Useful for
-session persistence
+
+Not applicable to Emacs in the traditional sense, but:
+
+- Could we serialise a component tree?
+- Restore from serialisation?
+- Useful for session persistence
 
 ** D.11 Concurrent Rendering
-:PROPERTIES:
-:CUSTOM_ID: d.11-concurrent-rendering
-:END:
-Emacs is single-threaded, so no true concurrency. However: - Could we
-yield during large renders? - Interruptible reconciliation? -
-Priority-based scheduling (user interactions first)?
+
+Emacs is single-threaded, so no true concurrency. However:
+
+- Could we yield during large renders?
+- Interruptible reconciliation?
+- Priority-based scheduling (user interactions first)?
 
 ** D.12 Memory Management
-:PROPERTIES:
-:CUSTOM_ID: d.12-memory-management
-:END:
-Long-running UIs might accumulate: - Detached overlays - Orphaned
-instances - Callback closures
+
+Long-running UIs might accumulate:
+
+- Detached overlays
+- Orphaned instances
+- Callback closures
 
 Need to ensure proper cleanup on unmount.
-
-
-/End of Design Document/
