@@ -54,20 +54,20 @@ Possible values:
   `ignore'  - Silently ignore errors
   function  - Call function with (hook-name error instance)"
   :type '(choice (const :tag "Display warning" warn)
-                 (const :tag "Display message" message)
-                 (const :tag "Re-signal error" signal)
-                 (const :tag "Ignore silently" ignore)
-                 (function :tag "Custom handler"))
+          (const :tag "Display message" message)
+          (const :tag "Re-signal error" signal)
+          (const :tag "Ignore silently" ignore)
+          (function :tag "Custom handler"))
   :group 'vui)
 
 (defcustom vui-event-error-handler 'warn
   "How to handle errors in event callbacks (on-click, on-change, etc.).
 Same options as `vui-lifecycle-error-handler'."
   :type '(choice (const :tag "Display warning" warn)
-                 (const :tag "Display message" message)
-                 (const :tag "Re-signal error" signal)
-                 (const :tag "Ignore silently" ignore)
-                 (function :tag "Custom handler"))
+          (const :tag "Display message" message)
+          (const :tag "Re-signal error" signal)
+          (const :tag "Ignore silently" ignore)
+          (function :tag "Custom handler"))
   :group 'vui)
 
 (defvar vui-last-error nil
@@ -175,7 +175,7 @@ Only logs if `vui-debug-enabled' is non-nil and PHASE is in
 (defmacro vui--with-debug-indent (&rest body)
   "Execute BODY with increased debug indentation."
   `(let ((vui--debug-indent (1+ vui--debug-indent)))
-     ,@body))
+    ,@body))
 
 (defun vui-report-timing (&optional last-n)
   "Display a timing report for the last LAST-N entries (default all).
@@ -420,7 +420,8 @@ Returns a list of instances."
   label
   on-click
   face
-  disabled-p)
+  disabled-p
+  max-width)  ; For truncation in constrained spaces
 
 ;; Primitive: editable text field
 (cl-defstruct (vui-vnode-field (:include vui-vnode)
@@ -670,27 +671,27 @@ Example:
                      (ignore --state--)
                      (let (,@(mapcar (lambda (arg)
                                        `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
-                                     args)
+                              args)
                            ,@(mapcar (lambda (var)
                                        `(,var (plist-get --state-- ,(intern (format ":%s" var)))))
-                                     state-vars)
+                              state-vars)
                            (children (plist-get --props-- :children)))
-                       (ignore children ,@args ,@state-vars)
-                       ,form)))
+                      (ignore children ,@args ,@state-vars)
+                      ,form)))
                 (make-update-fn (form)
                   `(lambda (--props-- --state-- --prev-props-- --prev-state--)
                      (ignore --props-- --state-- --prev-props-- --prev-state--)
                      (let (,@(mapcar (lambda (arg)
                                        `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
-                                     args)
+                              args)
                            ,@(mapcar (lambda (var)
                                        `(,var (plist-get --state-- ,(intern (format ":%s" var)))))
-                                     state-vars)
+                              state-vars)
                            (children (plist-get --props-- :children))
                            (prev-props --prev-props--)
                            (prev-state --prev-state--))
-                       (ignore children prev-props prev-state ,@args ,@state-vars)
-                       ,form))))
+                      (ignore children prev-props prev-state ,@args ,@state-vars)
+                      ,form))))
         `(progn
            (vui--register-component
             (vui-component-def--create
@@ -700,7 +701,7 @@ Example:
                                     `(lambda (_props)
                                        (list ,@(cl-mapcan (lambda (var init)
                                                             (list (intern (format ":%s" var)) init))
-                                                          state-vars state-inits)))
+                                                state-vars state-inits)))
                                   nil)
              :render-fn ,(make-body-fn render-form)
              :on-mount ,(when on-mount-form (make-body-fn on-mount-form))
@@ -736,12 +737,14 @@ PROPS is a plist accepting :face, :key, and other text properties."
 
 (defun vui-button (label &rest props)
   "Create a button vnode with LABEL and optional PROPS.
-PROPS is a plist accepting :on-click, :face, :disabled, :key."
+PROPS is a plist accepting :on-click, :face, :disabled, :max-width, :key.
+When :max-width is set, the button will truncate its label to fit."
   (vui-vnode-button--create
    :label label
    :on-click (plist-get props :on-click)
    :face (plist-get props :face)
    :disabled-p (plist-get props :disabled)
+   :max-width (plist-get props :max-width)
    :key (plist-get props :key)))
 
 (cl-defun vui-field (&key value size placeholder on-change on-submit key face secret)
@@ -1040,7 +1043,7 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
   "Seconds to wait before rendering when using deferred rendering.
 Set to nil to disable idle-time rendering (render immediately)."
   :type '(choice (number :tag "Delay in seconds")
-                 (const :tag "Disabled" nil))
+          (const :tag "Disabled" nil))
   :group 'vui)
 
 (defun vui--find-state-owner (instance key)
@@ -1117,19 +1120,19 @@ Example:
     (vui-set-state \\='count (1+ count))
     (vui-set-state \\='name \"Bob\"))"
   `(let ((vui--batch-depth (1+ vui--batch-depth)))
-     (unwind-protect
-         (progn ,@body)
-       (cl-decf vui--batch-depth)
-       (when (and (= vui--batch-depth 0)
-                  vui--render-pending-p
-                  vui--root-instance)
-         ;; End of outermost batch - schedule deferred re-render
-         ;; Using deferred rendering avoids re-rendering while still
-         ;; inside a widget callback, which can cause issues
-         (setq vui--render-pending-p nil)
-         (if vui-idle-render-delay
-             (vui--schedule-idle-render)
-           (vui--rerender-instance vui--root-instance))))))
+    (unwind-protect
+        (progn ,@body)
+      (cl-decf vui--batch-depth)
+      (when (and (= vui--batch-depth 0)
+             vui--render-pending-p
+             vui--root-instance)
+       ;; End of outermost batch - schedule deferred re-render
+       ;; Using deferred rendering avoids re-rendering while still
+       ;; inside a widget callback, which can cause issues
+       (setq vui--render-pending-p nil)
+       (if vui-idle-render-delay
+           (vui--schedule-idle-render)
+         (vui--rerender-instance vui--root-instance))))))
 
 (defun vui-flush-sync ()
   "Force immediate re-render, bypassing any pending idle timers.
@@ -1987,11 +1990,24 @@ Handles :truncate and overflow:
                   ;; Render cell content with alignment
                   ;; For vnodes (buttons, etc.), render directly to preserve interactivity
                   ;; For strings, insert with optional face
-                  (let ((is-vnode (and cell (not (stringp cell)))))
+                  ;; For button vnodes with truncate, set max-width so button truncates its label
+                  (let* ((is-vnode (and cell (not (stringp cell))))
+                         (render-cell
+                          (if (and is-vnode truncate-p declared-width
+                                   (vui-vnode-button-p cell))
+                              ;; Create a copy of the button with max-width set
+                              (vui-vnode-button--create
+                               :label (vui-vnode-button-label cell)
+                               :on-click (vui-vnode-button-on-click cell)
+                               :face (vui-vnode-button-face cell)
+                               :disabled-p (vui-vnode-button-disabled-p cell)
+                               :max-width declared-width
+                               :key (vui-vnode-key cell))
+                            cell)))
                     (pcase align
                       (:left
                        (if is-vnode
-                           (vui--render-vnode cell)
+                           (vui--render-vnode render-cell)
                          (if face
                              (insert (propertize display-content 'face face))
                            (insert display-content)))
@@ -1999,7 +2015,7 @@ Handles :truncate and overflow:
                       (:right
                        (insert (make-string padding ?\s))
                        (if is-vnode
-                           (vui--render-vnode cell)
+                           (vui--render-vnode render-cell)
                          (if face
                              (insert (propertize display-content 'face face))
                            (insert display-content))))
@@ -2008,7 +2024,7 @@ Handles :truncate and overflow:
                              (right-pad (- padding (/ padding 2))))
                          (insert (make-string left-pad ?\s))
                          (if is-vnode
-                             (vui--render-vnode cell)
+                             (vui--render-vnode render-cell)
                            (if face
                                (insert (propertize display-content 'face face))
                              (insert display-content)))
@@ -2069,6 +2085,19 @@ Handles :truncate and overflow:
            (on-click (vui-vnode-button-on-click vnode))
            (face (vui-vnode-button-face vnode))
            (disabled (vui-vnode-button-disabled-p vnode))
+           (max-width (vui-vnode-button-max-width vnode))
+           ;; Format button text: [label] with possible truncation
+           ;; Brackets take 2 chars, "..." takes 3 chars
+           ;; Minimum button is [...] = 5 chars
+           (display-label
+            (if (and max-width (> (+ (string-width label) 2) max-width))
+                ;; Need truncation: available = max-width - 2 (brackets) - 3 (...)
+                (let ((available (- max-width 5)))
+                  (if (<= available 0)
+                      "..."  ; Just show [...] for very small widths
+                    (concat (substring label 0 (min available (length label))) "...")))
+              label))
+           (button-text (concat "[" display-label "]"))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
@@ -2077,27 +2106,27 @@ Handles :truncate and overflow:
       (if disabled
           ;; Render disabled button as inactive text
           (let ((start (point)))
-            (insert label)
+            (insert button-text)
             (put-text-property start (point) 'face (or face 'shadow)))
         ;; Render active button as clickable text (not widget)
         ;; This gives us exact control over visual width
         (let ((start (point))
               (map (make-sparse-keymap)))
           (define-key map [mouse-1]
-            (lambda (_event)
-              (interactive "e")
-              (when wrapped-click
-                (let ((vui--current-instance captured-instance)
-                      (vui--root-instance captured-root))
-                  (funcall wrapped-click)))))
+                      (lambda (_event)
+                        (interactive "e")
+                        (when wrapped-click
+                          (let ((vui--current-instance captured-instance)
+                                (vui--root-instance captured-root))
+                            (funcall wrapped-click)))))
           (define-key map (kbd "RET")
-            (lambda ()
-              (interactive)
-              (when wrapped-click
-                (let ((vui--current-instance captured-instance)
-                      (vui--root-instance captured-root))
-                  (funcall wrapped-click)))))
-          (insert label)
+                      (lambda ()
+                        (interactive)
+                        (when wrapped-click
+                          (let ((vui--current-instance captured-instance)
+                                (vui--root-instance captured-root))
+                            (funcall wrapped-click)))))
+          (insert button-text)
           (put-text-property start (point) 'face (or face 'link))
           (put-text-property start (point) 'mouse-face 'highlight)
           (put-text-property start (point) 'keymap map)

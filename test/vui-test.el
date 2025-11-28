@@ -80,7 +80,33 @@ Buttons are now rendered as text with keymap, so we invoke the RET binding."
 
   (it "accepts key property"
     (let ((node (vui-button "Click" :key "btn-1")))
-      (expect (vui-vnode-key node) :to-equal "btn-1"))))
+      (expect (vui-vnode-key node) :to-equal "btn-1")))
+
+  ;; Truncation support for buttons in constrained spaces (e.g., table cells)
+  (it "accepts max-width property"
+    (let ((node (vui-button "Click" :max-width 10)))
+      (expect (vui-vnode-button-max-width node) :to-equal 10)))
+
+  (it "renders without truncation when label fits max-width"
+    (with-temp-buffer
+      ;; "hello" = 5 chars, button adds [] = 7 total, fits in 10
+      (vui-render (vui-button "hello" :max-width 10))
+      (expect (buffer-string) :to-equal "[hello]")))
+
+  (it "truncates label when exceeds max-width"
+    (with-temp-buffer
+      ;; "hello world" = 11 chars + [] = 13, must fit in 10
+      ;; [hello...] = 10 chars: [ (1) + hello (5) + ... (3) + ] (1)
+      (vui-render (vui-button "hello world" :max-width 10))
+      (expect (buffer-string) :to-equal "[hello...]")))
+
+  (it "handles very small max-width gracefully"
+    (with-temp-buffer
+      ;; max-width 5: [..] = 4 chars minimum, 1 char for label
+      ;; [...] or [x...] or just [...]
+      (vui-render (vui-button "hello world" :max-width 5))
+      ;; At minimum should show [...] (5 chars)
+      (expect (buffer-string) :to-equal "[...]"))))
 
 (describe "vui-field"
   (it "creates a field vnode"
@@ -396,8 +422,8 @@ Buttons are now rendered as text with keymap, so we invoke the RET binding."
   (it "renders disabled button as text"
     (with-temp-buffer
       (vui-render (vui-button "Disabled" :disabled t))
-      ;; Buttons now render as plain text without brackets
-      (expect (buffer-string) :to-equal "Disabled")))
+      ;; Disabled buttons render with brackets but shadow face
+      (expect (buffer-string) :to-equal "[Disabled]")))
 
   (it "triggers on-click callback when button is activated"
     (with-temp-buffer
@@ -1273,7 +1299,36 @@ Buttons are now rendered as text with keymap, so we invoke the RET binding."
                    :rows '(("hello"))
                    :border :ascii))
       ;; Content exactly fits, no padding or truncation
-      (expect (buffer-string) :to-match "| hello |"))))
+      (expect (buffer-string) :to-match "| hello |")))
+
+  ;; Button truncation in tables
+  (it "truncates button label when column has :truncate"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :truncate t))
+                   :rows (list (list (vui-button "hello world")))))
+      ;; Button "hello world" (11 chars) + [] = 13 chars, must fit in 10
+      ;; Should be [hello...] = 10 chars
+      (expect (buffer-string) :to-equal "[hello...]")))
+
+  (it "does not truncate button when it fits"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :grow t))
+                   :rows (list (list (vui-button "hello")))))
+      ;; Button [hello] = 7 chars, fits in 10 with padding
+      (expect (buffer-string) :to-match "\\[hello\\]")))
+
+  (it "truncates button in bordered table cell"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:width 10 :grow t :truncate t))
+                   :rows (list (list (vui-button "very long button")))
+                   :border :ascii))
+      ;; Cell content must be 10 chars, button truncated
+      ;; max-width=10: [] takes 2, ... takes 3, so 5 chars for label = "very "
+      ;; | [very ...] | - button inside 10-char cell
+      (expect (buffer-string) :to-match "| \\[very \\.\\.\\.\\] |"))))
 
 (describe "vui-error-boundary"
   (it "creates an error boundary vnode"
