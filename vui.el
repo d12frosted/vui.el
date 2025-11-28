@@ -1286,7 +1286,7 @@ Example:
   ;; In my-button:
   (let ((theme (use-theme)))
     (vui-text (format \"Theme: %s\" theme)))"
-  (declare (doc-string 3) (indent 1))
+  (declare (indent defun))
   (let ((context-var (intern (format "%s-context" name)))
         (provider-fn (intern (format "%s-provider" name)))
         (consumer-fn (intern (format "use-%s" name))))
@@ -1300,16 +1300,17 @@ Example:
 
        ;; Provider function
        (defun ,provider-fn (value &rest children)
-         ,(format "Provide %s context with VALUE to CHILDREN." name)
-         (vui-vnode-provider--create
-          :context ,context-var
-          :value value
-          :children children))
+        ,(format "Provide %s context with VALUE to CHILDREN." name)
+        (declare (indent 1))
+        (vui-vnode-provider--create
+         :context ,context-var
+         :value value
+         :children children))
 
        ;; Consumer hook
        (defun ,consumer-fn ()
-         ,(format "Get current %s context value." name)
-         (vui--consume-context ,context-var))
+        ,(format "Get current %s context value." name)
+        (vui--consume-context ,context-var))
 
        ',name)))
 
