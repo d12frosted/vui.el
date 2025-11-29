@@ -1004,14 +1004,16 @@ Usage:
                  (dolist (item items (nreverse result))
                    (let* ((key (funcall key-fn item))
                           (vnode (funcall render-fn item)))
-                     ;; Set key on the vnode if it supports it
-                     (when (and vnode (vui-vnode-p vnode))
-                       (setf (vui-vnode-key vnode) key))
-                     ;; Add newline before items (except first) if vertical
-                     (when (and vertical (not first))
-                       (push (vui-newline) result))
-                     (push vnode result)
-                     (setq first nil)))))))
+                     ;; Skip nil vnodes entirely
+                     (when vnode
+                       ;; Set key on the vnode if it supports it
+                       (when (vui-vnode-p vnode)
+                         (setf (vui-vnode-key vnode) key))
+                       ;; Add newline before items (except first) if vertical
+                       (when (and vertical (not first))
+                         (push (vui-newline) result))
+                       (push vnode result)
+                       (setq first nil))))))))
 
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.
