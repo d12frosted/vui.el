@@ -140,7 +140,7 @@ Creates a fixed-width container with text alignment:
 #+begin_src elisp
 (vui-box (vui-text "Centered")
          :width 20
-         :align 'center)
+         :align :center)
 #+end_src
 
 Output (20 chars wide):
@@ -150,17 +150,17 @@ Output (20 chars wide):
 
 ** Alignment Options
 
-| Value    | Description                |
-|----------+----------------------------|
-| =left=   | Align to left (default)    |
-| =center= | Center in box              |
-| =right=  | Align to right             |
+| Value     | Description                |
+|-----------+----------------------------|
+| =:left=   | Align to left (default)    |
+| =:center= | Center in box              |
+| =:right=  | Align to right             |
 
 #+begin_src elisp
 (vui-vstack
- (vui-box (vui-text "Left") :width 20 :align 'left)
- (vui-box (vui-text "Center") :width 20 :align 'center)
- (vui-box (vui-text "Right") :width 20 :align 'right))
+ (vui-box (vui-text "Left") :width 20 :align :left)
+ (vui-box (vui-text "Center") :width 20 :align :center)
+ (vui-box (vui-text "Right") :width 20 :align :right))
 #+end_src
 
 Output:
@@ -177,8 +177,9 @@ Add padding inside the box:
 #+begin_src elisp
 (vui-box (vui-text "Padded")
          :width 20
-         :align 'center
-         :padding 2)
+         :align :center
+         :padding-left 2
+         :padding-right 2)
 #+end_src
 
 The padding reduces the available content width.
@@ -188,13 +189,13 @@ The padding reduces the available content width.
 #+begin_src elisp
 (vui-vstack
  (vui-hstack
-  (vui-box (vui-text "Name:") :width 10 :align 'right)
+  (vui-box (vui-text "Name:") :width 10 :align :right)
   (vui-field :value name :size 20))
  (vui-hstack
-  (vui-box (vui-text "Email:") :width 10 :align 'right)
+  (vui-box (vui-text "Email:") :width 10 :align :right)
   (vui-field :value email :size 20))
  (vui-hstack
-  (vui-box (vui-text "Phone:") :width 10 :align 'right)
+  (vui-box (vui-text "Phone:") :width 10 :align :right)
   (vui-field :value phone :size 20)))
 #+end_src
 
@@ -455,13 +456,13 @@ Layouts can be nested for complex structures:
 
 * Summary
 
-| Primitive    | Purpose                      | Key Props                    |
-|--------------+------------------------------+------------------------------|
-| =vui-hstack= | Horizontal arrangement       | =:spacing=                   |
-| =vui-vstack= | Vertical arrangement         | =:spacing=, =:indent=        |
-| =vui-box=    | Fixed-width container        | =:width=, =:align=, =:padding= |
-| =vui-table=  | Tabular data                 | =:headers=, =:rows=, =:borders= |
-| =vui-list=   | Dynamic list rendering       | items, render-fn, key-fn     |
+| Primitive    | Purpose                      | Key Props                              |
+|--------------+------------------------------+----------------------------------------|
+| =vui-hstack= | Horizontal arrangement       | =:spacing=                             |
+| =vui-vstack= | Vertical arrangement         | =:spacing=, =:indent=                  |
+| =vui-box=    | Fixed-width container        | =:width=, =:align=, =:padding-left/right= |
+| =vui-table=  | Tabular data                 | =:columns=, =:rows=, =:border=         |
+| =vui-list=   | Dynamic list rendering       | items, render-fn, key-fn               |
 
 * Try It Yourself
 

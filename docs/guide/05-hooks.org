@@ -135,12 +135,10 @@ re-renders when changed.
   :render
   (let ((render-count (use-ref 0)))
     ;; Increment ref on every render (doesn't trigger re-render)
-    (setf (plist-get render-count :current)
-          (1+ (plist-get render-count :current)))
+    (setcar render-count (1+ (car render-count)))
 
     (vui-fragment
-     (vui-text (format "Rendered %d times"
-                       (plist-get render-count :current)))
+     (vui-text (format "Rendered %d times" (car render-count)))
      (vui-newline)
      (vui-button "Update state"
                  :on-click (lambda ()
@@ -149,15 +147,15 @@ re-renders when changed.
 
 ** Ref Structure
 
-=use-ref= returns a plist with a =:current= key:
+=use-ref= returns a cons cell whose =car= is the current value:
 
 #+begin_src elisp
 (let ((my-ref (use-ref "initial")))
   ;; Read
-  (plist-get my-ref :current)     ; => "initial"
+  (car my-ref)            ; => "initial"
 
   ;; Write
-  (setf (plist-get my-ref :current) "new value"))
+  (setcar my-ref "new value"))
 #+end_src
 
 ** Common Use Cases
@@ -170,13 +168,12 @@ re-renders when changed.
   (let ((prev-ref (use-ref nil)))
     (use-effect (value)
       ;; After render, store current as previous
-      (setf (plist-get prev-ref :current) value))
+      (setcar prev-ref value))
 
     (vui-fragment
      (vui-text (format "Current: %s" value))
      (vui-newline)
-     (vui-text (format "Previous: %s"
-                       (or (plist-get prev-ref :current) "N/A"))))))
+     (vui-text (format "Previous: %s" (or (car prev-ref) "N/A"))))))
 #+end_src
 
 *** Storing Timer References
@@ -188,12 +185,12 @@ re-renders when changed.
   (let ((timer-ref (use-ref nil)))
     (use-effect ()
       ;; Store timer in ref for later cleanup
-      (setf (plist-get timer-ref :current)
-            (run-with-timer 1 1 (lambda ()
-                                  (vui-set-state :count (1+ count)))))
+      (setcar timer-ref
+              (run-with-timer 1 1 (lambda ()
+                                    (vui-set-state :count (1+ count)))))
       (lambda ()
-        (when (plist-get timer-ref :current)
-          (cancel-timer (plist-get timer-ref :current)))))
+        (when (car timer-ref)
+          (cancel-timer (car timer-ref)))))
 
     (vui-text (format "Count: %d" count))))
 #+end_src

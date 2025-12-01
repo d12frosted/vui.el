@@ -233,8 +233,8 @@ Creates a checkbox that can be toggled:
 Creates a selection from a list of options:
 
 #+begin_src elisp
-(vui-select current-value
-            '("Option 1" "Option 2" "Option 3")
+(vui-select :value current-value
+            :options '("Option 1" "Option 2" "Option 3")
             :on-change (lambda (new-value)
                          (vui-set-state :selection new-value)))
 #+end_src
@@ -243,6 +243,8 @@ Creates a selection from a list of options:
 
 | Property     | Description                           |
 |--------------+---------------------------------------|
+| =:value=     | Current selected value                |
+| =:options=   | List of options (strings or alist)    |
 | =:on-change= | Callback with selected value          |
 | =:prompt=    | Prompt text (default: "Select: ")     |
 | =:key=       | Key for reconciliation                |
@@ -250,8 +252,8 @@ Creates a selection from a list of options:
 *** With Custom Prompt
 
 #+begin_src elisp
-(vui-select priority
-            '("Low" "Medium" "High" "Critical")
+(vui-select :value priority
+            :options '("Low" "Medium" "High" "Critical")
             :prompt "Priority: "
             :on-change (lambda (v) (vui-set-state :priority v)))
 #+end_src
@@ -261,10 +263,10 @@ Creates a selection from a list of options:
 For display-value pairs, use cons cells:
 
 #+begin_src elisp
-(vui-select country-code
-            '(("United States" . "US")
-              ("United Kingdom" . "UK")
-              ("Germany" . "DE"))
+(vui-select :value country-code
+            :options '(("United States" . "US")
+                       ("United Kingdom" . "UK")
+                       ("Germany" . "DE"))
             :on-change (lambda (code)
                          (vui-set-state :country-code code)))
 ;; Shows: "United States", stores: "US"
@@ -324,16 +326,16 @@ Fragments can be nested and will be flattened:
 
 * Summary Table
 
-| Primitive        | Purpose                | Key Props                    |
-|------------------+------------------------+------------------------------|
-| =vui-text=       | Display text           | =:face=, =:key=              |
-| =vui-newline=    | Line break             | =:key=                       |
-| =vui-space=      | Whitespace             | width, =:key=                |
+| Primitive        | Purpose                | Key Props                          |
+|------------------+------------------------+------------------------------------|
+| =vui-text=       | Display text           | =:face=, =:key=                    |
+| =vui-newline=    | Line break             | =:key=                             |
+| =vui-space=      | Whitespace             | width, =:key=                      |
 | =vui-button=     | Clickable button       | =:on-click=, =:disabled=, =:max-width= |
-| =vui-field=      | Text input             | =:value=, =:on-change=       |
-| =vui-checkbox=   | Toggle checkbox        | =:checked=, =:on-change=     |
-| =vui-select=     | Dropdown selection     | value, options, =:on-change= |
-| =vui-fragment=   | Group without output   | children                     |
+| =vui-field=      | Text input             | =:value=, =:on-change=             |
+| =vui-checkbox=   | Toggle checkbox        | =:checked=, =:on-change=           |
+| =vui-select=     | Dropdown selection     | =:value=, =:options=, =:on-change= |
+| =vui-fragment=   | Group without output   | children                           |
 
 * Complete Example
 
@@ -373,8 +375,8 @@ Here's a component using multiple primitives:
 
    ;; Role selection
    (vui-text "Role: ")
-   (vui-select role
-               '("user" "editor" "admin")
+   (vui-select :value role
+               :options '("user" "editor" "admin")
                :on-change (lambda (v) (vui-set-state :role v)))
    (vui-newline)
    (vui-newline)

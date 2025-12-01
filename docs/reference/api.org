@@ -617,6 +617,35 @@ Cache computed value, recompute only when DEPS change.
 
 Like =use-memo= with configurable comparison.
 
+** use-async
+
+#+begin_src elisp
+(use-async KEY LOADER) -> plist
+#+end_src
+
+Asynchronously load data using LOADER, identified by KEY.
+
+- KEY :: Cache key; when it changes, a new load is triggered
+- LOADER :: =(lambda (resolve reject) ...)= — call =resolve= with data or =reject= with error
+
+Returns a plist:
+
+| Key       | Description                            |
+|-----------+----------------------------------------|
+| =:status= | One of: =pending=, =ready=, or =error= |
+| =:data=   | The loaded data (when =ready=)         |
+| =:error=  | Error message (when =error=)           |
+
+#+begin_src elisp
+(let ((result (use-async user-id
+                (lambda (resolve _reject)
+                  (funcall resolve (fetch-user user-id))))))
+  (pcase (plist-get result :status)
+    ('pending (vui-text "Loading..."))
+    ('error (vui-text (format "Error: %s" (plist-get result :error))))
+    ('ready (vui-text (format "User: %s" (plist-get result :data))))))
+#+end_src
+
 * Context
 
 ** defcontext
@@ -692,7 +721,7 @@ Handler values:
 - =message= — Display in echo area
 - =signal= — Re-signal error
 - =ignore= — Silently ignore
-- function — Custom =(lambda (err hook-name instance) ...)=
+- function — Custom =(lambda (hook-name err instance) ...)=
 
 ** Performance
 
@@ -833,6 +862,7 @@ Clear debug log buffer.
 | =use-ref=      | Mutable reference         |
 | =use-callback= | Memoized callback         |
 | =use-memo=     | Memoized value            |
+| =use-async=    | Async data loading        |
 
 ** State
 

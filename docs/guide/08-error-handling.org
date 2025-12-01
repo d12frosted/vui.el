@@ -112,8 +112,9 @@ Set =vui-lifecycle-error-handler= to customize behavior:
 
 ;; Option 4: Custom handler
 (setq vui-lifecycle-error-handler
-      (lambda (err hook-name component)
-        (message "Error in %s.%s: %S" component hook-name err)
+      (lambda (hook-name err instance)
+        (message "Error in %s: %S"
+                 hook-name err)
         (notify-monitoring-service err)))
 #+end_src
 
@@ -141,8 +142,8 @@ Set =vui-event-error-handler=:
 (setq vui-event-error-handler 'ignore)
 (setq vui-event-error-handler 'signal)
 (setq vui-event-error-handler
-      (lambda (err event-name component)
-        (message "Event error: %S" err)))
+      (lambda (hook-name err instance)
+        (message "Event error in %s: %S" hook-name err)))
 #+end_src
 
 * Accessing Error Information
@@ -212,14 +213,14 @@ Isolate independent features:
 
 #+begin_src elisp
 (setq vui-lifecycle-error-handler
-      (lambda (err hook context)
+      (lambda (hook-name err instance)
         (with-current-buffer (get-buffer-create "*vui-errors*")
           (goto-char (point-max))
           (insert (format "[%s] %s: %S\n"
                           (format-time-string "%H:%M:%S")
-                          context
+                          hook-name
                           err)))
-        (warn "%s: %S" context err)))
+        (warn "%s: %S" hook-name err)))
 #+end_src
 
 ** 4. Graceful Degradation
