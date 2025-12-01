@@ -470,6 +470,77 @@ For synchronous loaders, calling =resolve= immediately still provides benefits:
 - Automatic error handling (caught errors become reject)
 - Result caching across re-renders
 
+** Emacs Async Landscape
+
+*Important:* =use-async= does NOT perform asynchronous computations itself. It is
+purely a *UI-layer abstraction* that handles loading states, caching, and
+re-rendering. The actual async work is your responsibility.
+
+#+begin_src elisp
+;; THIS WILL STILL BLOCK EMACS!
+(use-async 'data
+  (lambda (resolve _reject)
+    (funcall resolve (slow-synchronous-computation))))  ; Blocks for 5 seconds
+#+end_src
+
+If you put slow synchronous code inside the loader, Emacs will freeze while it
+runs. =use-async= just provides the plumbing for when you *do* have async code.
+
+To make operations truly non-blocking, use one of the async mechanisms below.
+
+*** Built-in Primitives
+
+| Mechanism        | Best For                        |
+|------------------+---------------------------------|
+| =make-process=   | External commands (most robust) |
+| =run-with-timer= | Deferred/scheduled execution    |
+| Native threads   | I/O-bound waiting (Emacs 26+)   |
+| Generators       | Cooperative yielding            |
+
+*** Community Libraries
+
+| Library       | Style               | Use Case              |
+|---------------+---------------------+-----------------------|
+| =async.el=    | Child Emacs         | CPU-heavy pure Lisp   |
+| =deferred.el= | jQuery-style chains | Chained operations    |
+| =promise.el=  | ES6 promises        | Modern promise chains |
+| =emacs-aio=   | async/await         | Readable coroutines   |
+| =plz.el=      | curl wrapper        | HTTP requests         |
+
+*** Using with use-async
+
+=use-async= works with any of these — just call =resolve= or =reject= when done:
+
+#+begin_src elisp
+;; With async.el (child Emacs for CPU work)
+(use-async 'heavy-compute
+  (lambda (resolve reject)
+    (async-start
+     (lambda () (expensive-computation))
+     (lambda (result) (funcall resolve result)))))
+
+;; With emacs-aio (if you have aio infrastructure)
+(use-async 'fetch-data
+  (lambda (resolve reject)
+    (aio-with-async
+      (condition-case err
+          (funcall resolve (aio-await (my-aio-fetch)))
+        (error (funcall reject (error-message-string err)))))))
+
+;; With plz.el (HTTP)
+(use-async 'api-call
+  (lambda (resolve reject)
+    (plz 'get "https://api.example.com"
+      :as 'json
+      :then (lambda (json) (funcall resolve json))
+      :else (lambda (err) (funcall reject (plz-error-message err))))))
+#+end_src
+
+The key insight: =use-async= handles the *React-like concerns* (loading states,
+caching, triggering re-renders), while the underlying async mechanism handles
+the *actual async execution*. This separation lets you choose the right tool
+for each job.
+
 * Advanced: Custom Comparison
 
 Both =use-callback*= and =use-memo*= support custom comparison modes.
