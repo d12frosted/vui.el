@@ -2393,4 +2393,130 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (plist-get result :data) :to-equal "process completed"))
           (kill-buffer "*test-async8*"))))))
 
+(describe "lifecycle hooks"
+  ;; Disable idle rendering for tests - idle timers don't fire in batch mode
+  (before-each
+    (setq vui-idle-render-delay nil))
+  (after-each
+    (setq vui-idle-render-delay 0.01))
+
+  (describe "on-mount"
+    (it "is called when component first renders"
+      (let ((mount-called nil))
+        (defcomponent test-mount-basic ()
+          :on-mount (setq mount-called t)
+          :render (vui-text "test"))
+        (let ((instance (vui-mount (vui-component 'test-mount-basic) "*test-mount1*")))
+          (unwind-protect
+              (expect mount-called :to-be-truthy)
+            (kill-buffer "*test-mount1*")))))
+
+    (it "cleanup function is called when component unmounts"
+      (let ((mount-called nil)
+            (cleanup-called nil))
+        (defcomponent test-mount-cleanup ()
+          :on-mount (progn
+                      (setq mount-called t)
+                      (lambda () (setq cleanup-called t)))
+          :render (vui-text "child"))
+        (defcomponent test-mount-parent ()
+          :state ((show-child t))
+          :render (if show-child
+                      (vui-component 'test-mount-cleanup)
+                    (vui-text "hidden")))
+        (let ((instance (vui-mount (vui-component 'test-mount-parent) "*test-mount2*")))
+          (unwind-protect
+              (progn
+                (expect mount-called :to-be-truthy)
+                (expect cleanup-called :to-be nil)
+                ;; Hide the child
+                (with-current-buffer "*test-mount2*"
+                  (let ((vui--current-instance instance))
+                    (vui-set-state :show-child nil)))
+                ;; Cleanup should have been called
+                (expect cleanup-called :to-be-truthy))
+            (kill-buffer "*test-mount2*"))))))
+
+  (describe "on-unmount"
+    (it "is called when component is removed from tree"
+      (let ((unmount-called nil))
+        (defcomponent test-unmount-child ()
+          :on-unmount (setq unmount-called t)
+          :render (vui-text "child"))
+        (defcomponent test-unmount-parent ()
+          :state ((show-child t))
+          :render (if show-child
+                      (vui-component 'test-unmount-child)
+                    (vui-text "hidden")))
+        (let ((instance (vui-mount (vui-component 'test-unmount-parent) "*test-unmount1*")))
+          (unwind-protect
+              (progn
+                (expect unmount-called :to-be nil)
+                ;; Hide the child - should trigger unmount
+                (with-current-buffer "*test-unmount1*"
+                  (let ((vui--current-instance instance))
+                    (vui-set-state :show-child nil)))
+                ;; on-unmount should have been called
+                (expect unmount-called :to-be-truthy))
+            (kill-buffer "*test-unmount1*")))))
+
+    (it "is called for nested children when parent unmounts"
+      (let ((parent-unmount nil)
+            (child-unmount nil))
+        (defcomponent test-nested-child ()
+          :on-unmount (setq child-unmount t)
+          :render (vui-text "nested"))
+        (defcomponent test-nested-parent ()
+          :on-unmount (setq parent-unmount t)
+          :render (vui-component 'test-nested-child))
+        (defcomponent test-nested-root ()
+          :state ((show t))
+          :render (if show
+                      (vui-component 'test-nested-parent)
+                    (vui-text "hidden")))
+        (let ((instance (vui-mount (vui-component 'test-nested-root) "*test-unmount2*")))
+          (unwind-protect
+              (progn
+                (expect parent-unmount :to-be nil)
+                (expect child-unmount :to-be nil)
+                ;; Hide parent - should unmount both parent and child
+                (with-current-buffer "*test-unmount2*"
+                  (let ((vui--current-instance instance))
+                    (vui-set-state :show nil)))
+                (expect parent-unmount :to-be-truthy)
+                (expect child-unmount :to-be-truthy))
+            (kill-buffer "*test-unmount2*")))))
+
+    (it "does not remount when showing again after unmount"
+      (let ((mount-count 0)
+            (unmount-count 0))
+        (defcomponent test-toggle-child ()
+          :on-mount (cl-incf mount-count)
+          :on-unmount (cl-incf unmount-count)
+          :render (vui-text "child"))
+        (defcomponent test-toggle-parent ()
+          :state ((show t))
+          :render (if show
+                      (vui-component 'test-toggle-child)
+                    (vui-text "hidden")))
+        (let ((instance (vui-mount (vui-component 'test-toggle-parent) "*test-toggle*")))
+          (unwind-protect
+              (progn
+                ;; Initial mount
+                (expect mount-count :to-equal 1)
+                (expect unmount-count :to-equal 0)
+                ;; Hide
+                (with-current-buffer "*test-toggle*"
+                  (let ((vui--current-instance instance))
+                    (vui-set-state :show nil)))
+                (expect mount-count :to-equal 1)
+                (expect unmount-count :to-equal 1)
+                ;; Show again - should mount fresh
+                (with-current-buffer "*test-toggle*"
+                  (let ((vui--current-instance instance))
+                    (vui-set-state :show t)))
+                (expect mount-count :to-equal 2)
+                (expect unmount-count :to-equal 1))
+            (kill-buffer "*test-toggle*")))))))
+
 ;;; vui-test.el ends here

@@ -555,6 +555,7 @@ Returns a list of instances."
   buffer      ; Buffer this instance is rendered into
   cached-vtree  ; Last rendered vtree (for should-update optimization)
   mounted-p   ; Has this been mounted?
+  mount-cleanup ; Cleanup function returned from on-mount, called during unmount
   effects     ; Alist of (effect-id . (deps . cleanup-fn)) for use-effect
   refs        ; Hash table of ref-id -> (value . nil) for use-ref
   callbacks   ; Hash table of callback-id -> (deps . fn) for use-callback
@@ -1927,11 +1928,14 @@ INSTANCE is the component instance."
           (setf (vui-instance-mounted-p instance) t)
           (vui--debug-log 'mount "<%s> mounted" component-name)
           (vui--timing-start)
-          (vui--call-lifecycle-hook
-           "on-mount"
-           (vui-component-def-on-mount def)
-           instance
-           props state)
+          (let ((result (vui--call-lifecycle-hook
+                         "on-mount"
+                         (vui-component-def-on-mount def)
+                         instance
+                         props state)))
+            ;; If on-mount returns a function, store it as cleanup
+            (when (functionp result)
+              (setf (vui-instance-mount-cleanup instance) result)))
           (vui--timing-record 'mount component-name))
       ;; Re-render: call on-update only if we actually rendered
       (when should-render-p
@@ -1957,6 +1961,12 @@ INSTANCE is the component instance."
   ;; Clean up effects and async timers
   (vui--cleanup-instance-effects instance)
   (vui--cleanup-instance-asyncs instance)
+  ;; Call mount cleanup function if one was returned from on-mount
+  (when-let ((cleanup (vui-instance-mount-cleanup instance)))
+    (condition-case err
+        (funcall cleanup)
+      (error
+       (vui--handle-error 'lifecycle "mount-cleanup" err instance))))
   ;; Then call on-unmount hook (with error handling)
   (let* ((def (vui-instance-def instance))
          (component-name (vui-component-def-name def))
