@@ -828,7 +828,28 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (vui--rerender-instance instance)
               ;; Cleanup should have run
               (expect cleanup-ran :to-be-truthy))
-          (kill-buffer "*test-effect5*"))))))
+          (kill-buffer "*test-effect5*")))))
+
+  (it "allows vui-set-state inside effect body"
+    (defcomponent effect-set-state ()
+      :state ((count 0) (doubled nil))
+      :render (progn
+                (use-effect (count)
+                  ;; Should be able to call vui-set-state directly in effect
+                  (vui-set-state :doubled (* 2 count)))
+                (vui-text (format "count=%d doubled=%s" count doubled))))
+    (let ((instance (vui-mount (vui-component 'effect-set-state) "*test-effect-state*")))
+      (unwind-protect
+          (progn
+            ;; Effect should have set doubled to 0
+            (expect (plist-get (vui-instance-state instance) :doubled) :to-equal 0)
+            ;; Change count
+            (setf (vui-instance-state instance)
+                  (plist-put (vui-instance-state instance) :count 5))
+            (vui--rerender-instance instance)
+            ;; Effect should have set doubled to 10
+            (expect (plist-get (vui-instance-state instance) :doubled) :to-equal 10))
+        (kill-buffer "*test-effect-state*")))))
 
 (describe "use-ref"
   (it "creates a ref with initial value"

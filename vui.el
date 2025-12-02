@@ -1269,11 +1269,14 @@ Called from within a component's render function."
              (deps (nth 2 effect))
              (effect-fn (nth 3 effect))
              (prev-cleanup (car (nth 4 effect))))
-        ;; Run cleanup from previous effect
+        ;; Run cleanup from previous effect (with context for vui-set-state)
         (when (functionp prev-cleanup)
-          (funcall prev-cleanup))
+          (let ((vui--current-instance instance))
+            (funcall prev-cleanup)))
         ;; Run new effect, capture cleanup
-        (let ((new-cleanup (funcall effect-fn)))
+        ;; Bind component context so vui-set-state works in effect body
+        (let* ((vui--current-instance instance)
+               (new-cleanup (funcall effect-fn)))
           ;; Store new deps and cleanup in instance
           (let ((effects (vui-instance-effects instance)))
             (setf (vui-instance-effects instance)
@@ -1285,7 +1288,9 @@ Called from within a component's render function."
   (dolist (effect-entry (vui-instance-effects instance))
     (let ((cleanup (cadr (cdr effect-entry))))
       (when (functionp cleanup)
-        (funcall cleanup))))
+        ;; Bind context for consistency (cleanup may call vui-set-state)
+        (let ((vui--current-instance instance))
+          (funcall cleanup)))))
   (setf (vui-instance-effects instance) nil))
 
 ;;; Refs System
