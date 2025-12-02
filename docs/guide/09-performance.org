@@ -157,17 +157,17 @@ Event handlers are automatically batched:
 
 * Deferred Rendering
 
-By default, renders happen on idle time. Configure with =vui-idle-render-delay=:
+By default, renders are deferred briefly to allow batching. Configure with =vui-render-delay=:
 
 #+begin_src elisp
 ;; Immediate rendering (might feel more responsive)
-(setq vui-idle-render-delay nil)
+(setq vui-render-delay nil)
 
 ;; Default: 0.01 seconds delay
-(setq vui-idle-render-delay 0.01)
+(setq vui-render-delay 0.01)
 
 ;; Longer delay (for expensive renders)
-(setq vui-idle-render-delay 0.1)
+(setq vui-render-delay 0.1)
 #+end_src
 
 ** Force Immediate Render
@@ -240,7 +240,7 @@ The report shows time spent in each phase per component.
 4. [ ] Use =vui-batch= for multiple state updates
 5. [ ] Provide =:key= for list items
 6. [ ] Profile with =vui-timing-enabled= to find bottlenecks
-7. [ ] Consider =vui-idle-render-delay= tuning
+7. [ ] Consider =vui-render-delay= tuning
 
 * Try It Yourself
 

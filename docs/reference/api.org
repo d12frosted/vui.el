@@ -529,7 +529,7 @@ Batch multiple state updates into a single re-render.
 (vui-flush-sync)
 #+end_src
 
-Force immediate re-render, bypassing idle timers.
+Force immediate re-render, bypassing any pending deferred timers.
 
 ** vui-with-async-context
 
@@ -807,9 +807,9 @@ Handler values:
 
 ** Performance
 
-| Variable               | Default | Description                        |
-|------------------------+---------+------------------------------------|
-| =vui-idle-render-delay= | 0.01   | Seconds before idle render (nil=immediate) |
+| Variable               | Default | Description                                 |
+|------------------------+---------+---------------------------------------------|
+| =vui-render-delay=     | 0.01    | Seconds before deferred render (nil=immediate) |
 | =vui-timing-enabled=    | nil    | Enable timing collection           |
 
 ** Debugging

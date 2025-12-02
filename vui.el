@@ -1056,12 +1056,13 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
 (defvar vui--render-pending-p nil
   "Non-nil if a re-render is pending (during batched updates).")
 
-(defvar vui--idle-timer nil
-  "Timer for deferred rendering when Emacs is idle.")
+(defvar vui--render-timer nil
+  "Timer for deferred rendering.")
 
-(defcustom vui-idle-render-delay 0.01
+(defcustom vui-render-delay 0.01
   "Seconds to wait before rendering when using deferred rendering.
-Set to nil to disable idle-time rendering (render immediately)."
+This delay allows multiple state changes to be batched into a single
+re-render for better performance.  Set to nil to render immediately."
   :type '(choice (number :tag "Delay in seconds")
           (const :tag "Disabled" nil))
   :group 'vui)
@@ -1141,12 +1142,12 @@ executing BODY."
     `(let ((,buf (current-buffer))
            (,instance vui--current-instance)
            (,root vui--root-instance))
-       (lambda ()
-         (when (buffer-live-p ,buf)
-           (with-current-buffer ,buf
-             (let ((vui--current-instance ,instance)
-                   (vui--root-instance ,root))
-               ,@body)))))))
+      (lambda ()
+        (when (buffer-live-p ,buf)
+         (with-current-buffer ,buf
+          (let ((vui--current-instance ,instance)
+                (vui--root-instance ,root))
+           ,@body)))))))
 
 (defmacro vui-async-callback (args &rest body)
   "Create an async callback that captures component context and accepts ARGS.
@@ -1175,40 +1176,61 @@ Compare with `vui-with-async-context':
     `(let ((,buf (current-buffer))
            (,instance vui--current-instance)
            (,root vui--root-instance))
-       (lambda ,args
-         (when (buffer-live-p ,buf)
-           (with-current-buffer ,buf
-             (let ((vui--current-instance ,instance)
-                   (vui--root-instance ,root))
-               ,@body)))))))
+      (lambda ,args
+        (when (buffer-live-p ,buf)
+         (with-current-buffer ,buf
+          (let ((vui--current-instance ,instance)
+                (vui--root-instance ,root))
+           ,@body)))))))
+
+(defun vui--find-root (instance)
+  "Find the root instance by walking up the parent chain from INSTANCE."
+  (when instance
+    (let ((current instance))
+      (while (vui-instance-parent current)
+        (setq current (vui-instance-parent current)))
+      current)))
+
+(defun vui--get-root-instance ()
+  "Get the root instance from current context.
+Checks `vui--root-instance' (buffer-local) first, then tries to find
+it via `vui--current-instance' (works even in different buffer contexts)."
+  (or vui--root-instance
+      (vui--find-root vui--current-instance)))
 
 (defun vui--schedule-render ()
   "Schedule a re-render of the root instance.
 If inside a vui-batch, the render is deferred until batch completes.
-Otherwise, render immediately or after idle delay based on config."
-  (when vui--root-instance
-    (if (> vui--batch-depth 0)
-        ;; Inside a batch - just mark as pending
-        (setq vui--render-pending-p t)
-      ;; Not in a batch - render based on config
-      (if vui-idle-render-delay
-          ;; Deferred rendering
-          (vui--schedule-idle-render)
-        ;; Immediate rendering
-        (vui--rerender-instance vui--root-instance)))))
+Otherwise, render immediately or after delay based on config."
+  (let ((root (vui--get-root-instance)))
+    (when root
+      (if (> vui--batch-depth 0)
+          ;; Inside a batch - just mark as pending
+          (setq vui--render-pending-p t)
+        ;; Not in a batch - render based on config
+        (if vui-render-delay
+            ;; Deferred rendering
+            (vui--schedule-deferred-render-for root)
+          ;; Immediate rendering
+          (vui--rerender-instance root))))))
 
-(defun vui--schedule-idle-render ()
-  "Schedule a render when Emacs becomes idle."
-  (when vui--idle-timer
-    (cancel-timer vui--idle-timer))
-  (let ((root vui--root-instance))
-    (setq vui--idle-timer
-          (run-with-idle-timer
-           vui-idle-render-delay nil
+(defun vui--schedule-deferred-render ()
+  "Schedule a deferred render using current context."
+  (vui--schedule-deferred-render-for (vui--get-root-instance)))
+
+(defun vui--schedule-deferred-render-for (root)
+  "Schedule a render of ROOT after a short delay.
+Uses a regular timer so the render fires reliably regardless of
+whether Emacs is idle."
+  (when root
+    (when vui--render-timer
+      (cancel-timer vui--render-timer))
+    (setq vui--render-timer
+          (run-with-timer
+           vui-render-delay nil
            (lambda ()
-             (setq vui--idle-timer nil)
-             (when root
-               (vui--rerender-instance root)))))))
+             (setq vui--render-timer nil)
+             (vui--rerender-instance root))))))
 
 (defmacro vui-batch (&rest body)
   "Batch state updates in BODY into a single re-render.
@@ -1220,27 +1242,29 @@ Example:
   (vui-batch
     (vui-set-state \\='count (1+ count))
     (vui-set-state \\='name \"Bob\"))"
-  `(let ((vui--batch-depth (1+ vui--batch-depth)))
+  ;; Capture root at start before BODY runs (BODY might switch buffers)
+  `(let ((vui--batch-depth (1+ vui--batch-depth))
+         (vui--batch-root (vui--get-root-instance)))
     (unwind-protect
         (progn ,@body)
       (cl-decf vui--batch-depth)
       (when (and (= vui--batch-depth 0)
-             vui--render-pending-p
-             vui--root-instance)
-       ;; End of outermost batch - schedule deferred re-render
-       ;; Using deferred rendering avoids re-rendering while still
-       ;; inside a widget callback, which can cause issues
-       (setq vui--render-pending-p nil)
-       (if vui-idle-render-delay
-           (vui--schedule-idle-render)
-         (vui--rerender-instance vui--root-instance))))))
+                 vui--render-pending-p
+                 vui--batch-root)
+        ;; End of outermost batch - schedule deferred re-render
+        ;; Using deferred rendering avoids re-rendering while still
+        ;; inside a widget callback, which can cause issues
+        (setq vui--render-pending-p nil)
+        (if vui-render-delay
+            (vui--schedule-deferred-render-for vui--batch-root)
+          (vui--rerender-instance vui--batch-root))))))
 
 (defun vui-flush-sync ()
-  "Force immediate re-render, bypassing any pending idle timers.
+  "Force immediate re-render, bypassing any pending timers.
 Use when you need the UI to update synchronously."
-  (when vui--idle-timer
-    (cancel-timer vui--idle-timer)
-    (setq vui--idle-timer nil))
+  (when vui--render-timer
+    (cancel-timer vui--render-timer)
+    (setq vui--render-timer nil))
   (when vui--root-instance
     (vui--rerender-instance vui--root-instance)))
 

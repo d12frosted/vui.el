@@ -562,6 +562,99 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect mount-count :to-equal 1))
           (kill-buffer "*test-mount2*")))))
 
+  (it "triggers re-render when vui-set-state called in on-mount"
+    (let ((render-count 0))
+      (defcomponent mount-set-state ()
+        :state ((value "initial"))
+        :on-mount
+        (vui-set-state :value "from-mount")
+        :render
+        (progn
+          (setq render-count (1+ render-count))
+          (vui-text value)))
+      (let ((instance (vui-mount (vui-component 'mount-set-state) "*test-mount-state*")))
+        (unwind-protect
+            (progn
+              ;; Flush the deferred render scheduled by vui-set-state
+              (vui-flush-sync)
+              ;; Should have rendered twice: initial + after on-mount set state
+              (expect render-count :to-equal 2)
+              ;; Final state should be from on-mount
+              (expect (buffer-string) :to-equal "from-mount"))
+          (kill-buffer "*test-mount-state*")))))
+
+  (it "triggers re-render when vui-batch used in on-mount"
+    (let ((render-count 0))
+      (defcomponent mount-batch-state ()
+        :state ((a "initial-a")
+                (b "initial-b"))
+        :on-mount
+        (vui-batch
+         (vui-set-state :a "from-mount-a")
+         (vui-set-state :b "from-mount-b"))
+        :render
+        (progn
+          (setq render-count (1+ render-count))
+          (vui-text (concat a " " b))))
+      (let ((instance (vui-mount (vui-component 'mount-batch-state) "*test-mount-batch*")))
+        (unwind-protect
+            (progn
+              ;; Flush the deferred render scheduled by vui-batch
+              (vui-flush-sync)
+              ;; Should have rendered twice: initial + after on-mount batch
+              (expect render-count :to-equal 2)
+              ;; Final state should be from on-mount
+              (expect (buffer-string) :to-equal "from-mount-a from-mount-b"))
+          (kill-buffer "*test-mount-batch*")))))
+
+  (it "deferred timer fires automatically for on-mount state changes"
+    (let ((render-count 0))
+      (defcomponent mount-timer-test ()
+        :state ((value "initial"))
+        :on-mount
+        (vui-set-state :value "from-mount")
+        :render
+        (progn
+          (setq render-count (1+ render-count))
+          (vui-text value)))
+      (let ((instance (vui-mount (vui-component 'mount-timer-test) "*test-timer*")))
+        (unwind-protect
+            (progn
+              ;; First render should have happened
+              (expect render-count :to-equal 1)
+              (expect (buffer-string) :to-equal "initial")
+              ;; Let deferred timer fire (vui-render-delay is 0.01s)
+              (sleep-for 0.05)
+              ;; Second render should have happened
+              (expect render-count :to-equal 2)
+              (expect (buffer-string) :to-equal "from-mount"))
+          (kill-buffer "*test-timer*")))))
+
+  (it "vui-batch works inside with-temp-buffer in on-mount"
+    (let ((render-count 0))
+      (defcomponent mount-temp-buffer-test ()
+        :state ((data nil))
+        :on-mount
+        ;; Simulate loading data from a file using with-temp-buffer
+        (with-temp-buffer
+          (insert "loaded-data")
+          (let ((loaded (buffer-string)))
+            (vui-batch
+             (vui-set-state :data loaded))))
+        :render
+        (progn
+          (setq render-count (1+ render-count))
+          (vui-text (or data "none"))))
+      (let ((instance (vui-mount (vui-component 'mount-temp-buffer-test) "*test-temp-buf*")))
+        (unwind-protect
+            (progn
+              ;; Let deferred timer fire
+              (sleep-for 0.05)
+              ;; Should have rendered twice and show loaded data
+              (expect render-count :to-equal 2)
+              (expect (buffer-string) :to-equal "loaded-data"))
+          (kill-buffer "*test-temp-buf*")))))
+
   (it "calls on-unmount when component is removed"
     (let ((unmounted nil)
           (show-child t))
@@ -1665,7 +1758,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
 (describe "vui-batch"
   (it "batches multiple state updates into single render"
-    (let ((vui-idle-render-delay nil)  ; Disable idle rendering
+    (let ((vui-render-delay nil)  ; Disable idle rendering
           (render-count 0))
       (defcomponent batch-test ()
         :state ((a 0) (b 0))
@@ -1691,7 +1784,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (kill-buffer "*test-batch*")))))
 
   (it "handles nested batches correctly"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent nested-batch-test ()
         :state ((x 0))
@@ -1717,7 +1810,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (kill-buffer "*test-nested-batch*")))))
 
   (it "does not render if no state changes"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent no-change-batch ()
         :state ((val 0))
@@ -1736,7 +1829,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
 (describe "vui-flush-sync"
   (it "forces immediate render"
-    (let ((vui-idle-render-delay 10)  ; Long delay
+    (let ((vui-render-delay 10)  ; Long delay
           (render-count 0))
       (defcomponent flush-test ()
         :state ((val 0))
@@ -1764,7 +1857,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
 (describe "should-update"
   (it "always renders on first render"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent always-skip ()
         :should-update nil  ; Always return nil - but first render still happens
@@ -1777,7 +1870,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer "*test-first-render*"))))
 
   (it "skips render when should-update returns nil"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent skip-renders ()
         :state ((count 0))
@@ -1804,7 +1897,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (kill-buffer "*test-skip*")))))
 
   (it "renders when should-update returns t"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent always-render ()
         :state ((count 0))
@@ -1828,7 +1921,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (kill-buffer "*test-always*")))))
 
   (it "can compare prev values in should-update"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (render-count 0))
       (defcomponent smart-update ()
         :state ((important 0) (unimportant 0))
@@ -1858,7 +1951,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (kill-buffer "*test-smart*")))))
 
   (it "does not call on-update when render skipped"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (update-count 0))
       (defcomponent no-update-call ()
         :state ((val 0))
@@ -1905,7 +1998,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (expect (vui--deps-equal-p '(1 2) '(2 2) first-only) :to-be nil)))
 
   (it "works with use-memo* macro"
-    (let ((vui-idle-render-delay nil)
+    (let ((vui-render-delay nil)
           (compute-count 0))
       (defcomponent memo-compare-test ()
         :state ((mode 'view))
@@ -2479,9 +2572,9 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 (describe "lifecycle hooks"
   ;; Disable idle rendering for tests - idle timers don't fire in batch mode
   (before-each
-    (setq vui-idle-render-delay nil))
+    (setq vui-render-delay nil))
   (after-each
-    (setq vui-idle-render-delay 0.01))
+    (setq vui-render-delay 0.01))
 
   (describe "on-mount"
     (it "is called when component first renders"
