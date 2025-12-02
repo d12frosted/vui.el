@@ -2503,34 +2503,36 @@ Handles :truncate and overflow:
            (pad-right (or (vui-vnode-box-padding-right vnode) 0))
            (child (vui-vnode-box-child vnode))
            (pad-left-str (make-string pad-left ?\s))
-           ;; Render child to string to measure
-           (content (with-temp-buffer
-                      (vui--render-vnode child)
-                      (buffer-string)))
-           ;; Add left padding after each newline for block indentation
-           (content (if (> pad-left 0)
-                        (replace-regexp-in-string
-                         "\n" (concat "\n" pad-left-str) content)
-                      content))
-           (content-width (string-width content))
+           ;; First render to temp buffer to measure width
+           (content-width (with-temp-buffer
+                            (vui--render-vnode child)
+                            (string-width (buffer-string))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding
       (insert pad-left-str)
-      ;; Insert content with alignment
-      (pcase align
-        (:left
-         (insert content)
-         (insert (make-string padding ?\s)))
-        (:right
-         (insert (make-string padding ?\s))
-         (insert content))
-        (:center
-         (let ((left-pad (/ padding 2))
-               (right-pad (- padding (/ padding 2))))
-           (insert (make-string left-pad ?\s))
-           (insert content)
-           (insert (make-string right-pad ?\s)))))
+      ;; Record start position for post-processing newlines
+      (let ((content-start (point)))
+        ;; Render content with alignment (render properly to get widgets)
+        (pcase align
+          (:left
+           (vui--render-vnode child)
+           (insert (make-string padding ?\s)))
+          (:right
+           (insert (make-string padding ?\s))
+           (vui--render-vnode child))
+          (:center
+           (let ((left-pad (/ padding 2))
+                 (right-pad (- padding (/ padding 2))))
+             (insert (make-string left-pad ?\s))
+             (vui--render-vnode child)
+             (insert (make-string right-pad ?\s)))))
+        ;; Add left padding after each newline for block indentation
+        (when (> pad-left 0)
+          (save-excursion
+            (goto-char content-start)
+            (while (search-forward "\n" nil t)
+              (insert pad-left-str)))))
       ;; Insert right padding
       (insert (make-string pad-right ?\s))))
 

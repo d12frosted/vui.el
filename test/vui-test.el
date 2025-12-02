@@ -329,7 +329,36 @@ Buttons are widget.el push-buttons, so we use widget-apply."
     (with-temp-buffer
       (vui-render (vui-box (vui-text "x") :width 10 :padding-left 2 :padding-right 2))
       ;; width=10, padding=2+2, inner=6, content=1, fill=5
-      (expect (buffer-string) :to-equal "  x       "))))
+      (expect (buffer-string) :to-equal "  x       ")))
+
+  (it "applies padding-left to multiline content"
+    (with-temp-buffer
+      (vui-render (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
+                          :width 5 :padding-left 2))
+      ;; Each line should have 2-space indent
+      ;; Alignment padding (1 space) added at end of content block
+      (expect (buffer-string) :to-equal "  a\n  b ")))
+
+  (it "preserves button interactivity inside box"
+    (let ((clicked nil))
+      (defcomponent box-button-test ()
+        :render
+        (vui-box
+         (vui-button "Click"
+           :on-click (lambda () (setq clicked t)))
+         :padding-left 2))
+      (let ((instance (vui-mount (vui-component 'box-button-test) "*test-box-btn*")))
+        (unwind-protect
+            (with-current-buffer "*test-box-btn*"
+              ;; Find the button (after padding)
+              (goto-char (point-min))
+              (skip-chars-forward " ")  ; Skip padding
+              ;; Widget should exist at button position
+              (expect (widget-at (point)) :to-be-truthy)
+              ;; Click should work
+              (vui-test--click-button-at (point))
+              (expect clicked :to-be-truthy))
+          (kill-buffer "*test-box-btn*"))))))
 
 (describe "vui-list"
   (it "renders items vertically by default"
