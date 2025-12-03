@@ -2119,9 +2119,13 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
    ((stringp cell) (string-width cell))
    ;; For any vnode: render to temp buffer and measure
    ;; This is the universal approach that works for any component
+   ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
+   ;; orphaned instances from polluting the parent's children list
    (t (with-temp-buffer
         (let ((vui--current-instance nil)
-              (vui--root-instance nil))
+              (vui--root-instance nil)
+              (vui--new-children nil)
+              (vui--child-index 0))
           (vui--render-vnode cell))
         (string-width (buffer-string))))))
 
@@ -2132,9 +2136,13 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
    ((null cell) "")
    ((stringp cell) cell)
    ;; For vnodes, render to temp buffer and get string
+   ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
+   ;; orphaned instances from polluting the parent's children list
    (t (with-temp-buffer
         (let ((vui--current-instance nil)
-              (vui--root-instance nil))
+              (vui--root-instance nil)
+              (vui--new-children nil)
+              (vui--child-index 0))
           (vui--render-vnode cell))
         (buffer-string)))))
 

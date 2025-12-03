@@ -2724,4 +2724,137 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (expect unmount-count :to-equal 1))
             (kill-buffer "*test-toggle*")))))))
 
+(describe "table with component cells"
+  ;; Disable idle rendering for tests
+  (before-each
+    (setq vui-render-delay nil))
+  (after-each
+    (setq vui-render-delay 0.01))
+
+  (it "allows multiple state updates from buttons in table cells"
+    ;; This test reproduces a bug where component cells in tables
+    ;; create orphaned instances during width measurement (vui--cell-to-string),
+    ;; which then get reused on re-render, breaking the parent chain
+    ;; and causing state updates to go to the wrong instance.
+    ;;
+    ;; Structure (matching wine-tasting example):
+    ;; - table-app (has :scores state)
+    ;;   └─ scores-table (intermediate component, receives on-change prop)
+    ;;      └─ vui-table
+    ;;         └─ score-cell (receives on-change prop)
+    ;;            └─ vui-button
+    (let ((click-log nil)
+          (render-log nil))
+      ;; Innermost: button component that calls on-change
+      (defcomponent score-cell (id on-change)
+        :render
+        (vui-button (format "btn-%s" id)
+          :on-click (lambda ()
+                      ;; Log the instance parent chain at click time
+                      (let ((instance vui--current-instance)
+                            (parents nil))
+                        (while instance
+                          (push (vui-component-def-name (vui-instance-def instance))
+                                parents)
+                          (setq instance (vui-instance-parent instance)))
+                        (push (list 'click id 'parents (nreverse parents)) click-log))
+                      (funcall on-change id 99))))
+
+      ;; Middle: table component that creates score-cell components
+      (defcomponent scores-table (items on-change)
+        :render
+        (vui-table
+         :columns '((:width 10 :grow t))
+         :rows (mapcar (lambda (item)
+                         (list (vui-component 'score-cell
+                                 :key (plist-get item :id)
+                                 :id (plist-get item :id)
+                                 :on-change on-change)))
+                       items)))
+
+      ;; Outer: app component with state
+      (defcomponent table-app ()
+        :state ((scores '((:id 1 :val 0) (:id 2 :val 0))))
+        :render
+        (progn
+          ;; Log each render with current scores state
+          (push (copy-tree scores) render-log)
+          (let ((handle-change
+                 (lambda (id new-val)
+                   (push (list id scores) click-log)
+                   (vui-set-state :scores
+                     (mapcar (lambda (item)
+                               (if (= (plist-get item :id) id)
+                                   (plist-put (copy-sequence item) :val new-val)
+                                 item))
+                             scores)))))
+            (vui-component 'scores-table
+              :items scores
+              :on-change handle-change))))
+
+      (let ((instance (vui-mount (vui-component 'table-app)
+                                 "*test-table-app*")))
+        (unwind-protect
+            (with-current-buffer "*test-table-app*"
+              ;; Find and click first button
+              (goto-char (point-min))
+              (search-forward "[btn-1]")
+              (backward-char 2)
+              (vui-test--click-button-at (point))
+
+              ;; First click logged - check parent chain
+              ;; Structure: (click id parents (list-of-parents))
+              ;; If bug present, parent chain will be just (score-cell) without ancestors
+              (let* ((first-parent-log (seq-find (lambda (x) (eq (car x) 'click)) click-log))
+                     ;; parents is the 4th element: (click id parents (...))
+                     (parents (nth 3 first-parent-log)))
+                (expect parents :to-contain 'table-app)
+                (expect parents :to-contain 'scores-table)
+                (expect parents :to-contain 'score-cell))
+              ;; Also verify state update was logged
+              (let ((first-state-click (seq-find (lambda (x) (numberp (car x))) click-log)))
+                (expect (car first-state-click) :to-equal 1))
+
+              ;; Click second button
+              (goto-char (point-min))
+              (search-forward "[btn-2]")
+              (backward-char 2)
+              (vui-test--click-button-at (point))
+
+              ;; Check that the re-render after first click saw updated state
+              ;; render-log is (most-recent . older), so after 2 renders:
+              ;; - first element is render #2 (after first click)
+              ;; - second element is render #1 (initial)
+              (expect (length render-log) :to-be-greater-than 1)
+              (let* ((render-after-click (car render-log))
+                     (item-1-in-render (seq-find (lambda (i) (= (plist-get i :id) 1))
+                                                 render-after-click)))
+                ;; BUG: If state was set on orphaned instance, render sees old state
+                (expect (plist-get item-1-in-render :val) :to-equal 99))
+
+              ;; Second click - check parent chain
+              ;; BUG: After re-render, orphaned instances may be reused, breaking parent chain
+              (let* ((second-parent-logs (seq-filter (lambda (x) (eq (car x) 'click)) click-log))
+                     ;; Most recent click is first in filtered list
+                     (second-parent-log (car second-parent-logs))
+                     (parents (nth 3 second-parent-log)))
+                ;; This is the key test: parent chain should be intact after re-render
+                (expect parents :to-contain 'table-app)
+                (expect parents :to-contain 'scores-table)
+                (expect parents :to-contain 'score-cell))
+
+              ;; Second click should see updated state from first click
+              ;; BUG: If orphaned instances are reused, the second click
+              ;; will see stale state (scores with val=0 instead of val=99 for id=1)
+              (let* ((state-clicks (seq-filter (lambda (x) (numberp (car x))) click-log))
+                     ;; Most recent state click is first
+                     (second-state-click (car state-clicks)))
+                (expect (car second-state-click) :to-equal 2)
+                ;; The scores passed to second click should have id=1 with val=99
+                (let* ((scores-at-click (cadr second-state-click))
+                       (item-1 (seq-find (lambda (i) (= (plist-get i :id) 1))
+                                         scores-at-click)))
+                  (expect (plist-get item-1 :val) :to-equal 99))))
+          (kill-buffer "*test-table-app*"))))))
+
 ;;; vui-test.el ends here
