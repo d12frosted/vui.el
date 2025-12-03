@@ -2255,8 +2255,8 @@ BORDER-STYLE is nil, :ascii, or :unicode.
 HEADER-P indicates if this is a header row.
 
 Handles :truncate and overflow:
-- If content > width and :truncate t: show truncated content with ...
-- If content > width and :truncate nil: show content up to width, use ¦ separator"
+- If content > width and :truncate t: truncate with ...
+- If content > width and no :truncate: show up to width, use ¦ separator"
   (let ((sep (pcase border-style
                (:ascii "|")
                (:unicode "│")
