@@ -2505,8 +2505,16 @@ Handles :truncate and overflow:
         ;; newline children render as empty string (marker for blank line)
         ;; other children get indent prefix and rendered content
         (unless (vui-vnode-newline-p child)
-          (insert indent-str)
-          (vui--render-vnode child))
+          ;; Propagate indent to nested vstacks (they handle their own indentation)
+          (if (and (vui-vnode-vstack-p child) (> indent 0))
+              (vui--render-vnode
+               (vui-vnode-vstack--create
+                :children (vui-vnode-vstack-children child)
+                :spacing (vui-vnode-vstack-spacing child)
+                :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
+                :key (vui-vnode-vstack-key child)))
+            (insert indent-str)
+            (vui--render-vnode child)))
         (setq first nil))))
 
    ;; Fixed-width box

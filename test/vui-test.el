@@ -375,7 +375,18 @@ Buttons are widget.el push-buttons, so we use widget-apply."
   (it "renders with indent on each line"
     (with-temp-buffer
       (vui-render (vui-vstack :indent 2 (vui-text "a") (vui-text "b")))
-      (expect (buffer-string) :to-equal "  a\n  b"))))
+      (expect (buffer-string) :to-equal "  a\n  b")))
+
+  (it "accumulates indent in nested vstacks"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "outer1")
+                    (vui-vstack :indent 3
+                      (vui-text "inner1")
+                      (vui-text "inner2"))
+                    (vui-text "outer2")))
+      ;; inner1 and inner2 should both have 5 spaces (2 + 3)
+      (expect (buffer-string) :to-equal "  outer1\n     inner1\n     inner2\n  outer2"))))
 
 (describe "vui-box"
   (it "creates a box vnode"
