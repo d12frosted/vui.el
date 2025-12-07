@@ -3154,4 +3154,146 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                   (expect (plist-get item-1 :val) :to-equal 99))))
           (kill-buffer "*test-table-app*"))))))
 
+(describe "vui-vstack"
+  (it "creates a vstack vnode"
+    (let ((node (vui-vstack (vui-text "a") (vui-text "b"))))
+      (expect (vui-vnode-vstack-p node) :to-be-truthy)
+      (expect (length (vui-vnode-vstack-children node)) :to-equal 2)))
+
+  (it "accepts spacing option"
+    (let ((node (vui-vstack :spacing 2 (vui-text "a"))))
+      (expect (vui-vnode-vstack-spacing node) :to-equal 2)))
+
+  (it "accepts indent option"
+    (let ((node (vui-vstack :indent 4 (vui-text "a"))))
+      (expect (vui-vnode-vstack-indent node) :to-equal 4)))
+
+  (it "accepts key option"
+    (let ((node (vui-vstack :key "my-stack" (vui-text "a"))))
+      (expect (vui-vnode-vstack-key node) :to-equal "my-stack")))
+
+  (it "renders children vertically"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-text "line1") (vui-text "line2")))
+      (expect (buffer-string) :to-equal "line1\nline2")))
+
+  (it "renders with spacing between children"
+    (with-temp-buffer
+      (vui-render (vui-vstack :spacing 1 (vui-text "a") (vui-text "b")))
+      (expect (buffer-string) :to-equal "a\n\nb")))
+
+  (it "renders with indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2 (vui-text "a") (vui-text "b")))
+      (expect (buffer-string) :to-equal "  a\n  b")))
+
+  (it "propagates indent to nested vstacks"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-text "outer")
+                   (vui-vstack
+                    (vui-text "inner1")
+                    (vui-text "inner2"))))
+      (expect (buffer-string) :to-equal "  outer\n  inner1\n  inner2")))
+
+  (it "accumulates indent in nested vstacks"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-text "level1")
+                   (vui-vstack
+                    :indent 2
+                    (vui-text "level2"))))
+      (expect (buffer-string) :to-equal "  level1\n    level2"))))
+
+(describe "vui-hstack"
+  (it "creates an hstack vnode"
+    (let ((node (vui-hstack (vui-text "a") (vui-text "b"))))
+      (expect (vui-vnode-hstack-p node) :to-be-truthy)
+      (expect (length (vui-vnode-hstack-children node)) :to-equal 2)))
+
+  (it "accepts spacing option"
+    (let ((node (vui-hstack :spacing 3 (vui-text "a"))))
+      (expect (vui-vnode-hstack-spacing node) :to-equal 3)))
+
+  (it "accepts indent option"
+    (let ((node (vui-hstack :indent 2 (vui-text "a"))))
+      (expect (vui-vnode-hstack-indent node) :to-equal 2)))
+
+  (it "accepts key option"
+    (let ((node (vui-hstack :key "my-hstack" (vui-text "a"))))
+      (expect (vui-vnode-hstack-key node) :to-equal "my-hstack")))
+
+  (it "renders children horizontally with default spacing"
+    (with-temp-buffer
+      (vui-render (vui-hstack (vui-text "a") (vui-text "b")))
+      (expect (buffer-string) :to-equal "a b")))
+
+  (it "renders with custom spacing"
+    (with-temp-buffer
+      (vui-render (vui-hstack :spacing 3 (vui-text "a") (vui-text "b")))
+      (expect (buffer-string) :to-equal "a   b")))
+
+  (it "renders with zero spacing"
+    (with-temp-buffer
+      (vui-render (vui-hstack :spacing 0 (vui-text "a") (vui-text "b")))
+      (expect (buffer-string) :to-equal "ab"))))
+
+(describe "vstack/hstack indent propagation"
+  (it "propagates indent from vstack to child hstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-text "before")
+                   (vui-hstack :spacing 0 (vui-text "a") (vui-text "b"))))
+      (expect (buffer-string) :to-equal "  before\n  ab")))
+
+  (it "propagates indent through hstack to nested vstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-text "Level 1")
+                   (vui-hstack
+                    :spacing 0
+                    (vui-text "title")
+                    (vui-vstack
+                     :spacing 0
+                     (vui-text "/line1/")
+                     (vui-text "/line2/")))))
+      (expect (buffer-string) :to-equal "  Level 1\n  title/line1/\n  /line2/")))
+
+  (it "handles complex nested layout with indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   (vui-text "Level 1")
+                   (vui-vstack
+                    :indent 2
+                    (vui-text "Level 2")
+                    (vui-text "normal text")
+                    (vui-hstack
+                     :spacing 0
+                     (vui-text "hstack title")
+                     (vui-vstack
+                      :spacing 0
+                      (vui-text "/inside hstack (1)/")
+                      (vui-text "/inside hstack (2)/"))))))
+      (expect (buffer-string) :to-equal "Level 1\n  Level 2\n  normal text\n  hstack title/inside hstack (1)/\n  /inside hstack (2)/")))
+
+  (it "accumulates indent through multiple nesting levels"
+    (with-temp-buffer
+      ;; When vstack is inside hstack, first child has no indent (continues horizontally)
+      ;; Subsequent children get the accumulated indent (inherited + own)
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-text "outer")
+                   (vui-hstack
+                    :spacing 0
+                    (vui-text "h:")
+                    (vui-vstack
+                     :indent 2
+                     (vui-text "inner1")
+                     (vui-text "inner2")))))
+      (expect (buffer-string) :to-equal "  outer\n  h:inner1\n    inner2"))))
+
 ;;; vui-test.el ends here

@@ -457,7 +457,8 @@ Returns a list of instances."
                                 (:constructor vui-vnode-hstack--create))
   "Horizontal layout container."
   children   ; List of child vnodes
-  spacing)   ; Spaces between children (default 1)
+  spacing    ; Spaces between children (default 1)
+  indent)    ; Inherited indent from parent (for multi-line children)
 
 ;; Layout: vertical stack
 (cl-defstruct (vui-vnode-vstack (:include vui-vnode)
@@ -465,7 +466,8 @@ Returns a list of instances."
   "Vertical layout container."
   children   ; List of child vnodes
   spacing    ; Blank lines between children (default 0)
-  indent)    ; Left indent for all children (default 0)
+  indent     ; Left indent for all children (default 0)
+  skip-first-indent)  ; When t, skip indent for first child (used inside hstack)
 
 ;; Layout: fixed-width box
 (cl-defstruct (vui-vnode-box (:include vui-vnode)
@@ -849,23 +851,27 @@ Usage: (vui-select :value \"apple\"
   "Create a horizontal stack layout.
 ARGS can start with keyword options, followed by children.
 Options: :spacing N (spaces between children, default 1)
+         :indent N (inherited indent, usually set by parent vstack)
          :key KEY (for reconciliation)
 
 Usage: (vui-hstack child1 child2 child3)
        (vui-hstack :spacing 2 child1 child2)"
   (let ((spacing 1)
+        (indent 0)
         (key nil)
         (children nil))
     ;; Parse keyword arguments
     (while (and args (keywordp (car args)))
       (pcase (pop args)
         (:spacing (setq spacing (pop args)))
+        (:indent (setq indent (pop args)))
         (:key (setq key (pop args)))))
     ;; Remaining args are children
     (setq children (remq nil (flatten-list args)))
     (vui-vnode-hstack--create
      :children children
      :spacing spacing
+     :indent indent
      :key key)))
 
 (defun vui-vstack (&rest args)
@@ -2477,6 +2483,7 @@ Handles :truncate and overflow:
    ;; Horizontal stack
    ((vui-vnode-hstack-p vnode)
     (let ((spacing (or (vui-vnode-hstack-spacing vnode) 1))
+          (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
           (space-str nil)
           (first t))
@@ -2484,7 +2491,17 @@ Handles :truncate and overflow:
       (dolist (child children)
         (unless first
           (insert space-str))
-        (vui--render-vnode child)
+        ;; Propagate indent to child vstacks (for multi-line content)
+        ;; Set skip-first-indent because the first line continues horizontally
+        (if (and (vui-vnode-vstack-p child) (> indent 0))
+            (vui--render-vnode
+             (vui-vnode-vstack--create
+              :children (vui-vnode-vstack-children child)
+              :spacing (vui-vnode-vstack-spacing child)
+              :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
+              :skip-first-indent t
+              :key (vui-vnode-vstack-key child)))
+          (vui--render-vnode child))
         (setq first nil))))
 
    ;; Vertical stack
@@ -2493,6 +2510,7 @@ Handles :truncate and overflow:
    ((vui-vnode-vstack-p vnode)
     (let ((spacing (or (vui-vnode-vstack-spacing vnode) 0))
           (indent (or (vui-vnode-vstack-indent vnode) 0))
+          (skip-first-indent (vui-vnode-vstack-skip-first-indent vnode))
           (children (vui-vnode-vstack-children vnode))
           (indent-str nil)
           (first t))
@@ -2505,16 +2523,35 @@ Handles :truncate and overflow:
         ;; newline children render as empty string (marker for blank line)
         ;; other children get indent prefix and rendered content
         (unless (vui-vnode-newline-p child)
-          ;; Propagate indent to nested vstacks (they handle their own indentation)
-          (if (and (vui-vnode-vstack-p child) (> indent 0))
+          ;; Skip indent for first child if skip-first-indent is set
+          ;; (used when vstack is inside hstack - first line continues horizontally)
+          (let ((skip-this-indent (and first skip-first-indent)))
+            (cond
+             ;; Propagate indent to nested vstacks (they handle their own indentation)
+             ;; Also propagate skip-first-indent if this is the first child we're skipping
+             ((and (vui-vnode-vstack-p child) (> indent 0))
               (vui--render-vnode
                (vui-vnode-vstack--create
                 :children (vui-vnode-vstack-children child)
                 :spacing (vui-vnode-vstack-spacing child)
                 :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
-                :key (vui-vnode-vstack-key child)))
-            (insert indent-str)
-            (vui--render-vnode child)))
+                :skip-first-indent skip-this-indent
+                :key (vui-vnode-vstack-key child))))
+             ;; Propagate indent to hstacks (for multi-line children inside hstack)
+             ((and (vui-vnode-hstack-p child) (> indent 0))
+              (unless skip-this-indent
+                (insert indent-str))
+              (vui--render-vnode
+               (vui-vnode-hstack--create
+                :children (vui-vnode-hstack-children child)
+                :spacing (vui-vnode-hstack-spacing child)
+                :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
+                :key (vui-vnode-hstack-key child))))
+             ;; Other children: insert indent (if needed) and render
+             (t
+              (when (and (> indent 0) (not skip-this-indent))
+                (insert indent-str))
+              (vui--render-vnode child)))))
         (setq first nil))))
 
    ;; Fixed-width box
