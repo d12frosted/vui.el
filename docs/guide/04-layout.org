@@ -379,12 +379,13 @@ See =docs/examples/05-wine-tasting.el= for a complete example with:
 
 * Dynamic Lists - =vui-list=
 
-Renders a list of items using a render function:
+Renders a list of items using a render function. Returns a =vstack= for vertical
+lists (default) or =hstack= for horizontal lists, ensuring proper indent propagation.
 
 #+begin_src elisp
 (vui-list '("Apple" "Banana" "Cherry")
           (lambda (item)
-            (vui-text (format "• %s\n" item))))
+            (vui-text (format "• %s" item))))
 #+end_src
 
 Output:
@@ -407,6 +408,20 @@ For efficient updates, provide a key function:
 #+end_src
 
 The key function returns a unique identifier for each item.
+
+** With Indentation
+
+Lists properly inherit indent from parent containers, or you can set it directly:
+
+#+begin_src elisp
+;; Inherits indent from parent vstack
+(vui-vstack :indent 2
+            (vui-text "Items:")
+            (vui-list items #'vui-text))
+
+;; Or set indent directly
+(vui-list items #'vui-text nil :indent 2)
+#+end_src
 
 ** Complex List Items
 
@@ -460,7 +475,7 @@ Layouts can be nested for complex structures:
 | =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=                     |
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
 | =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=            |
-| =vui-list=   | Dynamic list rendering | items, render-fn, key-fn                  |
+| =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |
 
 * Try It Yourself
 

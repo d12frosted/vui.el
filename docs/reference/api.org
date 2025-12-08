@@ -442,7 +442,7 @@ interactive buttons, dynamic column widths, and real-time computed statistics.
 ** vui-list
 
 #+begin_src elisp
-(vui-list ITEMS RENDER-FN &optional KEY-FN &key VERTICAL) -> vnode
+(vui-list ITEMS RENDER-FN &optional KEY-FN &key VERTICAL INDENT SPACING) -> vnode
 #+end_src
 
 Render a list of items with proper reconciliation.
@@ -450,10 +450,12 @@ Render a list of items with proper reconciliation.
 - ITEMS :: List of items to render
 - RENDER-FN :: =(lambda (item) vnode)= - renders each item
 - KEY-FN :: =(lambda (item) key)= - extracts key (default: identity)
-- =:vertical= :: If non-nil (default t), adds newlines between items
+- =:vertical= :: If non-nil (default t), returns a =vstack=; otherwise returns an =hstack=
+- =:indent= :: Left indentation in spaces (default 0)
+- =:spacing= :: Blank lines between items for vertical (default 0), spaces for horizontal (default 1)
 
-By default, items are rendered vertically (with newlines between them).
-Use =:vertical nil= for horizontal lists.
+Returns a =vstack= for vertical lists, =hstack= for horizontal lists. This ensures
+proper indent propagation when nested inside other layout containers.
 
 #+begin_src elisp
 ;; Vertical list (default) - each item on its own line
@@ -463,7 +465,10 @@ Use =:vertical nil= for horizontal lists.
           (lambda (todo)
             (plist-get todo :id)))
 
-;; Horizontal list - items on same line
+;; With indentation
+(vui-list items #'vui-text nil :indent 2)
+
+;; Horizontal list - items on same line with spacing
 (vui-list tags
           (lambda (tag) (vui-text (format "[%s]" tag)))
           nil :vertical nil)

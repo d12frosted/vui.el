@@ -1014,11 +1014,14 @@ its children on the next render cycle."
   (when vui--root-instance
     (vui--rerender-instance vui--root-instance)))
 
-(cl-defun vui-list (items render-fn &optional key-fn &key (vertical t))
+(cl-defun vui-list (items render-fn &optional key-fn &key (vertical t) (indent 0) spacing)
   "Render a list of ITEMS using RENDER-FN.
 RENDER-FN is called with each item and should return a vnode.
 KEY-FN extracts a unique key from each item (default: item itself).
-VERTICAL if non-nil (default t), adds newlines between items.
+VERTICAL if non-nil (default t), returns a vstack; otherwise returns an hstack.
+INDENT sets left indentation in spaces (default 0).
+SPACING sets blank lines between items for vertical lists (default 0),
+  or spaces between items for horizontal lists (default 1).
 
 This ensures proper reconciliation when items are added, removed, or reordered.
 
@@ -1027,25 +1030,31 @@ Usage:
             (lambda (item) (vui-text (plist-get item :name)))
             (lambda (item) (plist-get item :id)))
 
-  ;; Horizontal list (no newlines):
+  ;; With indentation:
+  (vui-list items render-fn key-fn :indent 2)
+
+  ;; Horizontal list:
   (vui-list items render-fn key-fn :vertical nil)"
-  (let ((key-fn (or key-fn #'identity)))
-    (vui-vnode-fragment--create
-     :children (let ((result nil)
-                     (first t))
-                 (dolist (item items (nreverse result))
-                   (let* ((key (funcall key-fn item))
-                          (vnode (funcall render-fn item)))
-                     ;; Skip nil vnodes entirely
-                     (when vnode
-                       ;; Set key on the vnode if it supports it
-                       (when (vui-vnode-p vnode)
-                         (setf (vui-vnode-key vnode) key))
-                       ;; Add newline before items (except first) if vertical
-                       (when (and vertical (not first))
-                         (push (vui-newline) result))
-                       (push vnode result)
-                       (setq first nil))))))))
+  (let* ((key-fn (or key-fn #'identity))
+         (children (let ((result nil))
+                     (dolist (item items (nreverse result))
+                       (let* ((key (funcall key-fn item))
+                              (vnode (funcall render-fn item)))
+                         ;; Skip nil vnodes entirely
+                         (when vnode
+                           ;; Set key on the vnode if it supports it
+                           (when (vui-vnode-p vnode)
+                             (setf (vui-vnode-key vnode) key))
+                           (push vnode result)))))))
+    (if vertical
+        (vui-vnode-vstack--create
+         :children children
+         :indent indent
+         :spacing (or spacing 0))
+      (vui-vnode-hstack--create
+       :children children
+       :indent indent
+       :spacing (or spacing 1)))))
 
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.

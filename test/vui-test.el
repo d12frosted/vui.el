@@ -498,12 +498,20 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                             (lambda (item) (vui-text item))))
       (expect (buffer-string) :to-equal "a\nb\nc")))
 
+  (it "returns a vstack when vertical (default)"
+    (let ((node (vui-list '("a" "b") #'vui-text)))
+      (expect (vui-vnode-vstack-p node) :to-be-truthy)))
+
   (it "renders items horizontally when vertical is nil"
     (with-temp-buffer
       (vui-render (vui-list '("a" "b" "c")
                             (lambda (item) (vui-text item))
                             nil :vertical nil))
-      (expect (buffer-string) :to-equal "abc")))
+      (expect (buffer-string) :to-equal "a b c")))
+
+  (it "returns an hstack when vertical is nil"
+    (let ((node (vui-list '("a" "b") #'vui-text nil :vertical nil)))
+      (expect (vui-vnode-hstack-p node) :to-be-truthy)))
 
   (it "applies keys from key-fn"
     (let* ((items '((:id 1 :name "Alice") (:id 2 :name "Bob")))
@@ -512,21 +520,37 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                            (lambda (item) (vui-text (plist-get item :name)))
                            (lambda (item) (plist-get item :id))
                            :vertical nil)))
-      (expect (vui-vnode-fragment-p node) :to-be-truthy)
-      (let ((children (vui-vnode-fragment-children node)))
+      (expect (vui-vnode-hstack-p node) :to-be-truthy)
+      (let ((children (vui-vnode-hstack-children node)))
         (expect (vui-vnode-key (nth 0 children)) :to-equal 1)
         (expect (vui-vnode-key (nth 1 children)) :to-equal 2))))
 
   (it "uses item as key when no key-fn provided"
     (let* ((node (vui-list '("x" "y") #'vui-text nil :vertical nil)))
-      (let ((children (vui-vnode-fragment-children node)))
+      (let ((children (vui-vnode-hstack-children node)))
         (expect (vui-vnode-key (nth 0 children)) :to-equal "x")
         (expect (vui-vnode-key (nth 1 children)) :to-equal "y"))))
 
   (it "handles empty list"
     (with-temp-buffer
       (vui-render (vui-list '() #'vui-text))
-      (expect (buffer-string) :to-equal ""))))
+      (expect (buffer-string) :to-equal "")))
+
+  (it "inherits indent from parent vstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-list '("one" "two" "three") #'vui-text)))
+      (expect (buffer-string) :to-equal "  one\n  two\n  three")))
+
+  (it "supports :indent option"
+    (with-temp-buffer
+      (vui-render (vui-list '("a" "b" "c") #'vui-text nil :indent 3))
+      (expect (buffer-string) :to-equal "   a\n   b\n   c")))
+
+  (it "supports :spacing option"
+    (with-temp-buffer
+      (vui-render (vui-list '("a" "b") #'vui-text nil :spacing 1))
+      (expect (buffer-string) :to-equal "a\n\nb"))))
 
 (describe "vui-render"
   (it "renders text to buffer"
