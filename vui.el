@@ -382,6 +382,30 @@ Returns a list of instances."
         (setq result (append result (vui-get-component-instances component-type child)))))
     result))
 
+;;; Major Mode
+
+(defvar vui-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; Users can add bindings here, e.g., for ace-link
+    map)
+  "Keymap for `vui-mode'.
+This keymap is active in all VUI buffers.  Users and packages can
+add bindings here for functionality like `ace-link'.")
+
+(define-derived-mode vui-mode special-mode "VUI"
+  "Major mode for VUI buffers.
+Provides a base mode for all VUI-rendered content.  Packages that
+use VUI can derive their own modes from this one to add custom
+keybindings while preserving VUI and widget functionality.
+
+\\{vui-mode-map}"
+  :group 'vui
+  ;; Set widget-keymap as parent so widget navigation (TAB, S-TAB) works
+  (set-keymap-parent vui-mode-map widget-keymap)
+  ;; Disable buffer-read-only; widget-setup installs before-change-functions
+  ;; that prevent editing outside of editable fields
+  (setq-local buffer-read-only nil))
+
 ;;; Core Data Structures - Virtual Nodes
 
 ;; Base structure for all virtual nodes
@@ -1830,7 +1854,6 @@ WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
               (vui--render-instance instance)
             (setq vui--rendering-p nil))
           (widget-setup)
-          (use-local-map widget-keymap)
           ;; Restore cursor position
           (vui--restore-cursor-position cursor-info)
           ;; Restore viewport for all windows
@@ -2805,13 +2828,14 @@ Clears the buffer before rendering."
     ;; Should track position relative to logical elements (keys/components),
     ;; not buffer positions. Will be part of component instance system.
     (let ((inhibit-read-only t))
-      (kill-all-local-variables)
+      ;; Enable vui-mode (this also sets up the keymap hierarchy)
+      (unless (derived-mode-p 'vui-mode)
+        (vui-mode))
       (remove-overlays)
       (erase-buffer)
       (vui--render-vnode vnode)
       ;; Setup widgets for keyboard navigation
       (widget-setup)
-      (use-local-map widget-keymap)
       (goto-char (point-min)))))
 
 (defun vui-render-to-buffer (buffer-name vnode)
@@ -2836,7 +2860,9 @@ Returns the root instance."
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf
       (let ((inhibit-read-only t))
-        (kill-all-local-variables)
+        ;; Enable vui-mode (this also sets up the keymap hierarchy)
+        (unless (derived-mode-p 'vui-mode)
+          (vui-mode))
         (remove-overlays)
         (erase-buffer)
         ;; Store root instance for state updates
@@ -2850,7 +2876,6 @@ Returns the root instance."
         ;; widget-setup installs before-change-functions that prevent
         ;; editing outside of editable fields - no need for buffer-read-only
         (widget-setup)
-        (use-local-map widget-keymap)
         ;; Run effects after initial render
         (vui--run-pending-effects)
         (goto-char (point-min))))

@@ -7,9 +7,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- =vui-mode= major mode for VUI buffers. Provides =vui-mode-map= that users and packages can extend (e.g., for =ace-link=). Packages using VUI can derive their own modes from =vui-mode= to add custom keybindings while preserving VUI and widget functionality.
+
 ** Fixed
 
 - =vui-table= now respects =:indent= from parent =vui-vstack=. Previously, only the first line of a table was indented; now all lines are properly indented.
+
+** Changed
+
+- =vui-mount= and =vui-render= now enable =vui-mode= instead of using =kill-all-local-variables=. This preserves derived modes and their keybindings across re-renders.
 
 * v1.0.0-rc.2 - 2025-12-12
 

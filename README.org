@@ -229,6 +229,36 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - Emacs 27.1 or later
 - Built-in =widget.el= (included with Emacs)
 
+* Major Mode
+
+VUI buffers use =vui-mode=, a major mode derived from =special-mode=. This provides:
+
+- =TAB= / =S-TAB= — Navigate between widgets (buttons, fields)
+- =RET= — Activate widget at point
+- Standard =special-mode= bindings (=q= to quit, =g= to revert, etc.)
+
+** Extending with Custom Keybindings
+
+Users can add bindings to =vui-mode-map=:
+
+#+begin_src elisp
+(define-key vui-mode-map (kbd "o") #'ace-link)
+#+end_src
+
+** Deriving Custom Modes
+
+Packages can derive their own modes from =vui-mode= to add custom keybindings:
+
+#+begin_src elisp
+(define-derived-mode my-sidebar-mode vui-mode "MySidebar"
+  "Custom mode for my sidebar."
+  ;; Custom keybindings
+  (define-key my-sidebar-mode-map (kbd "q") #'my-sidebar-close)
+  (define-key my-sidebar-mode-map (kbd "g") #'my-sidebar-refresh))
+#+end_src
+
+When using a derived mode, enable it *before* calling =vui-mount= or =vui-render=. VUI will detect the derived mode and preserve it across re-renders.
+
 * Architecture
 
 vui.el implements a React-like architecture:
