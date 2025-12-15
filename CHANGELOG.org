@@ -14,6 +14,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Fixed
 
 - =vui-table= now respects =:indent= from parent =vui-vstack=. Previously, only the first line of a table was indented; now all lines are properly indented.
+- Cursor preservation now uses path-based widget tracking instead of index-based. Cursor correctly follows widgets when other widgets are added or removed before them. Previously, adding a widget above the cursor position would cause the cursor to land on the wrong widget after re-render.
 
 ** Changed
 

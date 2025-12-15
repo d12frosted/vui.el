@@ -611,6 +611,12 @@ keybindings while preserving VUI and widget functionality.
 (defvar vui--new-children nil
   "Accumulator for child instances created during render.")
 
+(defvar vui--render-path nil
+  "Current vnode path during rendering.
+A list of indices from root to current position, e.g., (0 1 2) means
+child 0 of root, then child 1 of that, then child 2 of that.
+Used for stable cursor preservation across re-renders.")
+
 (defvar vui--pending-effects nil
   "List of effects to run after commit: ((instance effect-id deps effect-fn) ...).")
 
@@ -1840,6 +1846,8 @@ WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
                ;; Save viewport (window-start) for all windows showing this buffer
                (window-info (vui--save-window-starts buffer))
                (vui--root-instance instance)
+               ;; Initialize render path for cursor tracking
+               (vui--render-path nil)
                ;; Clear pending effects before render
                (vui--pending-effects nil))
           ;; Clear widget tracking before re-render
@@ -1878,17 +1886,19 @@ For editable fields, returns the actual text area, not widget decoration."
 
 (defun vui--save-cursor-position ()
   "Save cursor position relative to current widget.
-Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
+Returns plist with :path, :index, :offset for widgets,
+or :line, :column for non-widget positions."
   (let ((widget (widget-at (point)))
         (pos (point)))
     (if widget
         (let* ((bounds (vui--widget-bounds widget))
                (widget-start (car bounds))
-               (delta (if widget-start (- pos widget-start) 0))
+               (offset (if widget-start (- pos widget-start) 0))
+               (path (widget-get widget :vui-path))
                (index (vui--widget-index widget)))
-          (cons index delta))
+          (list :path path :index index :offset offset))
       ;; No widget at point - save line/column as fallback
-      (cons nil (cons (line-number-at-pos) (current-column))))))
+      (list :line (line-number-at-pos) :column (current-column)))))
 
 (defun vui--widget-index (widget)
   "Get index of WIDGET among all widgets in buffer."
@@ -1913,28 +1923,53 @@ Returns (WIDGET-INDEX . DELTA) or (nil . (LINE . COL))."
         (forward-char 1)))
     (nreverse widgets)))
 
+(defun vui--find-widget-by-path (path)
+  "Find widget with matching :vui-path, or nil if not found."
+  (when path
+    (catch 'found
+      (dolist (w (vui--collect-widgets))
+        (when (equal (widget-get w :vui-path) path)
+          (throw 'found w)))
+      nil)))
+
 (defun vui--restore-cursor-position (cursor-info)
   "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'."
-  (let ((index (car cursor-info))
-        (delta (cdr cursor-info)))
-    (if index
-        ;; Had a widget - find it by index and apply delta
-        (let* ((widgets (vui--collect-widgets))
-               (widget (nth index widgets)))
-          (if widget
-              (let* ((bounds (vui--widget-bounds widget))
-                     (start (car bounds))
-                     (end (cdr bounds)))
-                (when (and start end)
-                  ;; Apply delta, but cap to widget bounds
-                  ;; Use end directly (not end-1) since end is exclusive
-                  (goto-char (max start (min (+ start delta) end)))))
-            ;; Widget not found, go to start
-            (goto-char (point-min))))
-      ;; No widget - restore by line/column
+  (let* ((path (plist-get cursor-info :path))
+         (index (plist-get cursor-info :index))
+         (offset (plist-get cursor-info :offset))
+         (line (plist-get cursor-info :line))
+         (column (plist-get cursor-info :column))
+         ;; Single lookup for path-based matching
+         (path-widget (and path (vui--find-widget-by-path path))))
+    (cond
+     ;; Try path-based matching first (most robust)
+     (path-widget
+      (let* ((bounds (vui--widget-bounds path-widget))
+             (start (car bounds))
+             (end (cdr bounds)))
+        (when (and start end)
+          ;; Cap at (1- end) because bounds are exclusive on right
+          (goto-char (max start (min (+ start offset) (1- end)))))))
+     ;; Fall back to index-based matching
+     (index
+      (let* ((widgets (vui--collect-widgets))
+             (widget (nth index widgets)))
+        (if widget
+            (let* ((bounds (vui--widget-bounds widget))
+                   (start (car bounds))
+                   (end (cdr bounds)))
+              (when (and start end)
+                ;; Cap at (1- end) because bounds are exclusive on right
+                (goto-char (max start (min (+ start offset) (1- end))))))
+          (goto-char (point-min)))))
+     ;; Fall back to line/column for non-widget positions
+     ((and line column)
       (goto-char (point-min))
-      (forward-line (1- (car delta)))
-      (move-to-column (cdr delta)))))
+      (forward-line (1- line))
+      (move-to-column column))
+     ;; Last resort
+     (t
+      (goto-char (point-min))))))
 
 (defun vui--remove-widget-overlays ()
   "Remove widget-related overlays, preserving others like hl-line."
@@ -2443,8 +2478,12 @@ Handles :truncate and overflow:
 
    ;; Fragment - render all children
    ((vui-vnode-fragment-p vnode)
-    (dolist (child (vui-vnode-fragment-children vnode))
-      (vui--render-vnode child)))
+    (let ((children (vui-vnode-fragment-children vnode))
+          (idx 0))
+      (dolist (child children)
+        (let ((vui--render-path (cons idx vui--render-path)))
+          (vui--render-vnode child))
+        (cl-incf idx))))
 
    ;; Newline
    ((vui-vnode-newline-p vnode)
@@ -2477,24 +2516,28 @@ Handles :truncate and overflow:
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
+           ;; Capture current path for cursor tracking (reverse stack to get root-first order)
+           (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
            (wrapped-click (vui--wrap-event-callback "on-click" on-click captured-instance))
            ;; Temporarily override bracket variables for no-decoration buttons
            (widget-push-button-prefix (if no-decoration "" widget-push-button-prefix))
            (widget-push-button-suffix (if no-decoration "" widget-push-button-suffix)))
-      (apply #'widget-create 'push-button
-             :tag display-label
-             :button-face (or face 'link)
-             :inactive (when disabled t)
-             :action (lambda (_widget &optional _event)
-                       (when wrapped-click
-                         (let ((vui--current-instance captured-instance)
-                               (vui--root-instance captured-root))
-                           (funcall wrapped-click))))
-             ;; Only pass :help-echo when explicitly set (not :default)
-             ;; nil disables tooltip (performance), string sets custom tooltip
-             (unless (eq help-echo :default)
-               (list :help-echo help-echo)))))
+      (let ((w (apply #'widget-create 'push-button
+                      :tag display-label
+                      :button-face (or face 'link)
+                      :inactive (when disabled t)
+                      :action (lambda (_widget &optional _event)
+                                (when wrapped-click
+                                  (let ((vui--current-instance captured-instance)
+                                        (vui--root-instance captured-root))
+                                    (funcall wrapped-click))))
+                      ;; Only pass :help-echo when explicitly set (not :default)
+                      ;; nil disables tooltip (performance), string sets custom tooltip
+                      (unless (eq help-echo :default)
+                        (list :help-echo help-echo)))))
+        ;; Store path for cursor tracking
+        (widget-put w :vui-path captured-path))))
 
    ;; Checkbox
    ((vui-vnode-checkbox-p vnode)
@@ -2503,15 +2546,19 @@ Handles :truncate and overflow:
            (label (vui-vnode-checkbox-label vnode))
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
+           ;; Capture current path for cursor tracking (reverse stack to get root-first order)
+           (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance)))
-      (widget-create 'checkbox
-                     :value checked
-                     :notify (lambda (widget &rest _)
-                               (when wrapped-change
-                                 (let ((vui--current-instance captured-instance)
-                                       (vui--root-instance captured-root))
-                                   (funcall wrapped-change (widget-value widget))))))
+      (let ((w (widget-create 'checkbox
+                              :value checked
+                              :notify (lambda (widget &rest _)
+                                        (when wrapped-change
+                                          (let ((vui--current-instance captured-instance)
+                                                (vui--root-instance captured-root))
+                                            (funcall wrapped-change (widget-value widget))))))))
+        ;; Store path for cursor tracking
+        (widget-put w :vui-path captured-path))
       (when label
         (insert " " label))))
 
@@ -2523,16 +2570,20 @@ Handles :truncate and overflow:
            (prompt (vui-vnode-select-prompt vnode))
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
+           ;; Capture current path for cursor tracking (reverse stack to get root-first order)
+           (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance)))
-      (widget-create 'push-button
-                     :notify (lambda (&rest _)
-                               (let* ((vui--current-instance captured-instance)
-                                      (vui--root-instance captured-root)
-                                      (choice (completing-read prompt options nil t nil nil value)))
-                                 (when wrapped-change
-                                   (funcall wrapped-change choice))))
-                     (format "%s" (or value "Select...")))))
+      (let ((w (widget-create 'push-button
+                              :notify (lambda (&rest _)
+                                        (let* ((vui--current-instance captured-instance)
+                                               (vui--root-instance captured-root)
+                                               (choice (completing-read prompt options nil t nil nil value)))
+                                          (when wrapped-change
+                                            (funcall wrapped-change choice))))
+                              (format "%s" (or value "Select...")))))
+        ;; Store path for cursor tracking
+        (widget-put w :vui-path captured-path))))
 
    ;; Horizontal stack
    ;; Children that render to nothing (e.g., components returning nil)
@@ -2542,11 +2593,13 @@ Handles :truncate and overflow:
           (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
           (space-str nil)
-          (prev-rendered-p nil))
+          (prev-rendered-p nil)
+          (child-idx 0))
       (setq space-str (make-string spacing ?\s))
       (dolist (child children)
         (let ((sep-start (point))
-              (content-start nil))
+              (content-start nil)
+              (vui--render-path (cons child-idx vui--render-path)))
           ;; Only insert separator if previous child actually rendered something
           (when prev-rendered-p
             (insert space-str))
@@ -2566,7 +2619,8 @@ Handles :truncate and overflow:
           (if (> (point) content-start)
               (setq prev-rendered-p t)
             ;; Child rendered nothing - remove the separator we added
-            (delete-region sep-start (point)))))))
+            (delete-region sep-start (point))))
+        (cl-incf child-idx))))
 
    ;; Vertical stack
    ;; Joins children with \n. newline children render as empty string,
@@ -2579,74 +2633,77 @@ Handles :truncate and overflow:
           (skip-first-indent (vui-vnode-vstack-skip-first-indent vnode))
           (children (vui-vnode-vstack-children vnode))
           (indent-str nil)
-          (prev-rendered-p nil))
+          (prev-rendered-p nil)
+          (child-idx 0))
       (setq indent-str (make-string indent ?\s))
       (dolist (child children)
-        ;; newline children are intentional blank lines - always "render"
-        (if (vui-vnode-newline-p child)
-            (progn
-              ;; Add separator if previous child rendered
+        (let ((vui--render-path (cons child-idx vui--render-path)))
+          ;; newline children are intentional blank lines - always "render"
+          (if (vui-vnode-newline-p child)
+              (progn
+                ;; Add separator if previous child rendered
+                (when prev-rendered-p
+                  (insert "\n")
+                  (dotimes (_ spacing) (insert "\n")))
+                ;; newline itself doesn't insert anything, but counts as rendered
+                (setq prev-rendered-p t))
+            ;; Non-newline children: track if they produce output
+            (let* ((skip-this-indent (and (not prev-rendered-p) skip-first-indent))
+                   (sep-start (point))
+                   (content-start nil))
+              ;; Add separator newline (plus spacing) before child if prev rendered
               (when prev-rendered-p
                 (insert "\n")
                 (dotimes (_ spacing) (insert "\n")))
-              ;; newline itself doesn't insert anything, but counts as rendered
-              (setq prev-rendered-p t))
-          ;; Non-newline children: track if they produce output
-          (let* ((skip-this-indent (and (not prev-rendered-p) skip-first-indent))
-                 (sep-start (point))
-                 (content-start nil))
-            ;; Add separator newline (plus spacing) before child if prev rendered
-            (when prev-rendered-p
-              (insert "\n")
-              (dotimes (_ spacing) (insert "\n")))
-            (cond
-             ;; Propagate indent to nested vstacks (they handle their own indentation)
-             ;; Also propagate skip-first-indent if this is the first child we're skipping
-             ((and (vui-vnode-vstack-p child) (> indent 0))
-              ;; Nested vstacks handle their own indent, measure from here
-              (setq content-start (point))
-              (vui--render-vnode
-               (vui-vnode-vstack--create
-                :children (vui-vnode-vstack-children child)
-                :spacing (vui-vnode-vstack-spacing child)
-                :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
-                :skip-first-indent skip-this-indent
-                :key (vui-vnode-vstack-key child))))
-             ;; Propagate indent to hstacks (for multi-line children inside hstack)
-             ((and (vui-vnode-hstack-p child) (> indent 0))
-              (unless skip-this-indent
-                (insert indent-str))
-              ;; Measure after indent insertion
-              (setq content-start (point))
-              (vui--render-vnode
-               (vui-vnode-hstack--create
-                :children (vui-vnode-hstack-children child)
-                :spacing (vui-vnode-hstack-spacing child)
-                :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
-                :key (vui-vnode-hstack-key child))))
-             ;; Tables: render with indent, then add indent after internal newlines
-             ((and (vui-vnode-table-p child) (> indent 0))
-              (unless skip-this-indent
-                (insert indent-str))
-              (setq content-start (point))
-              (vui--render-vnode child)
-              ;; Add indent after each internal newline
-              (save-excursion
-                (goto-char content-start)
-                (while (search-forward "\n" nil t)
-                  (insert indent-str))))
-             ;; Other children: insert indent (if needed) and render
-             (t
-              (when (and (> indent 0) (not skip-this-indent))
-                (insert indent-str))
-              ;; Measure after indent insertion
-              (setq content-start (point))
-              (vui--render-vnode child)))
-            ;; Check if child actually rendered anything
-            (if (> (point) content-start)
-                (setq prev-rendered-p t)
-              ;; Child rendered nothing - remove separator and any indent we added
-              (delete-region sep-start (point))))))))
+              (cond
+               ;; Propagate indent to nested vstacks (they handle their own indentation)
+               ;; Also propagate skip-first-indent if this is the first child we're skipping
+               ((and (vui-vnode-vstack-p child) (> indent 0))
+                ;; Nested vstacks handle their own indent, measure from here
+                (setq content-start (point))
+                (vui--render-vnode
+                 (vui-vnode-vstack--create
+                  :children (vui-vnode-vstack-children child)
+                  :spacing (vui-vnode-vstack-spacing child)
+                  :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
+                  :skip-first-indent skip-this-indent
+                  :key (vui-vnode-vstack-key child))))
+               ;; Propagate indent to hstacks (for multi-line children inside hstack)
+               ((and (vui-vnode-hstack-p child) (> indent 0))
+                (unless skip-this-indent
+                  (insert indent-str))
+                ;; Measure after indent insertion
+                (setq content-start (point))
+                (vui--render-vnode
+                 (vui-vnode-hstack--create
+                  :children (vui-vnode-hstack-children child)
+                  :spacing (vui-vnode-hstack-spacing child)
+                  :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
+                  :key (vui-vnode-hstack-key child))))
+               ;; Tables: render with indent, then add indent after internal newlines
+               ((and (vui-vnode-table-p child) (> indent 0))
+                (unless skip-this-indent
+                  (insert indent-str))
+                (setq content-start (point))
+                (vui--render-vnode child)
+                ;; Add indent after each internal newline
+                (save-excursion
+                  (goto-char content-start)
+                  (while (search-forward "\n" nil t)
+                    (insert indent-str))))
+               ;; Other children: insert indent (if needed) and render
+               (t
+                (when (and (> indent 0) (not skip-this-indent))
+                  (insert indent-str))
+                ;; Measure after indent insertion
+                (setq content-start (point))
+                (vui--render-vnode child)))
+              ;; Check if child actually rendered anything
+              (if (> (point) content-start)
+                  (setq prev-rendered-p t)
+                ;; Child rendered nothing - remove separator and any indent we added
+                (delete-region sep-start (point))))))
+        (cl-incf child-idx))))
 
    ;; Fixed-width box
    ((vui-vnode-box-p vnode)
@@ -2736,6 +2793,8 @@ Handles :truncate and overflow:
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
+           ;; Capture current path for cursor tracking (reverse stack to get root-first order)
+           (captured-path (reverse vui--render-path))
            ;; Wrap callbacks with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance))
            (wrapped-submit (vui--wrap-event-callback "on-submit" on-submit captured-instance)))
@@ -2753,6 +2812,8 @@ Handles :truncate and overflow:
                                           (let ((vui--current-instance captured-instance)
                                                 (vui--root-instance captured-root))
                                             (funcall wrapped-submit (widget-value widget))))))))
+        ;; Store path for cursor tracking
+        (widget-put w :vui-path captured-path)
         ;; Store key on widget for vui-field-value lookup
         (when field-key
           (widget-put w :vui-key field-key)))))

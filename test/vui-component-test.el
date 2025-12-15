@@ -485,7 +485,121 @@
               (let ((widget-after (widget-at (point))))
                 (expect widget-after :to-be-truthy)
                 (expect (widget-type widget-after) :to-equal 'editable-field))))
-        (kill-buffer "*test-cursor2*")))))
+        (kill-buffer "*test-cursor2*"))))
+
+  (it "preserves cursor when widgets are added before current widget"
+    ;; This tests the case where index-based tracking fails:
+    ;; cursor is on widget at index 0, a new widget is inserted,
+    ;; cursor should stay on original widget (now at index 1)
+    (defcomponent cursor-shift-test ()
+      :state ((buttons nil))
+      :render
+      (vui-vstack
+       (vui-text (format "Count: %d" (length buttons)))
+       (vui-vstack
+        (mapcar (lambda (id)
+                  (vui-button (format "Button %d" id)
+                    :key id
+                    :on-click #'ignore))
+                buttons))
+       (vui-button "[Add]"
+         :on-click (lambda ()
+                     (vui-set-state :buttons
+                       (append buttons (list (1+ (length buttons)))))))))
+    (let ((instance (vui-mount (vui-component 'cursor-shift-test) "*test-cursor-shift*")))
+      (unwind-protect
+          (with-current-buffer "*test-cursor-shift*"
+            ;; Find and position cursor on [Add] button
+            (goto-char (point-min))
+            (search-forward "[Add]")
+            (backward-char 4)
+            (let ((widget-before (widget-at (point))))
+              (expect widget-before :to-be-truthy)
+              ;; Click [Add] - this adds a button BEFORE [Add]
+              (vui-test--click-button-at (point))
+              (vui-flush-sync)
+              ;; Cursor should still be on [Add], not on [Button 1]
+              (let ((widget-after (widget-at (point))))
+                (expect widget-after :to-be-truthy)
+                ;; The widget should still be the [Add] button
+                ;; Check :tag property (where vui stores button label)
+                (expect (widget-get widget-after :tag) :to-match "Add"))))
+        (kill-buffer "*test-cursor-shift*"))))
+
+  (it "preserves cursor when widget type changes at same path"
+    ;; Tests that cursor follows structural position even when widget type changes.
+    ;; Path (1) is at index 1 in the vstack: Header is 0, the button/checkbox is 1.
+    ;; The cursor should follow the path to the new widget type.
+    (defcomponent widget-type-change-test ()
+      :state ((use-checkbox nil))
+      :render
+      (vui-vstack
+       (vui-text "Header")
+       (if use-checkbox
+           (vui-checkbox :checked-p nil :label "Option")
+         (vui-button "[Click me]" :on-click #'ignore))))
+    (let ((instance (vui-mount (vui-component 'widget-type-change-test) "*test-type-change*")))
+      (unwind-protect
+          (with-current-buffer "*test-type-change*"
+            ;; Position cursor on the button (path (1) - second child of vstack)
+            (goto-char (point-min))
+            (search-forward "[Click me]")
+            (backward-char 5)
+            (let* ((widget-before (widget-at (point)))
+                   (path-before (widget-get widget-before :vui-path)))
+              (expect widget-before :to-be-truthy)
+              (expect path-before :to-equal '(1))
+              ;; Change state with proper instance context (without moving cursor)
+              (let ((vui--current-instance instance)
+                    (vui--root-instance instance))
+                (vui-set-state :use-checkbox t))
+              (vui-flush-sync)
+              ;; Cursor should now be on the checkbox (same path)
+              (let* ((widget-after (widget-at (point)))
+                     (path-after (when widget-after (widget-get widget-after :vui-path))))
+                (expect widget-after :to-be-truthy)
+                ;; Path should be the same
+                (expect path-after :to-equal '(1))
+                ;; Widget type should have changed to checkbox
+                (expect (widget-type widget-after) :to-equal 'checkbox))))
+        (kill-buffer "*test-type-change*"))))
+
+  (it "caps cursor offset when widget shrinks"
+    ;; Tests that cursor stays within bounds when widget becomes smaller.
+    ;; Cursor at offset 15 in a 20-char field should cap to end of 5-char field.
+    (defcomponent widget-shrink-test ()
+      :state ((large t))
+      :render
+      (vui-vstack
+       (vui-field :value "test" :size (if large 20 5))))
+    (let ((instance (vui-mount (vui-component 'widget-shrink-test) "*test-shrink*")))
+      (unwind-protect
+          (with-current-buffer "*test-shrink*"
+            ;; Position cursor deep in the field (offset ~15 from start)
+            (goto-char (point-min))
+            (let* ((widget-before (widget-at (point)))
+                   (bounds-before (vui--widget-bounds widget-before))
+                   (field-start (car bounds-before)))
+              (expect widget-before :to-be-truthy)
+              ;; Move to offset 15 within the field
+              (goto-char (+ field-start 15))
+              (expect (widget-at (point)) :to-equal widget-before)
+              ;; Shrink the field
+              (let ((vui--current-instance instance)
+                    (vui--root-instance instance))
+                (vui-set-state :large nil))
+              (vui-flush-sync)
+              ;; Cursor should be on the (smaller) field, capped to its bounds
+              (let* ((widget-after (widget-at (point)))
+                     (bounds-after (vui--widget-bounds widget-after))
+                     (new-start (car bounds-after))
+                     (new-end (cdr bounds-after)))
+                (expect widget-after :to-be-truthy)
+                (expect (widget-type widget-after) :to-equal 'editable-field)
+                ;; Cursor should be within the new smaller bounds [start, end)
+                (expect (>= (point) new-start) :to-be-truthy)
+                (expect (< (point) new-end) :to-be-truthy))))
+        (kill-buffer "*test-shrink*")))))
 
 (describe "vui-table"
   (it "creates a table vnode"

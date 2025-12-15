@@ -99,7 +99,7 @@ vui.el aims to bring React's declarative, component-based model to Emacs, enabli
 +-----------------------------------------------------------------+
 |                    Buffer Renderer                              |
 |  Clears and re-renders buffer content                           |
-|  Handles cursor preservation via widget indexing                |
+|  Handles cursor preservation via widget path tracking           |
 +-----------------------------------------------------------------+
                               |
                               v
@@ -121,7 +121,7 @@ State Change (vui-set-state)
      |
      v
 +--------------+
-| Save cursor  |  Track cursor position relative to widgets
+| Save cursor  |  Track cursor position via widget path + offset
 +--------------+
      |
      v
@@ -141,7 +141,7 @@ State Change (vui-set-state)
      |
      v
 +--------------+
-| Restore      |  Restore cursor to same widget index
+| Restore      |  Restore cursor to widget at same path
 +--------------+
      |
      v
@@ -181,7 +181,7 @@ State Change (vui-set-state)
 - On state change, clear buffer and re-render entire tree
 - Simpler than fine-grained DOM diffing
 - Widget preservation via =widget-setup= after render
-- Cursor preserved by tracking widget index before/after
+- Cursor preserved by tracking widget path (vnode tree position) before/after
 
 * Core Data Structures
 
@@ -1207,7 +1207,7 @@ Opens *vui-state* buffer."
 | *Dev Tools*      | =vui-inspect=, =vui-inspect-state=         | ✓      |
 |                  | =vui-debug-enabled=, debug logging         | ✓      |
 | *Reconciliation* | Key-based matching                         | ✓      |
-|                  | Cursor preservation (widget indexing)      | ✓      |
+|                  | Cursor preservation (widget path tracking) | ✓      |
 
 
 * Appendix A: Comparison with widget.el
