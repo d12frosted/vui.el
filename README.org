@@ -160,6 +160,11 @@ In-depth tutorials walking through real-world usage:
 - [[https://www.d12frosted.io/posts/2025-12-06-vui-under-the-hood][Under the Hood]] — Virtual nodes, instances, reconciliation, and the render cycle
 - [[https://www.d12frosted.io/posts/2025-12-07-vui-patterns-and-pitfalls][Patterns and Pitfalls]] — Practical patterns and common mistakes
 
+For those curious about implementation details:
+
+- [[https://www.d12frosted.io/posts/2025-12-14-implicit-identity-call-order][Implicit Identity]] — How hooks use call order as implicit identity
+- [[https://www.d12frosted.io/posts/2025-12-16-cursor-preservation-buffer-rewrite][Cursor Preservation]] — Preserving cursor position across buffer rewrites
+
 * Examples
 
 See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
