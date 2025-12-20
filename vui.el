@@ -637,7 +637,7 @@ Used for stable cursor preservation across re-renders.")
 
 (defvar vui--rendering-p nil
   "Non-nil when a render is in progress.
-Used to prevent nested re-renders from use-async resolve callbacks.")
+Used to prevent nested re-renders from `use-async' resolve callbacks.")
 
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
@@ -815,14 +815,14 @@ When :help-echo is a string, that string is used as tooltip."
 (cl-defun vui-field (&key value size placeholder on-change on-submit key face secret)
   "Create a field vnode.
 All arguments are keyword-based:
-  :value       - initial field content (defaults to empty string)
-  :size        - field width in characters
-  :placeholder - hint text shown when field is empty (not yet rendered)
-  :on-change   - called with value on each change (triggers re-render)
-  :on-submit   - called with value when user presses RET (no re-render)
-  :key         - identifier for `vui-field-value' lookup
-  :face        - text face
-  :secret      - if non-nil, hide input (for passwords)
+  :VALUE       - initial field content (defaults to empty string)
+  :SIZE        - field width in characters
+  :PLACEHOLDER - hint text shown when field is empty (not yet rendered)
+  :ON-CHANGE   - called with value on each change (triggers re-render)
+  :ON-SUBMIT   - called with value when user presses RET (no re-render)
+  :KEY         - identifier for `vui-field-value' lookup
+  :FACE        - text face
+  :SECRET      - if non-nil, hide input (for passwords)
 
 Examples:
   (vui-field :size 20 :key \\='my-input)
@@ -1113,7 +1113,7 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
   "The root component instance for the current buffer.")
 
 (defvar vui--batch-depth 0
-  "Current nesting depth of vui-batch calls.")
+  "Current nesting depth of `vui-batch' calls.")
 
 (defvar vui--render-pending-p nil
   "Non-nil if a re-render is pending (during batched updates).")
@@ -1220,7 +1220,7 @@ ARGS is a list of parameter names (like a lambda arglist).
 BODY is executed with component context restored and ARGS bound.
 
 Use this when an async operation needs to pass data to your callback.
-Create the callback inside component context (e.g., in use-effect),
+Create the callback inside component context (e.g., in `use-effect'),
 then the async operation calls it later with results.
 
 Example:
@@ -1262,7 +1262,7 @@ it via `vui--current-instance' (works even in different buffer contexts)."
 
 (defun vui--schedule-render ()
   "Schedule a re-render of the root instance.
-If inside a vui-batch, the render is deferred until batch completes.
+If inside a `vui-batch', the render is deferred until batch completes.
 Otherwise, render immediately or after delay based on config."
   (let ((root (vui--get-root-instance)))
     (when root
@@ -1439,7 +1439,9 @@ Examples:
   (let ((prev-ref (use-ref nil)))
     (use-effect (value)
       (message \"Changed from %s to %s\" (car prev-ref) value)
-      (setcar prev-ref value)))"
+      (setcar prev-ref value)))
+
+INITIAL-VALUE is the starting value stored in the ref."
   `(vui--get-or-create-ref ,initial-value))
 
 (defun vui--get-or-create-ref (initial-value)
@@ -1480,7 +1482,9 @@ Example:
 
   ;; In my-button:
   (let ((theme (use-theme)))
-    (vui-text (format \"Theme: %s\" theme)))"
+    (vui-text (format \"Theme: %s\" theme)))
+
+DOCSTRING is an optional documentation string for the context."
   (declare (indent defun))
   (let ((context-var (intern (format "%s-context" name)))
         (provider-fn (intern (format "%s-provider" name)))
@@ -1512,7 +1516,7 @@ Example:
 (defun vui--consume-context (context)
   "Get the current value of CONTEXT.
 Searches up the context stack for a matching provider.
-Returns default-value if no provider found."
+Returns `default-value' if no provider found."
   (or (cl-loop for binding in vui--context-stack
                when (eq (vui-context-binding-context binding) context)
                return (vui-context-binding-value binding))
@@ -1556,7 +1560,9 @@ Example:
   ;; Use eq for fast symbol comparison
   (use-callback* (action-type)
     :compare eq
-    (dispatch action-type))"
+    (dispatch action-type))
+
+BODY is the callback expression itself, not a function returning a callback."
   (declare (indent 1))
   `(vui--get-or-update-callback
     (list ,@deps)
@@ -1582,7 +1588,8 @@ COMPARE can be:
 (defun vui--get-or-update-callback (deps callback-fn &optional compare)
   "Return cached callback or update it if DEPS changed.
 COMPARE specifies comparison mode (default `equal').
-Called from within a component's render function."
+Called from within a component's render function.
+CALLBACK-FN is a thunk that returns the actual callback."
   (unless vui--current-instance
     (error "use-callback called outside of component context"))
   (let* ((instance vui--current-instance)
@@ -1639,7 +1646,9 @@ Example:
   ;; Use eq for fast symbol comparison
   (use-memo* (mode)
     :compare eq
-    (expensive-lookup mode))"
+    (expensive-lookup mode))
+
+BODY is the expression to compute and cache."
   (declare (indent 1))
   `(vui--get-or-update-memo
     (list ,@deps)
@@ -1649,7 +1658,8 @@ Example:
 (defun vui--get-or-update-memo (deps compute-fn &optional compare)
   "Return cached value or recompute if DEPS changed.
 COMPARE specifies comparison mode (default `equal').
-Called from within a component's render function."
+Called from within a component's render function.
+COMPUTE-FN is a thunk that computes the value to cache."
   (unless vui--current-instance
     (error "use-memo called outside of component context"))
   (let* ((instance vui--current-instance)
@@ -1811,7 +1821,7 @@ Returns a plist with :status, :data, and :error."
       (clrhash cache))))
 
 (defun vui--save-window-starts (buffer)
-  "Save window-start line numbers for all windows showing BUFFER.
+  "Save `window-start' line numbers for all windows showing BUFFER.
 Returns alist of (WINDOW . LINE-NUMBER)."
   (let ((result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
@@ -1821,7 +1831,7 @@ Returns alist of (WINDOW . LINE-NUMBER)."
     result))
 
 (defun vui--restore-window-starts (window-info)
-  "Restore window-start positions from WINDOW-INFO.
+  "Restore `window-start' positions from WINDOW-INFO.
 WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
   (dolist (entry window-info)
     (let ((window (car entry))
@@ -1924,7 +1934,8 @@ or :line, :column for non-widget positions."
     (nreverse widgets)))
 
 (defun vui--find-widget-by-path (path)
-  "Find widget with matching :vui-path, or nil if not found."
+  "Find widget with matching :vui-path, or nil if not found.
+PATH is a list representing the widget's location in the component tree."
   (when path
     (catch 'found
       (dolist (w (vui--collect-widgets))
