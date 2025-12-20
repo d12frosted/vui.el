@@ -7,9 +7,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+* v1.0.0-rc.3 - 2025-12-20
+
 ** Added
 
 - =vui-mode= major mode for VUI buffers. Provides =vui-mode-map= that users and packages can extend (e.g., for =ace-link=). Packages using VUI can derive their own modes from =vui-mode= to add custom keybindings while preserving VUI and widget functionality.
+- Documentation of Emacs 29 single-widget TAB navigation limitation (upstream [[https://debbugs.gnu.org/cgi/bugreport.cgi?bug=70594][bug#70594]], fixed in Emacs 30).
 
 ** Fixed
 
