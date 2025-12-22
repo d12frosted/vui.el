@@ -2789,8 +2789,7 @@ Handles :truncate and overflow:
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding))))
       ;; Remove trailing newline - tables emit content only, no trailing newline
-      (when (and (> (point) (point-min))
-                 (eq (char-before) ?\n))
+      (when (eq (char-before) ?\n)
         (delete-char -1))))
 
    ;; Field (editable text input)
