@@ -13,7 +13,7 @@
 ;;; Todo Item Component
 ;; Individual todo with toggle and delete
 
-(defcomponent todo-item (todo on-toggle on-delete)
+(vui-defcomponent todo-item (todo on-toggle on-delete)
   :render
   (let ((id (plist-get todo :id))
         (text (plist-get todo :text))
@@ -33,7 +33,7 @@
 ;;; Todo Input Component
 ;; Text field with add button
 
-(defcomponent todo-input (on-add)
+(vui-defcomponent todo-input (on-add)
   :state ((text ""))
   :render
   (vui-hstack
@@ -51,7 +51,7 @@
 ;;; Filter Buttons Component
 ;; All / Active / Completed filter selection
 
-(defcomponent todo-filters (filter on-filter)
+(vui-defcomponent todo-filters (filter on-filter)
   :render
   (vui-hstack :spacing 2
               (vui-button "All"
@@ -68,7 +68,7 @@
 ;;; Todo Stats Component
 ;; Shows count of remaining items
 
-(defcomponent todo-stats (todos)
+(vui-defcomponent todo-stats (todos)
   :render
   (let* ((total (length todos))
          (done (length (seq-filter (lambda (td) (plist-get td :done)) todos)))
@@ -79,7 +79,7 @@
 
 ;;; Main Todo App Component
 
-(defcomponent todo-app ()
+(vui-defcomponent todo-app ()
   :state ((todos nil)
           (filter 'all)
           (next-id 1))
@@ -160,7 +160,7 @@
   (expand-file-name "vui-todos.el" user-emacs-directory)
   "File to persist todos.")
 
-(defcomponent persistent-todo-app ()
+(vui-defcomponent persistent-todo-app ()
   :state ((todos nil)
           (filter 'all)
           (next-id 1)

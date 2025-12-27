@@ -4,18 +4,18 @@
 
 Hooks let you add side effects, mutable references, and memoization to your components. They're inspired by React Hooks but adapted for Emacs Lisp.
 
-* Side Effects - =use-effect=
+* Side Effects - =vui-use-effect=
 
-=use-effect= runs code after rendering, optionally with cleanup.
+=vui-use-effect= runs code after rendering, optionally with cleanup.
 
 ** Basic Effect
 
 #+begin_src elisp
-(defcomponent logger ()
+(vui-defcomponent logger ()
   :state ((count 0))
   :render
   (progn
-    (use-effect (count)  ; Dependency list
+    (vui-use-effect (count)  ; Dependency list
       (message "Count changed to: %d" count))
     (vui-button (format "Count: %d" count)
                 :on-click (lambda ()
@@ -29,19 +29,19 @@ The effect runs:
 
 ** Dependency List
 
-The first argument to =use-effect= is the dependency list:
+The first argument to =vui-use-effect= is the dependency list:
 
 #+begin_src elisp
 ;; Run only once (on mount)
-(use-effect ()
+(vui-use-effect ()
   (message "Component mounted"))
 
 ;; Run when 'value' changes
-(use-effect (value)
+(vui-use-effect (value)
   (message "Value is now: %s" value))
 
 ;; Run when any of these change
-(use-effect (a b c)
+(vui-use-effect (a b c)
   (message "a=%s b=%s c=%s" a b c))
 #+end_src
 
@@ -50,11 +50,11 @@ The first argument to =use-effect= is the dependency list:
 Return a function from the effect body to run cleanup:
 
 #+begin_src elisp
-(defcomponent timer-example ()
+(vui-defcomponent timer-example ()
   :state ((elapsed 0))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       ;; Setup: start timer (use vui-with-async-context for callback)
       ;; Use #'1+ functional update to avoid stale closure capture
       (let ((timer (run-with-timer 1 1
@@ -76,12 +76,12 @@ Cleanup runs:
 *** Fetching Data
 
 #+begin_src elisp
-(defcomponent user-profile (user-id)
+(vui-defcomponent user-profile (user-id)
   :state ((user nil)
           (loading t))
   :render
   (progn
-    (use-effect (user-id)
+    (vui-use-effect (user-id)
       ;; Fetch when user-id changes
       (vui-set-state :loading t)
       ;; Use vui-async-callback since fetch-user calls back with data
@@ -98,11 +98,11 @@ Cleanup runs:
 *** Subscribing to Events
 
 #+begin_src elisp
-(defcomponent resize-aware ()
+(vui-defcomponent resize-aware ()
   :state ((width (frame-width)))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       ;; Use vui-with-async-context since hook runs asynchronously
       (let ((handler (vui-with-async-context
                        (vui-set-state :width (frame-width)))))
@@ -117,26 +117,26 @@ Cleanup runs:
 *** Setting Document Title
 
 #+begin_src elisp
-(defcomponent page (title)
+(vui-defcomponent page (title)
   :render
   (progn
-    (use-effect (title)
+    (vui-use-effect (title)
       (setq frame-title-format title))
 
     (vui-text (format "Page: %s" title))))
 #+end_src
 
-* Mutable References - =use-ref=
+* Mutable References - =vui-use-ref=
 
-=use-ref= creates a mutable value that persists across renders without causing re-renders when changed.
+=vui-use-ref= creates a mutable value that persists across renders without causing re-renders when changed.
 
 ** Basic Ref
 
 #+begin_src elisp
-(defcomponent ref-example ()
+(vui-defcomponent ref-example ()
   :state ((count 0))
   :render
-  (let ((render-count (use-ref 0)))
+  (let ((render-count (vui-use-ref 0)))
     ;; Increment ref on every render (doesn't trigger re-render)
     (setcar render-count (1+ (car render-count)))
 
@@ -150,10 +150,10 @@ Cleanup runs:
 
 ** Ref Structure
 
-=use-ref= returns a cons cell whose =car= is the current value:
+=vui-use-ref= returns a cons cell whose =car= is the current value:
 
 #+begin_src elisp
-(let ((my-ref (use-ref "initial")))
+(let ((my-ref (vui-use-ref "initial")))
   ;; Read
   (car my-ref)            ; => "initial"
 
@@ -166,10 +166,10 @@ Cleanup runs:
 *** Storing Previous Value
 
 #+begin_src elisp
-(defcomponent with-previous (value)
+(vui-defcomponent with-previous (value)
   :render
-  (let ((prev-ref (use-ref nil)))
-    (use-effect (value)
+  (let ((prev-ref (vui-use-ref nil)))
+    (vui-use-effect (value)
       ;; After render, store current as previous
       (setcar prev-ref value))
 
@@ -182,11 +182,11 @@ Cleanup runs:
 *** Storing Timer References
 
 #+begin_src elisp
-(defcomponent interval-counter ()
+(vui-defcomponent interval-counter ()
   :state ((count 0))
   :render
-  (let ((timer-ref (use-ref nil)))
-    (use-effect ()
+  (let ((timer-ref (vui-use-ref nil)))
+    (vui-use-effect ()
       ;; Store timer in ref for later cleanup
       ;; Use #'1+ functional update to get current value
       (setcar timer-ref
@@ -200,17 +200,17 @@ Cleanup runs:
     (vui-text (format "Count: %d" count))))
 #+end_src
 
-* Memoized Callbacks - =use-callback=
+* Memoized Callbacks - =vui-use-callback=
 
-=use-callback= returns a stable function reference that only changes when dependencies change.
+=vui-use-callback= returns a stable function reference that only changes when dependencies change.
 
 ** Basic Usage
 
 #+begin_src elisp
-(defcomponent memoized-callback ()
+(vui-defcomponent memoized-callback ()
   :state ((count 0))
   :render
-  (let ((increment (use-callback (count)
+  (let ((increment (vui-use-callback (count)
                      (lambda ()
                        (vui-set-state :count (1+ count))))))
     (vui-button "Increment"
@@ -219,11 +219,11 @@ Cleanup runs:
 
 ** Why Use It?
 
-Without =use-callback=, a new function is created on every render. This can cause unnecessary re-renders of child components that receive the callback as a prop.
+Without =vui-use-callback=, a new function is created on every render. This can cause unnecessary re-renders of child components that receive the callback as a prop.
 
 #+begin_src elisp
 ;; Without use-callback: new function every render
-(defcomponent parent ()
+(vui-defcomponent parent ()
   :state ((count 0))
   :render
   (vui-component 'child
@@ -231,28 +231,28 @@ Without =use-callback=, a new function is created on every render. This can caus
                  :on-click (lambda () (vui-set-state :count (1+ count)))))
 
 ;; With use-callback: stable reference
-(defcomponent parent ()
+(vui-defcomponent parent ()
   :state ((count 0))
   :render
-  (let ((handle-click (use-callback (count)
+  (let ((handle-click (vui-use-callback (count)
                         (lambda ()
                           (vui-set-state :count (1+ count))))))
     (vui-component 'child
                    :on-click handle-click)))  ; Same reference if count unchanged
 #+end_src
 
-* Memoized Values - =use-memo=
+* Memoized Values - =vui-use-memo=
 
-=use-memo= caches expensive computations, only recomputing when dependencies change.
+=vui-use-memo= caches expensive computations, only recomputing when dependencies change.
 
 ** Basic Usage
 
 #+begin_src elisp
-(defcomponent filtered-list ()
+(vui-defcomponent filtered-list ()
   :state ((items '(1 2 3 4 5 6 7 8 9 10))
           (filter-threshold 5))
   :render
-  (let ((filtered (use-memo (items filter-threshold)
+  (let ((filtered (vui-use-memo (items filter-threshold)
                     ;; This only runs when items or filter-threshold changes
                     (seq-filter (lambda (x) (> x filter-threshold)) items))))
     (vui-list filtered
@@ -262,18 +262,18 @@ Without =use-callback=, a new function is created on every render. This can caus
 
 ** When to Use
 
-Use =use-memo= when:
+Use =vui-use-memo= when:
 
 - Computing a value is expensive (sorting, filtering, transforming)
 - The computation depends on specific inputs
 - You want to avoid redundant work on re-renders
 
 #+begin_src elisp
-(defcomponent expensive-computation ()
+(vui-defcomponent expensive-computation ()
   :state ((data large-dataset)
           (sort-key :name))
   :render
-  (let ((sorted (use-memo (data sort-key)
+  (let ((sorted (vui-use-memo (data sort-key)
                   ;; Only sorts when data or sort-key changes
                   (seq-sort-by (lambda (item)
                                  (plist-get item sort-key))
@@ -282,9 +282,9 @@ Use =use-memo= when:
     (vui-table :rows sorted)))
 #+end_src
 
-* Async Data Loading - =use-async=
+* Async Data Loading - =vui-use-async=
 
-=use-async= provides async data loading with loading/error states and caching. It uses a callback-based API (like JavaScript Promises) to support both synchronous and truly asynchronous operations.
+=vui-use-async= provides async data loading with loading/error states and caching. It uses a callback-based API (like JavaScript Promises) to support both synchronous and truly asynchronous operations.
 
 ** How It Works
 
@@ -308,9 +308,9 @@ Render 2: use-async called → returns (:status ready :data ...)
 ** Basic Usage
 
 #+begin_src elisp
-(defcomponent user-data (user-id)
+(vui-defcomponent user-data (user-id)
   :render
-  (let ((result (use-async user-id
+  (let ((result (vui-use-async user-id
                   (lambda (resolve _reject)
                     (funcall resolve (fetch-user-data user-id))))))
     (pcase (plist-get result :status)
@@ -321,7 +321,7 @@ Render 2: use-async called → returns (:status ready :data ...)
 
 ** Return Value
 
-=use-async= returns a plist with:
+=vui-use-async= returns a plist with:
 
 | Key       | Description                              |
 |-----------+------------------------------------------|
@@ -337,7 +337,7 @@ The first argument is a cache key. Results are cached and reused for the same ke
 ;; First render with user-id=1: loads data
 ;; Re-render with user-id=1: returns cached result instantly
 ;; Render with user-id=2: loads new data (different key)
-(use-async user-id
+(vui-use-async user-id
   (lambda (resolve _reject)
     (funcall resolve (fetch-user user-id))))
 #+end_src
@@ -352,9 +352,9 @@ You can report errors in two ways:
 2. Signal an error (automatically caught and converted to reject)
 
 #+begin_src elisp
-(defcomponent with-error-handling ()
+(vui-defcomponent with-error-handling ()
   :render
-  (let ((result (use-async 'data
+  (let ((result (vui-use-async 'data
                   (lambda (resolve reject)
                     (if (not connected)
                         (funcall reject "Network unavailable")
@@ -375,9 +375,9 @@ You can report errors in two ways:
 For external commands that may take time, use =make-process= with a sentinel:
 
 #+begin_src elisp
-(defcomponent balance-viewer ()
+(vui-defcomponent balance-viewer ()
   :render
-  (let ((result (use-async 'balance
+  (let ((result (vui-use-async 'balance
                   (lambda (resolve reject)
                     (let ((output-buffer (generate-new-buffer " *hledger*")))
                       (make-process
@@ -407,16 +407,16 @@ The process runs asynchronously - Emacs remains responsive while waiting.
 
 ** Multiple Async Calls
 
-You can have multiple =use-async= calls in a component, each with its own key:
+You can have multiple =vui-use-async= calls in a component, each with its own key:
 
 #+begin_src elisp
-(defcomponent dashboard ()
+(vui-defcomponent dashboard ()
   :render
-  (let ((users (use-async 'users
+  (let ((users (vui-use-async 'users
                  (lambda (resolve _reject) (funcall resolve (fetch-users)))))
-        (stats (use-async 'stats
+        (stats (vui-use-async 'stats
                  (lambda (resolve _reject) (funcall resolve (fetch-stats)))))
-        (config (use-async 'config
+        (config (vui-use-async 'config
                   (lambda (resolve _reject) (funcall resolve (load-config))))))
 
     ;; Show overall loading state
@@ -433,29 +433,29 @@ You can have multiple =use-async= calls in a component, each with its own key:
 
 ** Preloading Data
 
-Since =use-async= caches by key, you can preload data before it's needed:
+Since =vui-use-async= caches by key, you can preload data before it's needed:
 
 #+begin_src elisp
-(defcomponent tabbed-view ()
+(vui-defcomponent tabbed-view ()
   :state ((tab 'overview))
   :render
   (progn
     ;; Preload data for other tabs while viewing current tab
-    (use-async 'details-data
+    (vui-use-async 'details-data
       (lambda (resolve _reject) (funcall resolve (fetch-details))))
-    (use-async 'history-data
+    (vui-use-async 'history-data
       (lambda (resolve _reject) (funcall resolve (fetch-history))))
 
     ;; Render current tab - data may already be cached
     (pcase tab
       ('overview (render-overview))
-      ('details (render-details (use-async 'details-data ...)))
-      ('history (render-history (use-async 'history-data ...))))))
+      ('details (render-details (vui-use-async 'details-data ...)))
+      ('history (render-history (vui-use-async 'history-data ...))))))
 #+end_src
 
 ** When to Use
 
-=use-async= is ideal for:
+=vui-use-async= is ideal for:
 - Showing immediate "Loading..." feedback
 - Automatic caching of results (same key = cached result)
 - Clean loading/error state handling in UI
@@ -468,16 +468,16 @@ For synchronous loaders, calling =resolve= immediately still provides benefits:
 
 ** Emacs Async Landscape
 
-*Important:* =use-async= does NOT perform asynchronous computations itself. It is purely a *UI-layer abstraction* that handles loading states, caching, and re-rendering. The actual async work is your responsibility.
+*Important:* =vui-use-async= does NOT perform asynchronous computations itself. It is purely a *UI-layer abstraction* that handles loading states, caching, and re-rendering. The actual async work is your responsibility.
 
 #+begin_src elisp
 ;; THIS WILL STILL BLOCK EMACS!
-(use-async 'data
+(vui-use-async 'data
   (lambda (resolve _reject)
     (funcall resolve (slow-synchronous-computation))))  ; Blocks for 5 seconds
 #+end_src
 
-If you put slow synchronous code inside the loader, Emacs will freeze while it runs. =use-async= just provides the plumbing for when you *do* have async code.
+If you put slow synchronous code inside the loader, Emacs will freeze while it runs. =vui-use-async= just provides the plumbing for when you *do* have async code.
 
 To make operations truly non-blocking, use one of the async mechanisms below.
 
@@ -502,18 +502,18 @@ To make operations truly non-blocking, use one of the async mechanisms below.
 
 *** Using with use-async
 
-=use-async= works with any of these - just call =resolve= or =reject= when done:
+=vui-use-async= works with any of these - just call =resolve= or =reject= when done:
 
 #+begin_src elisp
 ;; With async.el (child Emacs for CPU work)
-(use-async 'heavy-compute
+(vui-use-async 'heavy-compute
   (lambda (resolve reject)
     (async-start
      (lambda () (expensive-computation))
      (lambda (result) (funcall resolve result)))))
 
 ;; With emacs-aio (if you have aio infrastructure)
-(use-async 'fetch-data
+(vui-use-async 'fetch-data
   (lambda (resolve reject)
     (aio-with-async
       (condition-case err
@@ -521,7 +521,7 @@ To make operations truly non-blocking, use one of the async mechanisms below.
         (error (funcall reject (error-message-string err)))))))
 
 ;; With plz.el (HTTP)
-(use-async 'api-call
+(vui-use-async 'api-call
   (lambda (resolve reject)
     (plz 'get "https://api.example.com"
       :as 'json
@@ -529,7 +529,7 @@ To make operations truly non-blocking, use one of the async mechanisms below.
       :else (lambda (err) (funcall reject (plz-error-message err))))))
 #+end_src
 
-The key insight: =use-async= handles the *React-like concerns* (loading states, caching, triggering re-renders), while the underlying async mechanism handles the *actual async execution*. This separation lets you choose the right tool for each job.
+The key insight: =vui-use-async= handles the *React-like concerns* (loading states, caching, triggering re-renders), while the underlying async mechanism handles the *actual async execution*. This separation lets you choose the right tool for each job.
 
 * Async Context - =vui-with-async-context=
 
@@ -539,11 +539,11 @@ When calling =vui-set-state= from asynchronous callbacks like timers, process se
 
 #+begin_src elisp
 ;; THIS WON'T WORK - timer runs outside component context
-(defcomponent broken-timer ()
+(vui-defcomponent broken-timer ()
   :state ((seconds 0))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       (let ((timer (run-with-timer 1 1
                      (lambda ()
                        ;; ERROR: vui-set-state called outside component context
@@ -557,11 +557,11 @@ The timer callback runs later, outside of any component rendering context. When 
 ** The Solution
 
 #+begin_src elisp
-(defcomponent working-timer ()
+(vui-defcomponent working-timer ()
   :state ((seconds 0))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       (let ((timer (run-with-timer 1 1
                      (vui-with-async-context
                        ;; Use functional update to get current value
@@ -588,11 +588,11 @@ When the returned function is called, it:
 *** Timers
 
 #+begin_src elisp
-(defcomponent clock ()
+(vui-defcomponent clock ()
   :state ((time (current-time-string)))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       (let ((timer (run-with-timer 1 1
                      (vui-with-async-context
                        ;; current-time-string is called fresh each tick
@@ -606,11 +606,11 @@ Note: Here =(current-time-string)= works because it's a function call that execu
 *** Emacs Hooks
 
 #+begin_src elisp
-(defcomponent frame-watcher ()
+(vui-defcomponent frame-watcher ()
   :state ((width (frame-width)))
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       (let ((handler (vui-with-async-context
                        (vui-set-state :width (frame-width)))))
         (add-hook 'window-size-change-functions handler)
@@ -622,7 +622,7 @@ Note: Here =(current-time-string)= works because it's a function call that execu
 *** Process Sentinels (Alternative to use-async)
 
 #+begin_src elisp
-(defcomponent command-runner ()
+(vui-defcomponent command-runner ()
   :state ((output nil) (running nil))
   :render
   (let ((start-process
@@ -654,7 +654,7 @@ Use =vui-with-async-context= when you need =vui-set-state= in:
 You do NOT need it for:
 
 - Widget callbacks (buttons, fields) - these handle context automatically
-- =use-async= loaders - =resolve=/=reject= handle context automatically
+- =vui-use-async= loaders - =resolve=/=reject= handle context automatically
 - Code directly in =:render= - already in component context
 
 * Async Callbacks with Arguments - =vui-async-callback=
@@ -664,7 +664,7 @@ When an async operation passes data to your callback, use =vui-async-callback= i
 ** Basic Usage
 
 #+begin_src elisp
-(use-effect ()
+(vui-use-effect ()
   (fetch-data-async
     (vui-async-callback (result)
       (vui-set-state :data result))))
@@ -673,7 +673,7 @@ When an async operation passes data to your callback, use =vui-async-callback= i
 ** Multiple Arguments
 
 #+begin_src elisp
-(use-effect ()
+(vui-use-effect ()
   (my-api-call
     (vui-async-callback (data status)
       (vui-set-state :data data)
@@ -683,7 +683,7 @@ When an async operation passes data to your callback, use =vui-async-callback= i
 ** Process Sentinel with Output
 
 #+begin_src elisp
-(use-effect ()
+(vui-use-effect ()
   (let ((buf (generate-new-buffer " *async*")))
     (make-process
      :name "my-cmd"
@@ -708,7 +708,7 @@ When an async operation passes data to your callback, use =vui-async-callback= i
 
 * Advanced: Custom Comparison
 
-Both =use-callback*= and =use-memo*= support custom comparison modes.
+Both =vui-use-callback*= and =vui-use-memo*= support custom comparison modes.
 
 ** Comparison Modes
 
@@ -722,7 +722,7 @@ Both =use-callback*= and =use-memo*= support custom comparison modes.
 
 #+begin_src elisp
 ;; Only recompute if symbol identity changes
-(use-memo* (sort-key)
+(vui-use-memo* (sort-key)
   :compare 'eq
   (expensive-sort data sort-key))
 #+end_src
@@ -731,7 +731,7 @@ Both =use-callback*= and =use-memo*= support custom comparison modes.
 
 #+begin_src elisp
 ;; Only recompute if first element differs
-(use-memo* (items)
+(vui-use-memo* (items)
   :compare (lambda (old-deps new-deps)
              (equal (car (car old-deps))
                     (car (car new-deps))))
@@ -746,17 +746,17 @@ Follow these rules to avoid bugs:
 
 #+begin_src elisp
 ;; GOOD: hooks at top level of render
-(defcomponent good-example ()
+(vui-defcomponent good-example ()
   :render
-  (let ((count (use-ref 0))
-        (callback (use-callback () (lambda () ...))))
+  (let ((count (vui-use-ref 0))
+        (callback (vui-use-callback () (lambda () ...))))
     ...))
 
 ;; BAD: hook inside conditional
-(defcomponent bad-example ()
+(vui-defcomponent bad-example ()
   :render
   (when some-condition
-    (let ((ref (use-ref 0)))  ; DON'T do this!
+    (let ((ref (vui-use-ref 0)))  ; DON'T do this!
       ...)))
 #+end_src
 
@@ -766,18 +766,18 @@ Hooks must be called in the same order on every render:
 
 #+begin_src elisp
 ;; GOOD: same order every time
-(defcomponent good-order ()
+(vui-defcomponent good-order ()
   :render
-  (let ((ref1 (use-ref nil))
-        (ref2 (use-ref nil)))
+  (let ((ref1 (vui-use-ref nil))
+        (ref2 (vui-use-ref nil)))
     ...))
 
 ;; BAD: order depends on condition
-(defcomponent bad-order ()
+(vui-defcomponent bad-order ()
   :render
   (let ((ref1 (if condition
-                  (use-ref nil)    ; Sometimes first
-                (use-ref "other"))))  ; Sometimes only hook
+                  (vui-use-ref nil)    ; Sometimes first
+                (vui-use-ref "other"))))  ; Sometimes only hook
     ...))
 #+end_src
 
@@ -787,20 +787,20 @@ Include all values used in the effect/callback:
 
 #+begin_src elisp
 ;; BAD: missing dependency
-(defcomponent missing-dep ()
+(vui-defcomponent missing-dep ()
   :state ((a 1) (b 2))
   :render
   (progn
-    (use-effect (a)  ; Missing 'b'!
+    (vui-use-effect (a)  ; Missing 'b'!
       (message "a=%d b=%d" a b))  ; Uses both a and b
     ...))
 
 ;; GOOD: all dependencies listed
-(defcomponent complete-deps ()
+(vui-defcomponent complete-deps ()
   :state ((a 1) (b 2))
   :render
   (progn
-    (use-effect (a b)  ; Both included
+    (vui-use-effect (a b)  ; Both included
       (message "a=%d b=%d" a b))
     ...))
 #+end_src
@@ -809,13 +809,13 @@ Include all values used in the effect/callback:
 
 | Hook/Macro               | Purpose                             |
 |--------------------------+-------------------------------------|
-| =use-effect=             | Run side effects after render       |
-| =use-ref=                | Mutable value without re-render     |
-| =use-callback=           | Stable function reference           |
-| =use-memo=               | Cache expensive computations        |
-| =use-async=              | Load data asynchronously with cache |
-| =use-callback*=          | use-callback with custom comparison |
-| =use-memo*=              | use-memo with custom comparison     |
+| =vui-use-effect=             | Run side effects after render       |
+| =vui-use-ref=                | Mutable value without re-render     |
+| =vui-use-callback=           | Stable function reference           |
+| =vui-use-memo=               | Cache expensive computations        |
+| =vui-use-async=              | Load data asynchronously with cache |
+| =vui-use-callback*=          | use-callback with custom comparison |
+| =vui-use-memo*=              | use-memo with custom comparison     |
 | =vui-with-async-context= | Capture context for async callbacks |
 
 * Try It Yourself
@@ -826,12 +826,12 @@ Include all values used in the effect/callback:
 1. Has a text field for search query
 2. Debounces the search (waits 500ms after typing stops)
 3. Shows "Searching..." while debouncing
-4. Uses =use-ref= to store the timer
-5. Uses =use-effect= to handle the debounce logic
+4. Uses =vui-use-ref= to store the timer
+5. Uses =vui-use-effect= to handle the debounce logic
 #+end_quote
 
 #+begin_src elisp
-(defcomponent search-input (on-search)
+(vui-defcomponent search-input (on-search)
   :state ((query "")
           (is-searching nil))
   :render

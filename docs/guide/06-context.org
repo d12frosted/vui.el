@@ -10,30 +10,30 @@ Consider an app where many nested components need access to the current user:
 
 #+begin_src elisp
 ;; Without context: passing user through every level (prop drilling)
-(defcomponent app ()
+(vui-defcomponent app ()
   :state ((user '(:name "Alice" :role "admin")))
   :render
   (vui-component 'layout :user user))
 
-(defcomponent layout (user)
+(vui-defcomponent layout (user)
   :render
   (vui-component 'sidebar :user user))
 
-(defcomponent sidebar (user)
+(vui-defcomponent sidebar (user)
   :render
   (vui-component 'user-info :user user))
 
-(defcomponent user-info (user)
+(vui-defcomponent user-info (user)
   :render
   (vui-text (format "Logged in as: %s" (plist-get user :name))))
 #+end_src
 
 This is tedious and makes components harder to reuse. Context solves this.
 
-* Creating Context - =defcontext=
+* Creating Context - =vui-defcontext=
 
 #+begin_src elisp
-(defcontext user nil
+(vui-defcontext user nil
   "The currently logged-in user.")
 #+end_src
 
@@ -45,7 +45,7 @@ This creates:
 ** Syntax
 
 #+begin_src elisp
-(defcontext name default-value &optional docstring)
+(vui-defcontext name default-value &optional docstring)
 #+end_src
 
 * Providing Context
@@ -53,7 +53,7 @@ This creates:
 Wrap your component tree with the provider:
 
 #+begin_src elisp
-(defcomponent app ()
+(vui-defcomponent app ()
   :state ((user '(:name "Alice" :role "admin")))
   :render
   (user-provider user  ; Provide the context value
@@ -67,7 +67,7 @@ Everything inside the provider can access the context.
 Use the auto-generated hook to access context:
 
 #+begin_src elisp
-(defcomponent user-info ()
+(vui-defcomponent user-info ()
   :render
   (let ((user (use-user)))  ; Get context value
     (vui-text (format "Logged in as: %s"
@@ -80,11 +80,11 @@ No more prop drilling! The component gets the user directly from context.
 
 #+begin_src elisp
 ;; 1. Define the context
-(defcontext theme 'light
+(vui-defcontext theme 'light
   "Current UI theme (light or dark).")
 
 ;; 2. Create components that use it
-(defcomponent themed-text (content)
+(vui-defcomponent themed-text (content)
   :render
   (let ((theme (use-theme)))
     (vui-text content
@@ -92,7 +92,7 @@ No more prop drilling! The component gets the user directly from context.
                         '(:foreground "white" :background "black")
                       '(:foreground "black" :background "white")))))
 
-(defcomponent theme-toggle ()
+(vui-defcomponent theme-toggle ()
   :render
   (let ((theme (use-theme)))
     (vui-button (format "Theme: %s" theme)
@@ -101,7 +101,7 @@ No more prop drilling! The component gets the user directly from context.
                             (message "Can't change context from here")))))
 
 ;; 3. Provide the context
-(defcomponent app ()
+(vui-defcomponent app ()
   :state ((current-theme 'light))
   :render
   (theme-provider current-theme
@@ -124,9 +124,9 @@ Context values are read-only from consumers. To update context, you have two opt
 ** Option 1: Provide a Setter in Context
 
 #+begin_src elisp
-(defcontext user nil)
+(vui-defcontext user nil)
 
-(defcomponent app ()
+(vui-defcomponent app ()
   :state ((user '(:name "Alice")))
   :render
   (let ((context-value (list :user user
@@ -135,7 +135,7 @@ Context values are read-only from consumers. To update context, you have two opt
     (user-provider context-value
                    (vui-component 'user-editor))))
 
-(defcomponent user-editor ()
+(vui-defcomponent user-editor ()
   :render
   (let* ((ctx (use-user))
          (user (plist-get ctx :user))
@@ -152,9 +152,9 @@ Context values are read-only from consumers. To update context, you have two opt
 
 #+begin_src elisp
 ;; Theme context with setter pattern
-(defcontext theme-context nil)
+(vui-defcontext theme-context nil)
 
-(defcomponent theme-provider-wrapper ()
+(vui-defcomponent theme-provider-wrapper ()
   :state ((theme 'light))
   :render
   (theme-context-provider
@@ -164,7 +164,7 @@ Context values are read-only from consumers. To update context, you have two opt
                                   (if (eq theme 'light) 'dark 'light))))
    children))
 
-(defcomponent theme-consumer ()
+(vui-defcomponent theme-consumer ()
   :render
   (let* ((ctx (use-theme-context))
          (theme (plist-get ctx :theme))
@@ -178,9 +178,9 @@ Context values are read-only from consumers. To update context, you have two opt
 Providers can be nested - inner providers override outer ones:
 
 #+begin_src elisp
-(defcontext level 0)
+(vui-defcontext level 0)
 
-(defcomponent nested-example ()
+(vui-defcomponent nested-example ()
   :render
   (level-provider 1
                   (vui-fragment
@@ -189,7 +189,7 @@ Providers can be nested - inner providers override outer ones:
                    (level-provider 2
                                    (vui-component 'show-level)))))  ; Shows 2
 
-(defcomponent show-level ()
+(vui-defcomponent show-level ()
   :render
   (vui-text (format "Level: %d" (use-level))))
 #+end_src
@@ -199,11 +199,11 @@ Providers can be nested - inner providers override outer ones:
 You can define and use multiple contexts:
 
 #+begin_src elisp
-(defcontext user nil)
-(defcontext theme 'light)
-(defcontext locale "en")
+(vui-defcontext user nil)
+(vui-defcontext theme 'light)
+(vui-defcontext locale "en")
 
-(defcomponent app ()
+(vui-defcomponent app ()
   :state ((user '(:name "Alice"))
           (theme 'dark)
           (locale "fr"))
@@ -213,7 +213,7 @@ You can define and use multiple contexts:
                                  (locale-provider locale
                                                   (vui-component 'main-view)))))
 
-(defcomponent main-view ()
+(vui-defcomponent main-view ()
   :render
   (let ((user (use-user))
         (theme (use-theme))
@@ -229,9 +229,9 @@ You can define and use multiple contexts:
 When no provider is found, context returns the default value:
 
 #+begin_src elisp
-(defcontext optional-data "default-value")
+(vui-defcontext optional-data "default-value")
 
-(defcomponent uses-optional ()
+(vui-defcomponent uses-optional ()
   :render
   (let ((data (use-optional-data)))
     ;; Returns "default-value" if no provider above
@@ -258,7 +258,7 @@ When no provider is found, context returns the default value:
 
 | API             | Purpose                       |
 |-----------------+-------------------------------|
-| =defcontext=    | Define a new context          |
+| =vui-defcontext=    | Define a new context          |
 | =NAME-provider= | Provide context value to tree |
 | =use-NAME=      | Consume context value         |
 
@@ -275,9 +275,9 @@ When no provider is found, context returns the default value:
 #+end_quote
 
 #+begin_src elisp
-(defcontext notifications nil)
+(vui-defcontext notifications nil)
 
-(defcomponent notification-app ()
+(vui-defcomponent notification-app ()
   :state ((notifications '()))
   :render
   ;; Your implementation

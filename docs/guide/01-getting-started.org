@@ -37,7 +37,7 @@ vui.el has no external dependencies. It only requires built-in Emacs libraries:
 Let's start with the simplest possible component:
 
 #+begin_src elisp
-(defcomponent hello-world ()
+(vui-defcomponent hello-world ()
   :render (vui-text "Hello, World!"))
 #+end_src
 
@@ -55,7 +55,7 @@ A new buffer named =*my-first-vui*= will appear with your greeting.
 
 Let's break down what happened:
 
-1. =defcomponent= defines a new component type (like a template)
+1. =vui-defcomponent= defines a new component type (like a template)
 2. =hello-world= is the component's name
 3. =()= means this component takes no props (inputs)
 4. =:render= specifies what the component displays
@@ -67,7 +67,7 @@ Let's break down what happened:
 Static text is boring. Let's make a button:
 
 #+begin_src elisp
-(defcomponent click-counter ()
+(vui-defcomponent click-counter ()
   :state ((count 0))
   :render
   (vui-fragment
@@ -102,7 +102,7 @@ The magic: when you call =vui-set-state=, vui.el automatically re-renders the co
 Components can receive data from their parent via *props*:
 
 #+begin_src elisp
-(defcomponent greeter (name)
+(vui-defcomponent greeter (name)
   :render (vui-text (format "Hello, %s!" name)))
 
 ;; Use it:
@@ -117,7 +117,7 @@ Props are listed in the argument list =(name)= and accessed as regular variables
 The real power comes from combining components:
 
 #+begin_src elisp
-(defcomponent greeting-card (title)
+(vui-defcomponent greeting-card (title)
   :state ((expanded nil))
   :render
   (vui-fragment
@@ -146,7 +146,7 @@ Notice how the render function is just Emacs Lisp. You can use =when=, =if=, =cl
 vui.el supports text input via =vui-field=:
 
 #+begin_src elisp
-(defcomponent name-form ()
+(vui-defcomponent name-form ()
   :state ((name ""))
   :render
   (vui-fragment
@@ -170,7 +170,7 @@ The greeting updates as you type!
 
 | Function        | Purpose                        |
 |-----------------+--------------------------------|
-| =defcomponent=  | Define a new component type    |
+| =vui-defcomponent=  | Define a new component type    |
 | =vui-component= | Create a component vnode       |
 | =vui-mount=     | Render component to a buffer   |
 | =vui-set-state= | Update component state         |
@@ -197,7 +197,7 @@ Hint: Use =:face= property on =vui-text= to style text.
 
 #+begin_src elisp
 ;; Your solution here:
-(defcomponent todo-item (text)
+(vui-defcomponent todo-item (text)
   :state ((done nil))
   :render
   ;; ... fill in the rest

@@ -19,7 +19,7 @@ The API is stable and used in [[#built-with-vui][real-world projects]].
 
 - *Components* — Reusable UI building blocks with props and local state
 - *Reactive State* — Automatic re-rendering when state changes
-- *Hooks* — use-effect, use-ref, use-memo, use-callback
+- *Hooks* — vui-use-effect, vui-use-ref, vui-use-memo, vui-use-callback
 - *Context* — Share data across component trees without prop drilling
 - *Layout Primitives* — hstack, vstack, box, table, list
 - *Error Boundaries* — Graceful error handling with fallback UI
@@ -31,7 +31,7 @@ The API is stable and used in [[#built-with-vui][real-world projects]].
 (require 'vui)
 
 ;; Define a component
-(defcomponent counter ()
+(vui-defcomponent counter ()
   :state ((count 0))
   :render
   (vui-fragment
@@ -52,11 +52,11 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 ** Props and Composition
 
 #+begin_src elisp
-(defcomponent greeting (name)
+(vui-defcomponent greeting (name)
   :render
   (vui-text (format "Hello, %s!" name)))
 
-(defcomponent app ()
+(vui-defcomponent app ()
   :render
   (vui-vstack
    (vui-component 'greeting :name "Alice")
@@ -66,7 +66,7 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 ** Form Input
 
 #+begin_src elisp
-(defcomponent name-form ()
+(vui-defcomponent name-form ()
   :state ((name ""))
   :render
   (vui-fragment
@@ -83,7 +83,7 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 ** Lifecycle Hooks
 
 #+begin_src elisp
-(defcomponent timer ()
+(vui-defcomponent timer ()
   :state ((seconds 0))
   :on-mount
   (let ((timer (run-with-timer 1 1
@@ -98,17 +98,17 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 ** Context for Theme
 
 #+begin_src elisp
-(defcontext theme 'light)
+(vui-defcontext theme 'light)
 
-(defcomponent themed-button (label)
+(vui-defcomponent themed-button (label)
   :render
-  (let ((theme (use-theme)))
+  (let ((theme (vui-use-theme)))
     (vui-button label
                 :face (if (eq theme 'dark)
                           'custom-button-pressed
                         'custom-button))))
 
-(defcomponent app ()
+(vui-defcomponent app ()
   :render
   (theme-provider 'dark
     (vui-component 'themed-button :label "Click me")))
@@ -140,7 +140,7 @@ Clone this repository and add to your load-path:
 | [[file:docs/guide/02-components.org][Components]]      | Props, state, composition        |
 | [[file:docs/guide/03-primitives.org][Primitives]]      | Text, button, field, etc.        |
 | [[file:docs/guide/04-layout.org][Layout]]          | hstack, vstack, table, list      |
-| [[file:docs/guide/05-hooks.org][Hooks]]           | use-effect, use-ref, use-memo    |
+| [[file:docs/guide/05-hooks.org][Hooks]]           | vui-use-effect, vui-use-ref, vui-use-memo |
 | [[file:docs/guide/06-context.org][Context]]         | Sharing data across components   |
 | [[file:docs/guide/07-lifecycle.org][Lifecycle]]       | on-mount, on-update, on-unmount  |
 | [[file:docs/guide/08-error-handling.org][Error Handling]]  | Error boundaries                 |
@@ -202,13 +202,43 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
 * Hooks
 
-| Hook           | Description                                |
-|----------------+--------------------------------------------|
-| =use-effect=   | Side effects with cleanup                  |
-| =use-ref=      | Mutable reference (no re-render on change) |
-| =use-callback= | Stable callback reference                  |
-| =use-memo=     | Cached computed value                      |
-| =use-async=    | Async data loading with cache              |
+| Hook               | Description                                |
+|--------------------+--------------------------------------------|
+| =vui-use-effect=   | Side effects with cleanup                  |
+| =vui-use-ref=      | Mutable reference (no re-render on change) |
+| =vui-use-callback= | Stable callback reference                  |
+| =vui-use-memo=     | Cached computed value                      |
+| =vui-use-async=    | Async data loading with cache              |
+
+* Using Shorter Names (Shorthands)
+
+If you prefer the cleaner React-style names without the =vui-= prefix, you have two options:
+
+** Emacs 28+: Read Symbol Shorthands
+
+Add to your file's local variables:
+
+#+begin_src elisp
+;; Local Variables:
+;; read-symbol-shorthands: (("defc" . "vui-defc") ("use-" . "vui-use-"))
+;; End:
+#+end_src
+
+This lets you write =defcomponent= instead of =vui-defcomponent= and =use-effect= instead of =vui-use-effect=.
+
+** Aliases
+
+Define aliases in your init file:
+
+#+begin_src elisp
+(defalias 'defcomponent 'vui-defcomponent)
+(defalias 'defcontext 'vui-defcontext)
+(defalias 'use-effect 'vui-use-effect)
+(defalias 'use-ref 'vui-use-ref)
+(defalias 'use-callback 'vui-use-callback)
+(defalias 'use-memo 'vui-use-memo)
+(defalias 'use-async 'vui-use-async)
+#+end_src
 
 * Developer Tools
 

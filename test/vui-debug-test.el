@@ -27,7 +27,7 @@
 
   (it "does not collect data when disabled"
     (setq vui-timing-enabled nil)
-    (defcomponent timing-disabled-test ()
+    (vui-defcomponent timing-disabled-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-disabled-test) "*test-timing1*")))
       (unwind-protect
@@ -36,7 +36,7 @@
 
   (it "collects timing data when enabled"
     (setq vui-timing-enabled t)
-    (defcomponent timing-enabled-test ()
+    (vui-defcomponent timing-enabled-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-enabled-test) "*test-timing2*")))
       (unwind-protect
@@ -47,7 +47,7 @@
 
   (it "records render phase"
     (setq vui-timing-enabled t)
-    (defcomponent timing-render-test ()
+    (vui-defcomponent timing-render-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-render-test) "*test-timing3*")))
       (unwind-protect
@@ -60,7 +60,7 @@
 
   (it "records commit phase"
     (setq vui-timing-enabled t)
-    (defcomponent timing-commit-test ()
+    (vui-defcomponent timing-commit-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-commit-test) "*test-timing4*")))
       (unwind-protect
@@ -72,7 +72,7 @@
 
   (it "records mount phase"
     (setq vui-timing-enabled t)
-    (defcomponent timing-mount-test ()
+    (vui-defcomponent timing-mount-test ()
       :on-mount (message "mounted")
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-mount-test) "*test-timing5*")))
@@ -85,7 +85,7 @@
 
   (it "records update phase"
     (setq vui-timing-enabled t)
-    (defcomponent timing-update-test ()
+    (vui-defcomponent timing-update-test ()
       :state ((count 0))
       :on-update (message "updated")
       :render (vui-text (number-to-string count)))
@@ -105,10 +105,10 @@
   (it "records unmount phase"
     (setq vui-timing-enabled t)
     (let ((show-child t))
-      (defcomponent timing-unmount-child ()
+      (vui-defcomponent timing-unmount-child ()
         :on-unmount (message "unmounted")
         :render (vui-text "child"))
-      (defcomponent timing-unmount-parent ()
+      (vui-defcomponent timing-unmount-parent ()
         :render (if show-child
                     (vui-component 'timing-unmount-child)
                   (vui-text "no child")))
@@ -125,7 +125,7 @@
 
   (it "clears timing data"
     (setq vui-timing-enabled t)
-    (defcomponent timing-clear-test ()
+    (vui-defcomponent timing-clear-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'timing-clear-test) "*test-timing8*")))
       (unwind-protect
@@ -138,7 +138,7 @@
   (it "limits entries to max"
     (setq vui-timing-enabled t)
     (let ((vui--timing-max-entries 5))
-      (defcomponent timing-limit-test ()
+      (vui-defcomponent timing-limit-test ()
         :state ((count 0))
         :render (vui-text (number-to-string count)))
       (let ((instance (vui-mount (vui-component 'timing-limit-test) "*test-timing9*")))
@@ -159,7 +159,7 @@
       (expect (vui-inspect) :not :to-throw)))
 
   (it "inspects root instance"
-    (defcomponent inspect-root-test ()
+    (vui-defcomponent inspect-root-test ()
       :state ((count 42))
       :render (vui-text "hello"))
     (let ((instance (vui-mount (vui-component 'inspect-root-test) "*test-inspect1*")))
@@ -177,10 +177,10 @@
           (kill-buffer "*vui-inspector*")))))
 
   (it "shows nested component tree"
-    (defcomponent inspect-child ()
+    (vui-defcomponent inspect-child ()
       :state ((value "inner"))
       :render (vui-text value))
-    (defcomponent inspect-parent ()
+    (vui-defcomponent inspect-parent ()
       :state ((label "outer"))
       :render (vui-fragment
                (vui-text label)
@@ -200,7 +200,7 @@
           (kill-buffer "*vui-inspector*")))))
 
   (it "shows props in inspector"
-    (defcomponent inspect-with-props (name)
+    (vui-defcomponent inspect-with-props (name)
       :render (vui-text (format "Hi %s" name)))
     (let ((instance (vui-mount (vui-component 'inspect-with-props :name "Alice")
                                "*test-inspect3*")))
@@ -217,12 +217,12 @@
 
 (describe "state viewer"
   (it "shows only stateful components"
-    (defcomponent stateless-comp ()
+    (vui-defcomponent stateless-comp ()
       :render (vui-text "no state"))
-    (defcomponent stateful-comp ()
+    (vui-defcomponent stateful-comp ()
       :state ((val 123))
       :render (vui-text "with state"))
-    (defcomponent state-viewer-parent ()
+    (vui-defcomponent state-viewer-parent ()
       :state ((parent-val "parent"))
       :render (vui-fragment
                (vui-component 'stateless-comp)
@@ -243,9 +243,9 @@
 
 (describe "instance lookup"
   (it "finds instance by id"
-    (defcomponent lookup-child ()
+    (vui-defcomponent lookup-child ()
       :render (vui-text "child"))
-    (defcomponent lookup-parent ()
+    (vui-defcomponent lookup-parent ()
       :render (vui-component 'lookup-child))
     (let ((instance (vui-mount (vui-component 'lookup-parent) "*test-lookup1*")))
       (unwind-protect
@@ -256,7 +256,7 @@
         (kill-buffer "*test-lookup1*"))))
 
   (it "returns nil for non-existent id"
-    (defcomponent lookup-simple ()
+    (vui-defcomponent lookup-simple ()
       :render (vui-text "hi"))
     (let ((instance (vui-mount (vui-component 'lookup-simple) "*test-lookup2*")))
       (unwind-protect
@@ -264,9 +264,9 @@
         (kill-buffer "*test-lookup2*"))))
 
   (it "finds all instances of a type"
-    (defcomponent item-comp ()
+    (vui-defcomponent item-comp ()
       :render (vui-text "item"))
-    (defcomponent list-comp ()
+    (vui-defcomponent list-comp ()
       :render (vui-fragment
                (vui-component 'item-comp)
                (vui-component 'item-comp)
@@ -290,7 +290,7 @@
 
   (it "does not log when disabled"
     (setq vui-debug-enabled nil)
-    (defcomponent debug-off-test ()
+    (vui-defcomponent debug-off-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'debug-off-test) "*test-debug1*")))
       (unwind-protect
@@ -303,7 +303,7 @@
 
   (it "logs render phase when enabled"
     (setq vui-debug-enabled t)
-    (defcomponent debug-render-test ()
+    (vui-defcomponent debug-render-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'debug-render-test) "*test-debug2*")))
       (unwind-protect
@@ -315,7 +315,7 @@
 
   (it "logs mount phase"
     (setq vui-debug-enabled t)
-    (defcomponent debug-mount-test ()
+    (vui-defcomponent debug-mount-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'debug-mount-test) "*test-debug3*")))
       (unwind-protect
@@ -327,7 +327,7 @@
 
   (it "logs state changes"
     (setq vui-debug-enabled t)
-    (defcomponent debug-state-test ()
+    (vui-defcomponent debug-state-test ()
       :state ((count 0))
       :render (vui-button "+"
                           :on-click (lambda () (vui-set-state :count (1+ count)))))
@@ -346,9 +346,9 @@
   (it "logs unmount phase"
     (setq vui-debug-enabled t)
     (let ((show-child t))
-      (defcomponent debug-unmount-child ()
+      (vui-defcomponent debug-unmount-child ()
         :render (vui-text "child"))
-      (defcomponent debug-unmount-parent ()
+      (vui-defcomponent debug-unmount-parent ()
         :render (if show-child
                     (vui-component 'debug-unmount-child)
                   (vui-text "no child")))
@@ -366,7 +366,7 @@
   (it "respects vui-debug-log-phases filter"
     (setq vui-debug-enabled t)
     (setq vui-debug-log-phases '(mount))  ; Only log mount
-    (defcomponent debug-filter-test ()
+    (vui-defcomponent debug-filter-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'debug-filter-test) "*test-debug6*")))
       (unwind-protect
@@ -382,7 +382,7 @@
 
   (it "clears debug buffer"
     (setq vui-debug-enabled t)
-    (defcomponent debug-clear-test ()
+    (vui-defcomponent debug-clear-test ()
       :render (vui-text "OK"))
     (let ((instance (vui-mount (vui-component 'debug-clear-test) "*test-debug7*")))
       (unwind-protect

@@ -62,7 +62,7 @@ Always returns a fixed-width string for consistent table alignment."
 
 ;;; Score Input Component
 
-(defcomponent score-input (value on-change)
+(vui-defcomponent score-input (value on-change)
   :render
   (vui-button (vui-example--format-score value 1)
     :on-click (lambda ()
@@ -74,7 +74,7 @@ Always returns a fixed-width string for consistent table alignment."
 
 ;;; Summary Table Component
 
-(defcomponent summary-table (scores wines)
+(vui-defcomponent summary-table (scores wines)
   :render
   (let* ((all-scores (seq-mapcat
                       (lambda (participant-scores)
@@ -92,7 +92,7 @@ Always returns a fixed-width string for consistent table alignment."
 
 ;;; Wines Table Component
 
-(defcomponent wines-table (wines scores)
+(vui-defcomponent wines-table (wines scores)
   :render
   (let* ((wine-stats
           (mapcar
@@ -151,7 +151,7 @@ Always returns a fixed-width string for consistent table alignment."
       (concat (substring name 0 (- max-len 2)) "..")
     name))
 
-(defcomponent personal-scores-table (wines participants scores
+(vui-defcomponent personal-scores-table (wines participants scores
                                            on-score-change on-participant-change)
   :render
   (let* (;; Calculate dynamic width: expand to fit longest name (+ 2 for brackets),
@@ -200,7 +200,7 @@ Always returns a fixed-width string for consistent table alignment."
 
 ;;; Main Wine Tasting App Component
 
-(defcomponent wine-tasting-app ()
+(vui-defcomponent wine-tasting-app ()
   :state ((wines vui-example-wines)
           (participants vui-example-participants)
           ;; scores is alist: ((participant . plist-of-wine-id-to-score) ...)

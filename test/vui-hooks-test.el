@@ -19,9 +19,9 @@
 (describe "use-effect"
   (it "runs effect after first render"
     (let ((effect-ran nil))
-      (defcomponent effect-test ()
+      (vui-defcomponent effect-test ()
         :render (progn
-                  (use-effect ()
+                  (vui-use-effect ()
                     (setq effect-ran t))
                   (vui-text "test")))
       (let ((instance (vui-mount (vui-component 'effect-test) "*test-effect1*")))
@@ -32,10 +32,10 @@
   (it "runs effect when deps change"
     (let ((effect-count 0)
           (show-alt nil))
-      (defcomponent effect-deps ()
+      (vui-defcomponent effect-deps ()
         :state ((value 1))
         :render (progn
-                  (use-effect (value)
+                  (vui-use-effect (value)
                     (setq effect-count (1+ effect-count)))
                   (vui-text (number-to-string value))))
       (let ((instance (vui-mount (vui-component 'effect-deps) "*test-effect2*")))
@@ -57,10 +57,10 @@
 
   (it "does not run effect when deps are unchanged"
     (let ((effect-count 0))
-      (defcomponent effect-stable ()
+      (vui-defcomponent effect-stable ()
         :state ((count 0) (other 0))
         :render (progn
-                  (use-effect (count)
+                  (vui-use-effect (count)
                     (setq effect-count (1+ effect-count)))
                   (vui-text (format "%d-%d" count other))))
       (let ((instance (vui-mount (vui-component 'effect-stable) "*test-effect3*")))
@@ -78,10 +78,10 @@
   (it "runs cleanup before next effect"
     (let ((cleanup-ran nil)
           (effect-value nil))
-      (defcomponent effect-cleanup ()
+      (vui-defcomponent effect-cleanup ()
         :state ((value 1))
         :render (progn
-                  (use-effect (value)
+                  (vui-use-effect (value)
                     (setq effect-value value)
                     (lambda () (setq cleanup-ran value)))
                   (vui-text (number-to-string value))))
@@ -102,12 +102,12 @@
   (it "runs cleanup on unmount"
     (let ((cleanup-ran nil)
           (show-child t))
-      (defcomponent effect-unmount-child ()
+      (vui-defcomponent effect-unmount-child ()
         :render (progn
-                  (use-effect ()
+                  (vui-use-effect ()
                     (lambda () (setq cleanup-ran t)))
                   (vui-text "child")))
-      (defcomponent effect-unmount-parent ()
+      (vui-defcomponent effect-unmount-parent ()
         :render (if show-child
                     (vui-component 'effect-unmount-child)
                   (vui-text "no child")))
@@ -123,10 +123,10 @@
           (kill-buffer "*test-effect5*")))))
 
   (it "allows vui-set-state inside effect body"
-    (defcomponent effect-set-state ()
+    (vui-defcomponent effect-set-state ()
       :state ((count 0) (doubled nil))
       :render (progn
-                (use-effect (count)
+                (vui-use-effect (count)
                   ;; Should be able to call vui-set-state directly in effect
                   (vui-set-state :doubled (* 2 count)))
                 (vui-text (format "count=%d doubled=%s" count doubled))))
@@ -149,10 +149,10 @@
     ;; when the callback runs (context already nil), not when created.
     (let ((error-occurred nil)
           (result-value nil))
-      (defcomponent async-callback-problem ()
+      (vui-defcomponent async-callback-problem ()
         :state ((data nil))
         :render (progn
-                  (use-effect ()
+                  (vui-use-effect ()
                     ;; Start async operation that will call back with data
                     (run-with-timer
                      0.01 nil
@@ -183,11 +183,11 @@
     ;; is evaluated INSIDE component context (during render/effect)
     (let ((timer-fired nil)
           (state-updated nil))
-      (defcomponent async-context-positive ()
+      (vui-defcomponent async-context-positive ()
         :state ((ticks 0))
         :render
         (progn
-          (use-effect ()
+          (vui-use-effect ()
             ;; Capture context NOW while inside component
             (let ((update-fn (vui-with-async-context
                                (setq timer-fired t)
@@ -213,10 +213,10 @@
 (describe "vui-async-callback"
   (it "allows setting state from async callback with arguments"
     (let ((result-value nil))
-      (defcomponent async-callback-test ()
+      (vui-defcomponent async-callback-test ()
         :state ((data nil))
         :render (progn
-                  (use-effect ()
+                  (vui-use-effect ()
                     ;; Create callback while context exists, call later with args
                     (let ((callback (vui-async-callback (result)
                                       (vui-set-state :data result))))
@@ -240,8 +240,8 @@
 (describe "use-ref"
   (it "creates a ref with initial value"
     (let ((ref-value nil))
-      (defcomponent ref-test ()
-        :render (let ((my-ref (use-ref 42)))
+      (vui-defcomponent ref-test ()
+        :render (let ((my-ref (vui-use-ref 42)))
                   (setq ref-value (car my-ref))
                   (vui-text "test")))
       (let ((instance (vui-mount (vui-component 'ref-test) "*test-ref1*")))
@@ -251,9 +251,9 @@
 
   (it "preserves ref value across re-renders"
     (let ((ref-values nil))
-      (defcomponent ref-persist ()
+      (vui-defcomponent ref-persist ()
         :state ((count 0))
-        :render (let ((my-ref (use-ref 0)))
+        :render (let ((my-ref (vui-use-ref 0)))
                   ;; On first render, set ref to 100
                   (when (= (car my-ref) 0)
                     (setcar my-ref 100))
@@ -275,8 +275,8 @@
 
   (it "does not trigger re-render when modified"
     (let ((render-count 0))
-      (defcomponent ref-no-rerender ()
-        :render (let ((my-ref (use-ref 0)))
+      (vui-defcomponent ref-no-rerender ()
+        :render (let ((my-ref (vui-use-ref 0)))
                   (setq render-count (1+ render-count))
                   ;; Modify ref - should NOT cause re-render
                   (setcar my-ref (1+ (car my-ref)))
@@ -291,9 +291,9 @@
   (it "works with use-effect for storing timers"
     (let ((cleanup-called nil)
           (timer-value nil))
-      (defcomponent ref-with-effect ()
-        :render (let ((timer-ref (use-ref nil)))
-                  (use-effect ()
+      (vui-defcomponent ref-with-effect ()
+        :render (let ((timer-ref (vui-use-ref nil)))
+                  (vui-use-effect ()
                     ;; Store a value (simulating timer)
                     (setcar timer-ref 'my-timer)
                     (lambda ()
@@ -316,9 +316,9 @@
 (describe "use-callback"
   (it "returns same function reference when deps unchanged"
     (let ((captured-fns nil))
-      (defcomponent callback-stable ()
+      (vui-defcomponent callback-stable ()
         :state ((count 0))
-        :render (let ((cb (use-callback ()
+        :render (let ((cb (vui-use-callback ()
                             (message "clicked"))))
                   (push cb captured-fns)
                   (vui-text "test")))
@@ -336,9 +336,9 @@
 
   (it "returns new function when deps change"
     (let ((captured-fns nil))
-      (defcomponent callback-deps ()
+      (vui-defcomponent callback-deps ()
         :state ((id 1))
-        :render (let ((cb (use-callback (id)
+        :render (let ((cb (vui-use-callback (id)
                             (delete-item id))))
                   (push cb captured-fns)
                   (vui-text (number-to-string id))))
@@ -362,9 +362,9 @@
 
   (it "captures correct closure values"
     (let ((result nil))
-      (defcomponent callback-closure ()
+      (vui-defcomponent callback-closure ()
         :state ((value 42))
-        :render (let ((cb (use-callback (value)
+        :render (let ((cb (vui-use-callback (value)
                             (setq result value))))
                   ;; Call the callback
                   (funcall cb)
@@ -377,9 +377,9 @@
 (describe "use-memo"
   (it "caches computed value across re-renders"
     (let ((compute-count 0))
-      (defcomponent memo-test ()
+      (vui-defcomponent memo-test ()
         :state ((count 0))
-        :render (let ((expensive (use-memo ()
+        :render (let ((expensive (vui-use-memo ()
                                    (setq compute-count (1+ compute-count))
                                    (* 2 42))))
                   (vui-text (format "%d-%d" count expensive))))
@@ -399,9 +399,9 @@
 
   (it "recomputes when deps change"
     (let ((compute-count 0))
-      (defcomponent memo-deps ()
+      (vui-defcomponent memo-deps ()
         :state ((multiplier 2))
-        :render (let ((result (use-memo (multiplier)
+        :render (let ((result (vui-use-memo (multiplier)
                                 (setq compute-count (1+ compute-count))
                                 (* multiplier 10))))
                   (vui-text (number-to-string result))))
@@ -424,9 +424,9 @@
 
   (it "can memoize filtered lists"
     (let ((filter-count 0))
-      (defcomponent memo-filter ()
+      (vui-defcomponent memo-filter ()
         :state ((items '("apple" "banana" "apricot")) (filter "ap"))
-        :render (let ((filtered (use-memo (items filter)
+        :render (let ((filtered (vui-use-memo (items filter)
                                   (setq filter-count (1+ filter-count))
                                   (seq-filter (lambda (i) (string-prefix-p filter i)) items))))
                   (vui-text (string-join filtered ", "))))
@@ -443,9 +443,9 @@
 (describe "use-async"
   (it "returns ready status when resolve called synchronously"
     (let ((result nil))
-      (defcomponent async-test-sync ()
+      (vui-defcomponent async-test-sync ()
         :render (progn
-                  (setq result (use-async 'test-key
+                  (setq result (vui-use-async 'test-key
                                  (lambda (resolve _reject)
                                    (funcall resolve "loaded data"))))
                   (vui-text "test")))
@@ -461,10 +461,10 @@
     (let ((result nil)
           (render-count 0)
           (stored-resolve nil))
-      (defcomponent async-test-ready ()
+      (vui-defcomponent async-test-ready ()
         :render (progn
                   (setq render-count (1+ render-count))
-                  (setq result (use-async 'test-key
+                  (setq result (vui-use-async 'test-key
                                  (lambda (resolve _reject)
                                    ;; Store resolve to call later (simulate async)
                                    (setq stored-resolve resolve))))
@@ -486,10 +486,10 @@
   (it "returns cached result on re-render with same key"
     (let ((load-count 0)
           (result nil))
-      (defcomponent async-test-cache ()
+      (vui-defcomponent async-test-cache ()
         :state ((counter 0))
         :render (progn
-                  (setq result (use-async 'test-key
+                  (setq result (vui-use-async 'test-key
                                  (lambda (resolve _reject)
                                    (setq load-count (1+ load-count))
                                    (funcall resolve "data"))))
@@ -513,9 +513,9 @@
     (let ((load-count 0)
           (key-value 1)
           (result nil))
-      (defcomponent async-test-key-change ()
+      (vui-defcomponent async-test-key-change ()
         :render (progn
-                  (setq result (use-async (list 'data key-value)
+                  (setq result (vui-use-async (list 'data key-value)
                                  (lambda (resolve _reject)
                                    (setq load-count (1+ load-count))
                                    (funcall resolve (format "data-%d" key-value)))))
@@ -536,9 +536,9 @@
 
   (it "handles reject callback"
     (let ((result nil))
-      (defcomponent async-test-reject ()
+      (vui-defcomponent async-test-reject ()
         :render (progn
-                  (setq result (use-async 'test-key
+                  (setq result (vui-use-async 'test-key
                                  (lambda (_resolve reject)
                                    (funcall reject "Something went wrong"))))
                   (vui-text "test")))
@@ -551,9 +551,9 @@
 
   (it "handles errors thrown in loader"
     (let ((result nil))
-      (defcomponent async-test-error ()
+      (vui-defcomponent async-test-error ()
         :render (progn
-                  (setq result (use-async 'test-key
+                  (setq result (vui-use-async 'test-key
                                  (lambda (_resolve _reject)
                                    (error "Test error"))))
                   (vui-text "test")))
@@ -567,11 +567,11 @@
   (it "supports multiple async calls in same component"
     (let ((result1 nil)
           (result2 nil))
-      (defcomponent async-test-multiple ()
+      (vui-defcomponent async-test-multiple ()
         :render (progn
-                  (setq result1 (use-async 'key1
+                  (setq result1 (vui-use-async 'key1
                                   (lambda (resolve _reject) (funcall resolve "data1"))))
-                  (setq result2 (use-async 'key2
+                  (setq result2 (vui-use-async 'key2
                                   (lambda (resolve _reject) (funcall resolve "data2"))))
                   (vui-text "test")))
       (let ((instance (vui-mount (vui-component 'async-test-multiple) "*test-async7*")))
@@ -585,9 +585,9 @@
 
   (it "supports truly async operations with make-process"
     (let ((result nil))
-      (defcomponent async-test-process ()
+      (vui-defcomponent async-test-process ()
         :render (progn
-                  (setq result (use-async 'echo-test
+                  (setq result (vui-use-async 'echo-test
                                  (lambda (resolve reject)
                                    (make-process
                                     :name "test-echo"
@@ -620,7 +620,7 @@
   (describe "on-mount"
     (it "is called when component first renders"
       (let ((mount-called nil))
-        (defcomponent test-mount-basic ()
+        (vui-defcomponent test-mount-basic ()
           :on-mount (setq mount-called t)
           :render (vui-text "test"))
         (let ((instance (vui-mount (vui-component 'test-mount-basic) "*test-mount1*")))
@@ -631,12 +631,12 @@
     (it "cleanup function is called when component unmounts"
       (let ((mount-called nil)
             (cleanup-called nil))
-        (defcomponent test-mount-cleanup ()
+        (vui-defcomponent test-mount-cleanup ()
           :on-mount (progn
                       (setq mount-called t)
                       (lambda () (setq cleanup-called t)))
           :render (vui-text "child"))
-        (defcomponent test-mount-parent ()
+        (vui-defcomponent test-mount-parent ()
           :state ((show-child t))
           :render (if show-child
                       (vui-component 'test-mount-cleanup)
@@ -657,10 +657,10 @@
   (describe "on-unmount"
     (it "is called when component is removed from tree"
       (let ((unmount-called nil))
-        (defcomponent test-unmount-child ()
+        (vui-defcomponent test-unmount-child ()
           :on-unmount (setq unmount-called t)
           :render (vui-text "child"))
-        (defcomponent test-unmount-parent ()
+        (vui-defcomponent test-unmount-parent ()
           :state ((show-child t))
           :render (if show-child
                       (vui-component 'test-unmount-child)
@@ -680,13 +680,13 @@
     (it "is called for nested children when parent unmounts"
       (let ((parent-unmount nil)
             (child-unmount nil))
-        (defcomponent test-nested-child ()
+        (vui-defcomponent test-nested-child ()
           :on-unmount (setq child-unmount t)
           :render (vui-text "nested"))
-        (defcomponent test-nested-parent ()
+        (vui-defcomponent test-nested-parent ()
           :on-unmount (setq parent-unmount t)
           :render (vui-component 'test-nested-child))
-        (defcomponent test-nested-root ()
+        (vui-defcomponent test-nested-root ()
           :state ((show t))
           :render (if show
                       (vui-component 'test-nested-parent)
@@ -707,11 +707,11 @@
     (it "does not remount when showing again after unmount"
       (let ((mount-count 0)
             (unmount-count 0))
-        (defcomponent test-toggle-child ()
+        (vui-defcomponent test-toggle-child ()
           :on-mount (cl-incf mount-count)
           :on-unmount (cl-incf unmount-count)
           :render (vui-text "child"))
-        (defcomponent test-toggle-parent ()
+        (vui-defcomponent test-toggle-parent ()
           :state ((show t))
           :render (if show
                       (vui-component 'test-toggle-child)

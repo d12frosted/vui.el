@@ -182,7 +182,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
   (it "triggers on-submit callback on RET"
     (let ((submitted-value nil))
-      (defcomponent submit-test ()
+      (vui-defcomponent submit-test ()
         :render
         (vui-field :key 'test-field
                    :value "initial"
@@ -202,7 +202,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
 (describe "vui-field-value"
   (it "retrieves field value by key"
-    (defcomponent field-value-test ()
+    (vui-defcomponent field-value-test ()
       :render
       (vui-vstack
         (vui-field :key 'my-input :value "hello world")))
@@ -213,7 +213,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer "*test-fv*"))))
 
   (it "returns nil for non-existent key"
-    (defcomponent field-value-nil-test ()
+    (vui-defcomponent field-value-nil-test ()
       :render
       (vui-field :key 'existing :value "test"))
     (let ((instance (vui-mount (vui-component 'field-value-nil-test) "*test-fv2*")))
@@ -223,7 +223,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer "*test-fv2*"))))
 
   (it "reads current edited value not initial value"
-    (defcomponent field-value-edit-test ()
+    (vui-defcomponent field-value-edit-test ()
       :render
       (vui-field :key 'editable :value "initial"))
     (let ((instance (vui-mount (vui-component 'field-value-edit-test) "*test-fv3*")))
@@ -239,7 +239,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer "*test-fv3*"))))
 
   (it "works with multiple fields with symbol keys"
-    (defcomponent field-value-keys-test ()
+    (vui-defcomponent field-value-keys-test ()
       :render
       (vui-vstack
         (vui-field :key 'first-key :value "first")

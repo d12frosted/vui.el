@@ -63,7 +63,7 @@ Use =:on-error= for side effects like logging:
 Use =vui-reset-error-boundary= to retry after an error:
 
 #+begin_src elisp
-(defcomponent error-recovery ()
+(vui-defcomponent error-recovery ()
   :render
   (vui-error-boundary
    :id "recoverable"
@@ -102,7 +102,7 @@ Errors in =:on-mount=, =:on-update=, and =:on-unmount= are caught automatically.
 By default, errors are logged via =warn=:
 
 #+begin_src elisp
-(defcomponent bad-mount ()
+(vui-defcomponent bad-mount ()
   :on-mount
   (error "Something went wrong!")  ; Caught and logged
 
@@ -139,7 +139,7 @@ Errors in event callbacks (=:on-click=, =:on-change=, etc.) are also caught.
 ** Default Behavior
 
 #+begin_src elisp
-(defcomponent button-that-errors ()
+(vui-defcomponent button-that-errors ()
   :render
   (vui-button "Click me"
               :on-click (lambda ()
@@ -189,7 +189,7 @@ Structure: =(TYPE ERROR CONTEXT)=
 ** 1. Wrap Critical Sections
 
 #+begin_src elisp
-(defcomponent app ()
+(vui-defcomponent app ()
   :render
   (vui-error-boundary
    :id "app-boundary"
@@ -208,7 +208,7 @@ Structure: =(TYPE ERROR CONTEXT)=
 Isolate independent features:
 
 #+begin_src elisp
-(defcomponent dashboard ()
+(vui-defcomponent dashboard ()
   :render
   (vui-hstack :spacing 4
               ;; Sidebar error won't crash main content
@@ -245,7 +245,7 @@ Isolate independent features:
 Handle errors explicitly when appropriate:
 
 #+begin_src elisp
-(defcomponent safe-data-display ()
+(vui-defcomponent safe-data-display ()
   :state ((data nil)
           (error nil))
 

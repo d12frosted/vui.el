@@ -13,18 +13,18 @@ A component is a reusable piece of UI with its own:
 - *Render function* - Describes what to display
 
 #+begin_src elisp
-(defcomponent my-component (prop1 prop2)   ; Props
+(vui-defcomponent my-component (prop1 prop2)   ; Props
   :state ((local-value "initial"))          ; State
   :render                                   ; Render function
   (vui-text (format "%s - %s" prop1 local-value)))
 #+end_src
 
-* Defining Components with =defcomponent=
+* Defining Components with =vui-defcomponent=
 
-The =defcomponent= macro is the primary way to create components:
+The =vui-defcomponent= macro is the primary way to create components:
 
 #+begin_src elisp
-(defcomponent name (prop-list)
+(vui-defcomponent name (prop-list)
   :state ((state-var initial-value) ...)
   :render body
   :on-mount body
@@ -38,9 +38,9 @@ The =defcomponent= macro is the primary way to create components:
 The name must be a symbol. By convention, use lowercase with hyphens:
 
 #+begin_src elisp
-(defcomponent user-profile ...)     ; Good
-(defcomponent UserProfile ...)      ; Works, but not idiomatic
-(defcomponent "user-profile" ...)   ; Error: must be a symbol
+(vui-defcomponent user-profile ...)     ; Good
+(vui-defcomponent UserProfile ...)      ; Works, but not idiomatic
+(vui-defcomponent "user-profile" ...)   ; Error: must be a symbol
 #+end_src
 
 ** Props (Arguments)
@@ -50,7 +50,7 @@ Props are the component's public interface - data passed from parent components.
 *** Simple Props
 
 #+begin_src elisp
-(defcomponent greeting (name)
+(vui-defcomponent greeting (name)
   :render (vui-text (format "Hello, %s!" name)))
 
 ;; Usage:
@@ -60,7 +60,7 @@ Props are the component's public interface - data passed from parent components.
 *** Multiple Props
 
 #+begin_src elisp
-(defcomponent user-badge (name role &optional avatar)
+(vui-defcomponent user-badge (name role &optional avatar)
   :render
   (vui-hstack
    (when avatar (vui-text avatar))
@@ -78,14 +78,14 @@ Props should never be modified inside a component. They flow down from the paren
 
 #+begin_src elisp
 ;; DON'T do this:
-(defcomponent bad-example (value)
+(vui-defcomponent bad-example (value)
   :render
   (progn
     (setq value (1+ value))  ; WRONG! Never modify props
     (vui-text (number-to-string value))))
 
 ;; DO this instead:
-(defcomponent good-example (initial-value)
+(vui-defcomponent good-example (initial-value)
   :state ((value initial-value))  ; Copy to state if you need to modify
   :render
   (vui-text (number-to-string value)))
@@ -98,7 +98,7 @@ State is internal data that belongs to the component. When state changes, the co
 *** Declaring State
 
 #+begin_src elisp
-(defcomponent counter ()
+(vui-defcomponent counter ()
   :state ((count 0)           ; Integer starting at 0
           (name "Counter")    ; String
           (items '()))        ; Empty list
@@ -112,7 +112,7 @@ Each state variable is a pair: =(name initial-value)=.
 State variables are available directly in the render function:
 
 #+begin_src elisp
-(defcomponent status-display ()
+(vui-defcomponent status-display ()
   :state ((status "ready")
           (count 0))
   :render
@@ -122,7 +122,7 @@ State variables are available directly in the render function:
 *** Updating State with =vui-set-state=
 
 #+begin_src elisp
-(defcomponent counter ()
+(vui-defcomponent counter ()
   :state ((count 0))
   :render
   (vui-fragment
@@ -143,7 +143,7 @@ State variables are available directly in the render function:
 Each component instance has its own state:
 
 #+begin_src elisp
-(defcomponent counter ()
+(vui-defcomponent counter ()
   :state ((count 0))
   :render
   (vui-button (format "Count: %d" count)
@@ -166,13 +166,13 @@ The render function should be /pure/ - it should only compute the UI based on pr
 
 #+begin_src elisp
 ;; Good: Pure render function
-(defcomponent pure-example ()
+(vui-defcomponent pure-example ()
   :state ((value 0))
   :render
   (vui-text (number-to-string value)))
 
 ;; Bad: Side effects in render
-(defcomponent impure-example ()
+(vui-defcomponent impure-example ()
   :state ((value 0))
   :render
   (progn
@@ -187,7 +187,7 @@ Use lifecycle hooks (=:on-mount=, =:on-update=) for side effects instead.
 Use regular Lisp control flow:
 
 #+begin_src elisp
-(defcomponent conditional-example (logged-in user-name)
+(vui-defcomponent conditional-example (logged-in user-name)
   :render
   (if logged-in
       (vui-text (format "Welcome, %s!" user-name))
@@ -200,7 +200,7 @@ Use =vui-list= for dynamic lists, or =cl-loop= for static ones:
 
 #+begin_src elisp
 ;; Dynamic list (items can change)
-(defcomponent item-list ()
+(vui-defcomponent item-list ()
   :state ((items '("Apple" "Banana" "Cherry")))
   :render
   (vui-list items
@@ -208,7 +208,7 @@ Use =vui-list= for dynamic lists, or =cl-loop= for static ones:
               (vui-text (format "• %s\n" item)))))
 
 ;; Static list in render
-(defcomponent static-list ()
+(vui-defcomponent static-list ()
   :render
   (vui-fragment
    (cl-loop for item in '("One" "Two" "Three")
@@ -222,7 +222,7 @@ Use =vui-list= for dynamic lists, or =cl-loop= for static ones:
 If you return =nil=, nothing is rendered:
 
 #+begin_src elisp
-(defcomponent maybe-show (show-p message)
+(vui-defcomponent maybe-show (show-p message)
   :render
   (when show-p
     (vui-text message)))  ; Returns nil when show-p is false
@@ -231,12 +231,12 @@ If you return =nil=, nothing is rendered:
 Components that render to =nil= are completely invisible in layout - they don't affect =vstack= or =hstack= spacing:
 
 #+begin_src elisp
-(defcomponent sidebar-widget (is-journal)
+(vui-defcomponent sidebar-widget (is-journal)
   :render
   (when is-journal
     (vui-text "Journal navigation")))
 
-(defcomponent sidebar ()
+(vui-defcomponent sidebar ()
   :render
   (vui-vstack :spacing 1
     (vui-component 'sidebar-widget :is-journal nil)  ; Renders nothing, no extra blank line
@@ -273,7 +273,7 @@ Props are passed as keyword arguments:
 Non-keyword arguments after props become the =children= prop:
 
 #+begin_src elisp
-(defcomponent card (title)
+(vui-defcomponent card (title)
   :render
   (vui-fragment
    (vui-text (format "=== %s ===" title))
@@ -292,7 +292,7 @@ Non-keyword arguments after props become the =children= prop:
 When rendering lists of components, use =:key= to help vui.el track them:
 
 #+begin_src elisp
-(defcomponent todo-list ()
+(vui-defcomponent todo-list ()
   :state ((todos '((:id 1 :text "First")
                    (:id 2 :text "Second"))))
   :render
@@ -310,13 +310,13 @@ Keys should be stable, unique identifiers (not array indices).
 Components can use other components:
 
 #+begin_src elisp
-(defcomponent button-group ()
+(vui-defcomponent button-group ()
   :render
   (vui-hstack
    (vui-component 'fancy-button :label "Save")
    (vui-component 'fancy-button :label "Cancel")))
 
-(defcomponent fancy-button (label)
+(vui-defcomponent fancy-button (label)
   :render
   (vui-button (format "[ %s ]" label)))
 #+end_src
@@ -327,7 +327,7 @@ When multiple components need to share state, lift it to a common ancestor:
 
 #+begin_src elisp
 ;; Parent owns the state
-(defcomponent temperature-app ()
+(vui-defcomponent temperature-app ()
   :state ((celsius 0))
   :render
   (vui-fragment
@@ -344,7 +344,7 @@ When multiple components need to share state, lift it to a common ancestor:
                                               (/ (- v 32) 1.8))))))
 
 ;; Child is stateless, calls parent's callback
-(defcomponent temperature-input (label value on-change)
+(vui-defcomponent temperature-input (label value on-change)
   :render
   (vui-hstack
    (vui-text (format "%s: " label))
@@ -386,7 +386,7 @@ Each buffer can have one root component. For multiple independent UIs, use multi
 
 #+begin_src elisp
 ;; Your solution:
-(defcomponent collapsible-section (title)
+(vui-defcomponent collapsible-section (title)
   :state ((expanded t))
   :render
   ;; ... implement this

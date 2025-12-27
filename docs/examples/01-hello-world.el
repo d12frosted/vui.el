@@ -10,7 +10,7 @@
 ;;; Example 1: Hello World
 ;; The simplest possible component
 
-(defcomponent hello-world ()
+(vui-defcomponent hello-world ()
   :render (vui-text "Hello, World!"))
 
 (defun vui-example-hello-world ()
@@ -22,7 +22,7 @@
 ;;; Example 2: Click Counter
 ;; Basic state and interactivity
 
-(defcomponent click-counter ()
+(vui-defcomponent click-counter ()
   :state ((count 0))
   :render
   (vui-fragment
@@ -41,7 +41,7 @@
 ;;; Example 3: Greeter with Props
 ;; Passing data to components
 
-(defcomponent greeter (name)
+(vui-defcomponent greeter (name)
   :render (vui-text (format "Hello, %s!" name)))
 
 (defun vui-example-greeter ()
@@ -53,7 +53,7 @@
 ;;; Example 4: Collapsible Card
 ;; Conditional rendering and composition
 
-(defcomponent greeting-card (title)
+(vui-defcomponent greeting-card (title)
   :state ((expanded nil))
   :render
   (vui-fragment
@@ -77,7 +77,7 @@
 ;;; Example 5: Name Form
 ;; Text input and reactive updates
 
-(defcomponent name-form ()
+(vui-defcomponent name-form ()
   :state ((name ""))
   :render
   (vui-fragment
@@ -102,7 +102,7 @@
 ;;; Example 6: Todo Item (Exercise Solution)
 ;; Solution to the exercise from Getting Started
 
-(defcomponent todo-item-example (text)
+(vui-defcomponent todo-item-example (text)
   :state ((done nil))
   :render
   (vui-hstack
@@ -111,7 +111,7 @@
                  (vui-set-state :done (not done))))
    (vui-text text :face (when done 'shadow))))
 
-(defcomponent todo-items-demo ()
+(vui-defcomponent todo-items-demo ()
   :render
   (vui-fragment
    (vui-text "Todo Items (click to toggle):")

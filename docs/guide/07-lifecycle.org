@@ -17,7 +17,7 @@ Lifecycle hooks let you run code at specific points in a component's life: when 
 Runs once after the component is first rendered:
 
 #+begin_src elisp
-(defcomponent my-component ()
+(vui-defcomponent my-component ()
   :on-mount
   (message "Component mounted!")
 
@@ -37,7 +37,7 @@ Runs once after the component is first rendered:
 If =:on-mount= returns a function, it will be called during unmount:
 
 #+begin_src elisp
-(defcomponent with-mount-cleanup ()
+(vui-defcomponent with-mount-cleanup ()
   :on-mount
   (progn
     (message "Setting up...")
@@ -56,7 +56,7 @@ This is useful when setup and cleanup are closely related.
 Runs after every re-render (but not the first render):
 
 #+begin_src elisp
-(defcomponent tracking-updates ()
+(vui-defcomponent tracking-updates ()
   :state ((count 0))
   :on-update
   (message "Component updated! Count is now: %d" count)
@@ -72,7 +72,7 @@ Runs after every re-render (but not the first render):
 The update hook receives current and previous values:
 
 #+begin_src elisp
-(defcomponent tracking-changes (value)
+(vui-defcomponent tracking-changes (value)
   :state ((internal 0))
   :on-update
   (message "Props: %s -> %s, State: %s -> %s"
@@ -92,7 +92,7 @@ The available variables are:
 ** Comparing Changes
 
 #+begin_src elisp
-(defcomponent smart-updater (data)
+(vui-defcomponent smart-updater (data)
   :on-update
   (let ((old-data (plist-get prev-props :data))
         (new-data (plist-get props :data)))
@@ -108,7 +108,7 @@ The available variables are:
 Runs before the component is removed from the tree:
 
 #+begin_src elisp
-(defcomponent cleanup-example ()
+(vui-defcomponent cleanup-example ()
   :on-unmount
   (message "Cleaning up!")
 
@@ -126,7 +126,7 @@ Runs before the component is removed from the tree:
 ** Example: Timer Cleanup
 
 #+begin_src elisp
-(defcomponent auto-refresh ()
+(vui-defcomponent auto-refresh ()
   :state ((data nil))
 
   :on-mount
@@ -150,14 +150,14 @@ When components nest, hooks run in specific orders.
 Children mount before parents. Given this tree:
 
 #+begin_src elisp
-(defcomponent parent ()
+(vui-defcomponent parent ()
   :on-mount (message "Parent mounted")
   :render
   (vui-vstack
    (vui-component 'child :name "A")
    (vui-component 'child :name "B")))
 
-(defcomponent child (name)
+(vui-defcomponent child (name)
   :on-mount (message "Child %s mounted" name)
   :render (vui-text name))
 #+end_src
@@ -192,37 +192,37 @@ Child B unmounting
 Parent unmounting
 #+end_example
 
-* Lifecycle vs use-effect
+* Lifecycle vs vui-use-effect
 
 Both can achieve similar goals. Here's when to use each:
 
 | Scenario                          | Use           |
 |-----------------------------------+---------------|
 | Simple setup on mount             | =:on-mount=   |
-| Setup that depends on props/state | =use-effect=  |
+| Setup that depends on props/state | =vui-vui-use-effect=  |
 | Simple cleanup on unmount         | =:on-unmount= |
-| Cleanup tied to specific values   | =use-effect=  |
+| Cleanup tied to specific values   | =vui-vui-use-effect=  |
 | Compare previous/current values   | =:on-update=  |
-| React to specific dep changes     | =use-effect=  |
+| React to specific dep changes     | =vui-vui-use-effect=  |
 
 ** Lifecycle Hooks
 
 #+begin_src elisp
 ;; Simpler, declarative
-(defcomponent with-lifecycle ()
+(vui-defcomponent with-lifecycle ()
   :on-mount (message "mounted")
   :on-unmount (message "unmounting")
   :render ...)
 #+end_src
 
-** use-effect
+** vui-use-effect
 
 #+begin_src elisp
 ;; More flexible, dependency-aware
-(defcomponent with-effect ()
+(vui-defcomponent with-effect ()
   :render
   (progn
-    (use-effect ()
+    (vui-use-effect ()
       (message "mounted")
       (lambda () (message "unmounting")))
     ...))
@@ -235,7 +235,7 @@ When lifecycle hooks start async operations (timers, processes, fetch callbacks)
 ** Timer in on-mount
 
 #+begin_src elisp
-(defcomponent polling-component ()
+(vui-defcomponent polling-component ()
   :state ((data nil))
 
   :on-mount
@@ -253,7 +253,7 @@ When lifecycle hooks start async operations (timers, processes, fetch callbacks)
 ** Fetch with Callback
 
 #+begin_src elisp
-(defcomponent data-loader (item-id)
+(vui-defcomponent data-loader (item-id)
   :state ((data nil) (loading t))
 
   :on-mount
@@ -282,7 +282,7 @@ See [[file:08-error-handling.org][Error Handling]] for details.
 * Complete Example
 
 #+begin_src elisp
-(defcomponent document-editor (doc-id)
+(vui-defcomponent document-editor (doc-id)
   :state ((content nil)
           (loading t)
           (dirty nil))
@@ -349,4 +349,4 @@ function from =:on-mount=.
 * What's Next?
 
 - [[file:08-error-handling.org][Error Handling]] - Error boundaries and handlers
-- [[file:05-hooks.org][Hooks]] - use-effect for more complex scenarios
+- [[file:05-hooks.org][Hooks]] - vui-use-effect for more complex scenarios

@@ -7,6 +7,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Breaking Changes
+
+- *Symbol Prefix Rename*: All public macros now use the =vui-= prefix to comply with MELPA naming conventions:
+  - =defcomponent= → =vui-defcomponent=
+  - =defcontext= → =vui-defcontext=
+  - =use-effect= → =vui-use-effect=
+  - =use-ref= → =vui-use-ref=
+  - =use-callback= → =vui-use-callback=
+  - =use-callback*= → =vui-use-callback*=
+  - =use-memo= → =vui-use-memo=
+  - =use-memo*= → =vui-use-memo*=
+  - =use-async= → =vui-use-async=
+
+  See the README section "Using Shorter Names (Shorthands)" for how to use aliases or =read-symbol-shorthands= if you prefer the shorter names.
+
 * v1.0.0-rc.3 - 2025-12-20
 
 ** Added
@@ -32,7 +47,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Added
 
 - =:indent= and =:spacing= options for =vui-list=.
-- Optional docstring support in =defcomponent= macro.
+- Optional docstring support in =vui-defcomponent= macro.
 - =:no-decoration= option for =vui-button= to render without brackets.
 - =:help-echo= option for =vui-button= to control tooltip. Setting to =nil= disables tooltip generation, providing ~2x faster button creation for bulk rendering.
 
@@ -49,8 +64,8 @@ Initial release candidate.
 ** Added
 
 - Core rendering engine with virtual DOM diffing and reconciliation.
-- Component system with =defcomponent= macro.
-- Hooks: =use-state=, =use-effect=, =use-memo=, =use-ref=, =use-async=.
+- Component system with =vui-defcomponent= macro.
+- Hooks: =vui-use-effect=, =vui-use-memo=, =vui-use-ref=, =vui-use-async=.
 - Layout primitives: =vui-vstack=, =vui-hstack=, =vui-box=, =vui-table=.
 - Basic elements: =vui-text=, =vui-button=, =vui-link=, =vui-input=, =vui-checkbox=, =vui-select=.
 - Utility components: =vui-fragment=, =vui-newline=, =vui-space=, =vui-list=, =vui-error-boundary=.

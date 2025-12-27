@@ -9,7 +9,7 @@ Complete reference for all vui.el functions, macros, and variables.
 ** defcomponent
 
 #+begin_src elisp
-(defcomponent NAME (PROPS...) [DOCSTRING] BODY...)
+(vui-defcomponent NAME (PROPS...) [DOCSTRING] BODY...)
 #+end_src
 
 Define a component named NAME.
@@ -47,7 +47,7 @@ In =:on-update= and =:should-update= additionally:
 *** Example
 
 #+begin_src elisp
-(defcomponent counter (initial-value)
+(vui-defcomponent counter (initial-value)
   "A counter component with increment button."
   :state ((count initial-value))
 
@@ -559,19 +559,19 @@ when called, restores the context and executes BODY.
 Use this when you need =vui-set-state= in:
 - Timer callbacks (=run-with-timer=, =run-with-idle-timer=)
 - Emacs hook functions
-- Process sentinels (when not using =use-async=)
+- Process sentinels (when not using =vui-use-async=)
 - Any callback that runs asynchronously
 
 #+begin_src elisp
 ;; Timer example - use functional update for state-based values
-(use-effect ()
+(vui-use-effect ()
   (let ((timer (run-with-timer 1 1
                  (vui-with-async-context
                    (vui-set-state :seconds #'1+)))))
     (lambda () (cancel-timer timer))))
 
 ;; Hook example - (frame-width) is called fresh, no capture issue
-(use-effect ()
+(vui-use-effect ()
   (let ((handler (vui-with-async-context
                    (vui-set-state :width (frame-width)))))
     (add-hook 'window-size-change-functions handler)
@@ -580,7 +580,7 @@ Use this when you need =vui-set-state= in:
 #+end_src
 
 *Note:* You do NOT need this for widget callbacks (buttons, fields) or
-=use-async= loaders - those handle context automatically.
+=vui-use-async= loaders - those handle context automatically.
 
 ** vui-async-callback
 
@@ -599,13 +599,13 @@ Use this when an async operation passes data to your callback:
 
 #+begin_src elisp
 ;; Fetch data and set state with the result
-(use-effect ()
+(vui-use-effect ()
   (fetch-data-async
     (vui-async-callback (result)
       (vui-set-state :data result))))
 
 ;; Multiple arguments
-(use-effect ()
+(vui-use-effect ()
   (my-api-call
     (vui-async-callback (data status)
       (vui-set-state :data data)
@@ -621,7 +621,7 @@ Use this when an async operation passes data to your callback:
 ** use-effect
 
 #+begin_src elisp
-(use-effect (DEPS...) BODY...)
+(vui-use-effect (DEPS...) BODY...)
 #+end_src
 
 Run side effect when DEPS change.
@@ -632,15 +632,15 @@ Run side effect when DEPS change.
 
 #+begin_src elisp
 ;; Run once on mount
-(use-effect ()
+(vui-use-effect ()
   (message "Mounted"))
 
 ;; Run when count changes
-(use-effect (count)
+(vui-use-effect (count)
   (message "Count: %d" count))
 
 ;; With cleanup
-(use-effect (user-id)
+(vui-use-effect (user-id)
   (let ((timer (run-with-timer 1 nil #'refresh)))
     (lambda () (cancel-timer timer))))
 #+end_src
@@ -648,7 +648,7 @@ Run side effect when DEPS change.
 ** use-ref
 
 #+begin_src elisp
-(use-ref INITIAL-VALUE) -> (VALUE . nil)
+(vui-use-ref INITIAL-VALUE) -> (VALUE . nil)
 #+end_src
 
 Create mutable ref that persists across renders.
@@ -658,8 +658,8 @@ Access via =(car ref)=, set via =(setcar ref new-value)=.
 Modifying a ref does NOT trigger re-render.
 
 #+begin_src elisp
-(let ((timer-ref (use-ref nil)))
-  (use-effect ()
+(let ((timer-ref (vui-use-ref nil)))
+  (vui-use-effect ()
     (setcar timer-ref (run-with-timer 1 1 #'tick))
     (lambda () (cancel-timer (car timer-ref)))))
 #+end_src
@@ -667,13 +667,13 @@ Modifying a ref does NOT trigger re-render.
 ** use-callback
 
 #+begin_src elisp
-(use-callback (DEPS...) BODY)
+(vui-use-callback (DEPS...) BODY)
 #+end_src
 
 Create memoized callback that stays stable when DEPS unchanged.
 
 #+begin_src elisp
-(let ((handle-click (use-callback (item-id)
+(let ((handle-click (vui-use-callback (item-id)
                       (lambda () (delete-item item-id)))))
   (vui-button "Delete" :on-click handle-click))
 #+end_src
@@ -681,10 +681,10 @@ Create memoized callback that stays stable when DEPS unchanged.
 ** use-callback*
 
 #+begin_src elisp
-(use-callback* (DEPS...) :compare COMPARE BODY)
+(vui-use-callback* (DEPS...) :compare COMPARE BODY)
 #+end_src
 
-Like =use-callback= with configurable comparison.
+Like =vui-use-callback= with configurable comparison.
 
 COMPARE options:
 - =eq= - identity comparison (fast)
@@ -694,13 +694,13 @@ COMPARE options:
 ** use-memo
 
 #+begin_src elisp
-(use-memo (DEPS...) BODY)
+(vui-use-memo (DEPS...) BODY)
 #+end_src
 
 Cache computed value, recompute only when DEPS change.
 
 #+begin_src elisp
-(let ((filtered (use-memo (items filter)
+(let ((filtered (vui-use-memo (items filter)
                   (seq-filter (lambda (i)
                                 (string-match-p filter (plist-get i :name)))
                               items))))
@@ -710,15 +710,15 @@ Cache computed value, recompute only when DEPS change.
 ** use-memo*
 
 #+begin_src elisp
-(use-memo* (DEPS...) :compare COMPARE BODY)
+(vui-use-memo* (DEPS...) :compare COMPARE BODY)
 #+end_src
 
-Like =use-memo= with configurable comparison.
+Like =vui-use-memo= with configurable comparison.
 
 ** use-async
 
 #+begin_src elisp
-(use-async KEY LOADER) -> plist
+(vui-use-async KEY LOADER) -> plist
 #+end_src
 
 Asynchronously load data using LOADER, identified by KEY.
@@ -735,7 +735,7 @@ Returns a plist:
 | =:error=  | Error message (when =error=)           |
 
 #+begin_src elisp
-(let ((result (use-async user-id
+(let ((result (vui-use-async user-id
                 (lambda (resolve _reject)
                   (funcall resolve (fetch-user user-id))))))
   (pcase (plist-get result :status)
@@ -749,7 +749,7 @@ Returns a plist:
 ** defcontext
 
 #+begin_src elisp
-(defcontext NAME &optional DEFAULT-VALUE DOCSTRING)
+(vui-defcontext NAME &optional DEFAULT-VALUE DOCSTRING)
 #+end_src
 
 Define a context.
@@ -760,7 +760,7 @@ Creates:
 - =use-NAME= - Hook to consume value
 
 #+begin_src elisp
-(defcontext theme 'light "Current UI theme.")
+(vui-defcontext theme 'light "Current UI theme.")
 
 ;; Provide
 (theme-provider 'dark
@@ -920,7 +920,7 @@ Clear debug log buffer.
 ** Creating Components
 
 #+begin_src elisp
-(defcomponent NAME (PROPS...)
+(vui-defcomponent NAME (PROPS...)
   :state ((VAR INIT) ...)
   :on-mount FORM
   :on-update FORM
@@ -956,11 +956,11 @@ Clear debug log buffer.
 
 | Hook           | Description               |
 |----------------+---------------------------|
-| =use-effect=   | Side effects              |
-| =use-ref=      | Mutable reference         |
-| =use-callback= | Memoized callback         |
-| =use-memo=     | Memoized value            |
-| =use-async=    | Async data loading        |
+| =vui-use-effect=   | Side effects              |
+| =vui-use-ref=      | Mutable reference         |
+| =vui-use-callback= | Memoized callback         |
+| =vui-use-memo=     | Memoized value            |
+| =vui-use-async=    | Async data loading        |
 
 ** State
 
@@ -974,7 +974,7 @@ Clear debug log buffer.
 
 | Macro/Function   | Description          |
 |------------------+----------------------|
-| =defcontext=     | Define context       |
+| =vui-defcontext=     | Define context       |
 | =NAME-provider=  | Provide value        |
 | =use-NAME=       | Consume value        |
 

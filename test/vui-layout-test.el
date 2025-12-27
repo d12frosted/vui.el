@@ -250,7 +250,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
   (it "preserves button interactivity inside box"
     (let ((clicked nil))
-      (defcomponent box-button-test ()
+      (vui-defcomponent box-button-test ()
         :render
         (vui-box
          (vui-button "Click"
@@ -595,7 +595,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
     (let ((click-log nil)
           (render-log nil))
       ;; Innermost: button component that calls on-change
-      (defcomponent score-cell (id on-change)
+      (vui-defcomponent score-cell (id on-change)
         :render
         (vui-button (format "btn-%s" id)
           :on-click (lambda ()
@@ -610,7 +610,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                       (funcall on-change id 99))))
 
       ;; Middle: table component that creates score-cell components
-      (defcomponent scores-table (items on-change)
+      (vui-defcomponent scores-table (items on-change)
         :render
         (vui-table
          :columns '((:width 10 :grow t))
@@ -622,7 +622,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                        items)))
 
       ;; Outer: app component with state
-      (defcomponent table-app ()
+      (vui-defcomponent table-app ()
         :state ((scores '((:id 1 :val 0) (:id 2 :val 0))))
         :render
         (progn
@@ -776,12 +776,12 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
   (it "vstack skips separator for component that renders nil"
     ;; Component returning nil should not create extra blank lines
-    (defcomponent vui-test--nil-widget ()
+    (vui-defcomponent vui-test--nil-widget ()
       :render
       (when nil  ; always nil
         (vui-text "never shown")))
 
-    (defcomponent vui-test--nil-root ()
+    (vui-defcomponent vui-test--nil-root ()
       :render
       (vui-vstack :spacing 1
         (vui-component 'vui-test--nil-widget)
@@ -800,11 +800,11 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack handles multiple consecutive nil-rendering components"
-    (defcomponent vui-test--nil-widget-2 ()
+    (vui-defcomponent vui-test--nil-widget-2 ()
       :render
       (when nil (vui-text "never")))
 
-    (defcomponent vui-test--multi-nil-root ()
+    (vui-defcomponent vui-test--multi-nil-root ()
       :render
       (vui-vstack :spacing 0
         (vui-text "Start")
@@ -823,7 +823,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack handles nil-rendering component at start"
-    (defcomponent vui-test--nil-start-root ()
+    (vui-defcomponent vui-test--nil-start-root ()
       :render
       (vui-vstack :spacing 0
         (vui-component 'vui-test--nil-widget-2)
@@ -839,7 +839,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack handles nil-rendering component at end"
-    (defcomponent vui-test--nil-end-root ()
+    (vui-defcomponent vui-test--nil-end-root ()
       :render
       (vui-vstack :spacing 0
         (vui-text "Content")
@@ -855,7 +855,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "hstack skips separator for component that renders nil"
-    (defcomponent vui-test--hstack-nil-root ()
+    (vui-defcomponent vui-test--hstack-nil-root ()
       :render
       (vui-hstack :spacing 1
         (vui-component 'vui-test--nil-widget-2)
@@ -874,7 +874,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack with indent skips separator for nil-rendering component"
-    (defcomponent vui-test--indent-nil-root ()
+    (vui-defcomponent vui-test--indent-nil-root ()
       :render
       (vui-vstack :spacing 0 :indent 2
         (vui-text "A")
@@ -892,7 +892,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
   ;; Additional edge cases with spacing
   (it "vstack with spacing handles nil-rendering component at start"
-    (defcomponent vui-test--spacing-nil-start ()
+    (vui-defcomponent vui-test--spacing-nil-start ()
       :render
       (vui-vstack :spacing 1
         (vui-component 'vui-test--nil-widget-2)
@@ -909,7 +909,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack with spacing handles nil-rendering component at end"
-    (defcomponent vui-test--spacing-nil-end ()
+    (vui-defcomponent vui-test--spacing-nil-end ()
       :render
       (vui-vstack :spacing 1
         (vui-text "A")
@@ -926,7 +926,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "hstack handles nil-rendering component at start"
-    (defcomponent vui-test--hstack-nil-start ()
+    (vui-defcomponent vui-test--hstack-nil-start ()
       :render
       (vui-hstack :spacing 1
         (vui-component 'vui-test--nil-widget-2)
@@ -943,7 +943,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "hstack handles nil-rendering component at end"
-    (defcomponent vui-test--hstack-nil-end ()
+    (vui-defcomponent vui-test--hstack-nil-end ()
       :render
       (vui-hstack :spacing 1
         (vui-text "A")
@@ -960,7 +960,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "vstack handles all nil-rendering components"
-    (defcomponent vui-test--all-nil ()
+    (vui-defcomponent vui-test--all-nil ()
       :render
       (vui-vstack :spacing 1
         (vui-component 'vui-test--nil-widget-2)
@@ -977,7 +977,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (kill-buffer buf))))
 
   (it "hstack handles all nil-rendering components"
-    (defcomponent vui-test--hstack-all-nil ()
+    (vui-defcomponent vui-test--hstack-all-nil ()
       :render
       (vui-hstack :spacing 1
         (vui-component 'vui-test--nil-widget-2)

@@ -12,23 +12,3 @@
 
 ;; Lint using package-lint only (skip elisp-lint style checks)
 (setf eldev-lint-default '(package))
-
-;; Allow React-style hook names without vui- prefix.
-;; These are intentionally short for better DX: defcomponent, use-effect,
-;; use-ref, use-callback, use-memo, use-async, defcontext.
-;; We filter these specific errors since package-lint doesn't support whitelisting.
-(defun vui--filter-package-lint-errors (errors)
-  "Filter out prefix errors for intentionally unprefixed symbols."
-  (let ((allowed-unprefixed '("defcomponent" "defcontext"
-                              "use-effect" "use-ref" "use-callback"
-                              "use-callback\\*" "use-memo" "use-memo\\*"
-                              "use-async")))
-    (seq-remove
-     (lambda (err)
-       (and (string-match-p "doesn't start with package's prefix" (nth 3 err))
-            (seq-some (lambda (sym)
-                        (string-match-p (format "\"%s\"" sym) (nth 3 err)))
-                      allowed-unprefixed)))
-     errors)))
-
-(advice-add 'package-lint-buffer :filter-return #'vui--filter-package-lint-errors)

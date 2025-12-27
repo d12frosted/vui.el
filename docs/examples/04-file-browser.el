@@ -17,14 +17,14 @@
 ;; Components should capture set-path with (use-file-browser-set-path) during render
 ;; and call it in event handlers: (funcall set-path new-path)
 
-(defcontext file-browser-path)
-(defcontext file-browser-set-path)
+(vui-defcontext file-browser-path)
+(vui-defcontext file-browser-set-path)
 
 
 ;;; Breadcrumb Navigation
 ;; Clickable path segments
 
-(defcomponent breadcrumb ()
+(vui-defcomponent breadcrumb ()
   :render
   (let* ((path (expand-file-name (use-file-browser-path)))
          (set-path (use-file-browser-set-path))
@@ -51,7 +51,7 @@
 ;;; File Entry Component
 ;; Single file or directory entry
 
-(defcomponent file-entry (entry on-open)
+(vui-defcomponent file-entry (entry on-open)
   :state ((hover nil))
 
   :render
@@ -79,7 +79,7 @@
 ;;; Sort Controls
 ;; Toggle sorting by name, size, or type
 
-(defcomponent sort-controls (sort-by sort-asc on-sort)
+(vui-defcomponent sort-controls (sort-by sort-asc on-sort)
   :render
   (let ((make-sort-button
          (lambda (field label)
@@ -100,7 +100,7 @@
 ;;; Search/Filter Input
 ;; Filter files by name
 
-(defcomponent search-box (filter on-filter)
+(vui-defcomponent search-box (filter on-filter)
   :render
   (vui-hstack
    (vui-text "🔍 ")
@@ -116,7 +116,7 @@
 ;;; File List Component
 ;; Displays sorted and filtered file list
 
-(defcomponent file-list (entries sort-by sort-asc filter on-open)
+(vui-defcomponent file-list (entries sort-by sort-asc filter on-open)
   :render
   (let* (;; Filter entries
          (filtered (if (string-empty-p filter)
@@ -158,7 +158,7 @@
 ;;; Status Bar
 ;; Shows item counts
 
-(defcomponent status-bar (total filtered)
+(vui-defcomponent status-bar (total filtered)
   :render
   (vui-text (if (= total filtered)
                 (format "%d items" total)
@@ -168,7 +168,7 @@
 
 ;;; Main File Browser Component
 
-(defcomponent file-browser-main ()
+(vui-defcomponent file-browser-main ()
   :state ((entries nil)
           (loading t)
           (error nil)
@@ -294,7 +294,7 @@
 
 ;;; Root App with Context Provider
 
-(defcomponent file-browser (initial-path)
+(vui-defcomponent file-browser (initial-path)
   :state ((path nil))
 
   :on-mount
@@ -323,7 +323,7 @@ Optional PATH specifies starting directory."
 ;;; Bonus: Mini File Picker
 ;; Simpler version that returns a selection
 
-(defcomponent file-picker (on-select on-cancel)
+(vui-defcomponent file-picker (on-select on-cancel)
   :state ((path (expand-file-name "~"))
           (entries nil)
           (selected nil)

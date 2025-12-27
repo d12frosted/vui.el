@@ -587,11 +587,11 @@ keybindings while preserving VUI and widget functionality.
   cached-vtree  ; Last rendered vtree (for should-update optimization)
   mounted-p   ; Has this been mounted?
   mount-cleanup ; Cleanup function returned from on-mount, called during unmount
-  effects     ; Alist of (effect-id . (deps . cleanup-fn)) for use-effect
-  refs        ; Hash table of ref-id -> (value . nil) for use-ref
-  callbacks   ; Hash table of callback-id -> (deps . fn) for use-callback
+  effects     ; Alist of (effect-id . (deps . cleanup-fn)) for vui-use-effect
+  refs        ; Hash table of ref-id -> (value . nil) for vui-use-ref
+  callbacks   ; Hash table of callback-id -> (deps . fn) for vui-use-callback
   memos       ; Hash table of memo-id -> (deps . value) for let-memo
-  asyncs      ; Hash table of async-id -> (key status data error timer) for use-async
+  asyncs      ; Hash table of async-id -> (key status data error timer) for vui-use-async
   prev-props  ; Props from previous render (for on-update)
   prev-state) ; State from previous render (for on-update)
 
@@ -638,7 +638,7 @@ Used for stable cursor preservation across re-renders.")
 
 (defvar vui--rendering-p nil
   "Non-nil when a render is in progress.
-Used to prevent nested re-renders from `use-async' resolve callbacks.")
+Used to prevent nested re-renders from `vui-use-async' resolve callbacks.")
 
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
@@ -653,7 +653,7 @@ Each entry is a vui-context-binding.")
   (or (gethash name vui--component-registry)
       (error "Unknown component: %s" name)))
 
-(defmacro defcomponent (name args &rest body)
+(defmacro vui-defcomponent (name args &rest body)
   "Define a component named NAME.
 
 ARGS is a list of prop names the component accepts.
@@ -671,7 +671,7 @@ and `children' for nested content.  on-update and should-update
 have access to `prev-props' and `prev-state'.
 
 Example:
-  (defcomponent greeting (name)
+  (vui-defcomponent greeting (name)
     \"A greeting component that displays a name with a counter.\"
     :state ((count 0))
     :on-mount (message \"Mounted: %s\" name)
@@ -711,9 +711,9 @@ Example:
                               rest (cddr rest)))
         (:render (setq render-form (cadr rest)
                        rest (cddr rest)))
-        (_ (error "Unknown defcomponent keyword: %s" (car rest)))))
+        (_ (error "Unknown vui-defcomponent keyword: %s" (car rest)))))
     (unless render-form
-      (error "defcomponent %s: :render is required" name))
+      (error "vui-defcomponent %s: :render is required" name))
     (let ((state-vars (mapcar #'car state-spec))
           (state-inits (mapcar #'cadr state-spec)))
       (cl-flet ((make-body-fn (form)
@@ -1221,11 +1221,11 @@ ARGS is a list of parameter names (like a lambda arglist).
 BODY is executed with component context restored and ARGS bound.
 
 Use this when an async operation needs to pass data to your callback.
-Create the callback inside component context (e.g., in `use-effect'),
+Create the callback inside component context (e.g., in `vui-use-effect'),
 then the async operation calls it later with results.
 
 Example:
-  (use-effect ()
+  (vui-use-effect ()
     (my-fetch-data
       (vui-async-callback (result)
         (vui-set-state :data result))))
@@ -1333,7 +1333,7 @@ Use when you need the UI to update synchronously."
 
 ;;; Effects System
 
-(defmacro use-effect (deps &rest body)
+(defmacro vui-use-effect (deps &rest body)
   "Run BODY as a side effect when DEPS change.
 
 DEPS is a list of variables to watch. The effect runs:
@@ -1345,15 +1345,15 @@ the next effect run or on unmount.
 
 Examples:
   ;; Run once on mount (empty deps)
-  (use-effect ()
+  (vui-use-effect ()
     (message \"Component mounted\"))
 
   ;; Run when count changes
-  (use-effect (count)
+  (vui-use-effect (count)
     (message \"Count is now %d\" count))
 
   ;; With cleanup
-  (use-effect (user-id)
+  (vui-use-effect (user-id)
     (let ((subscription (subscribe user-id)))
       (lambda () (unsubscribe subscription))))"
   (declare (indent 1))
@@ -1365,13 +1365,13 @@ Examples:
   "Register an effect with DEPS and EFFECT-FN to run after commit.
 Called from within a component's render function."
   (unless vui--current-instance
-    (error "use-effect called outside of component context"))
+    (error "vui-use-effect called outside of component context"))
   (let* ((instance vui--current-instance)
          (effect-id vui--effect-index)
          (effects (vui-instance-effects instance))
          (prev-entry (assq effect-id effects))
          (prev-deps (cadr prev-entry)))
-    ;; Increment effect counter for next use-effect call
+    ;; Increment effect counter for next vui-use-effect call
     (cl-incf vui--effect-index)
     ;; Check if deps changed (or first run)
     (when (or (null prev-entry)
@@ -1416,7 +1416,7 @@ Called from within a component's render function."
 
 ;;; Refs System
 
-(defmacro use-ref (initial-value)
+(defmacro vui-use-ref (initial-value)
   "Create a mutable ref that persists across re-renders.
 
 Returns a cons cell whose car is the current value.
@@ -1431,14 +1431,14 @@ Useful for:
 
 Examples:
   ;; Store a timer reference
-  (let ((timer-ref (use-ref nil)))
-    (use-effect ()
+  (let ((timer-ref (vui-use-ref nil)))
+    (vui-use-effect ()
       (setcar timer-ref (run-with-timer 1 1 #\\='update))
       (lambda () (cancel-timer (car timer-ref)))))
 
   ;; Track previous value
-  (let ((prev-ref (use-ref nil)))
-    (use-effect (value)
+  (let ((prev-ref (vui-use-ref nil)))
+    (vui-use-effect (value)
       (message \"Changed from %s to %s\" (car prev-ref) value)
       (setcar prev-ref value)))
 
@@ -1449,14 +1449,14 @@ INITIAL-VALUE is the starting value stored in the ref."
   "Get existing ref or create new one with INITIAL-VALUE.
 Called from within a component's render function."
   (unless vui--current-instance
-    (error "use-ref called outside of component context"))
+    (error "vui-use-ref called outside of component context"))
   (let* ((instance vui--current-instance)
          (ref-id vui--ref-index)
          (refs (or (vui-instance-refs instance)
                    (let ((h (make-hash-table :test 'eq)))
                      (setf (vui-instance-refs instance) h)
                      h))))
-    ;; Increment ref counter for next use-ref call
+    ;; Increment ref counter for next vui-use-ref call
     (cl-incf vui--ref-index)
     ;; Get existing ref or create new one
     (or (gethash ref-id refs)
@@ -1466,7 +1466,7 @@ Called from within a component's render function."
 
 ;;; Context API
 
-(defmacro defcontext (name &optional default-value docstring)
+(defmacro vui-defcontext (name &optional default-value docstring)
   "Define a context NAME with optional DEFAULT-VALUE.
 
 Creates:
@@ -1475,7 +1475,7 @@ Creates:
 - `use-NAME': Function to consume the context value
 
 Example:
-  (defcontext theme \\='light \"The current UI theme.\")
+  (vui-defcontext theme \\='light \"The current UI theme.\")
 
   ;; In a component:
   (theme-provider \\='dark
@@ -1525,7 +1525,7 @@ Returns `default-value' if no provider found."
 
 ;;; Memoized Callbacks
 
-(defmacro use-callback (deps &rest body)
+(defmacro vui-use-callback (deps &rest body)
   "Create a memoized callback that only changes when DEPS change.
 
 Returns a function that remains stable (eq-identical) across re-renders
@@ -1537,7 +1537,7 @@ any dep changes (compared with `equal').
 
 Example:
   ;; Stable callback that only changes when item-id changes
-  (let ((handle-delete (use-callback (item-id)
+  (let ((handle-delete (vui-use-callback (item-id)
                          (delete-item item-id))))
     (vui-component \\='item-button :on-click handle-delete))
 
@@ -1548,8 +1548,8 @@ not a function returning a callback."
     (list ,@deps)
     (lambda () ,@body)))
 
-(defmacro use-callback* (deps &key compare &rest body)
-  "Like `use-callback' but with configurable comparison mode.
+(defmacro vui-use-callback* (deps &key compare &rest body)
+  "Like `vui-use-callback' but with configurable comparison mode.
 
 DEPS is a list of variables to watch.
 COMPARE specifies comparison mode:
@@ -1559,7 +1559,7 @@ COMPARE specifies comparison mode:
 
 Example:
   ;; Use eq for fast symbol comparison
-  (use-callback* (action-type)
+  (vui-use-callback* (action-type)
     :compare eq
     (dispatch action-type))
 
@@ -1592,7 +1592,7 @@ COMPARE specifies comparison mode (default `equal').
 Called from within a component's render function.
 CALLBACK-FN is a thunk that returns the actual callback."
   (unless vui--current-instance
-    (error "use-callback called outside of component context"))
+    (error "vui-use-callback called outside of component context"))
   (let* ((instance vui--current-instance)
          (callback-id vui--callback-index)
          (cache (or (vui-instance-callbacks instance)
@@ -1603,7 +1603,7 @@ CALLBACK-FN is a thunk that returns the actual callback."
          (cached-deps (car cached))
          (cached-fn (cdr cached))
          (cmp (or compare 'equal)))
-    ;; Increment callback counter for next use-callback call
+    ;; Increment callback counter for next vui-use-callback call
     (cl-incf vui--callback-index)
     ;; Return cached callback if deps unchanged
     (if (and cached (vui--deps-equal-p cached-deps deps cmp))
@@ -1615,10 +1615,10 @@ CALLBACK-FN is a thunk that returns the actual callback."
 
 ;;; Memoized Values
 
-(defmacro use-memo (deps &rest body)
+(defmacro vui-use-memo (deps &rest body)
   "Compute and cache a value that only changes when DEPS change.
 
-Similar to `use-callback' but for computed values rather than functions.
+Similar to `vui-use-callback' but for computed values rather than functions.
 BODY is evaluated only when DEPS change, and the result is cached.
 
 DEPS is a list of variables to watch.  The value is recomputed when any
@@ -1626,7 +1626,7 @@ dep changes (compared with `equal').
 
 Example:
   ;; Expensive filtering only runs when items or filter change
-  (let ((filtered (use-memo (items filter)
+  (let ((filtered (vui-use-memo (items filter)
                     (seq-filter (lambda (i) (string-match filter i)) items))))
     (vui-list filtered #\\='vui-text))"
   (declare (indent 1))
@@ -1634,8 +1634,8 @@ Example:
     (list ,@deps)
     (lambda () ,@body)))
 
-(defmacro use-memo* (deps &key compare &rest body)
-  "Like `use-memo' but with configurable comparison mode.
+(defmacro vui-use-memo* (deps &key compare &rest body)
+  "Like `vui-use-memo' but with configurable comparison mode.
 
 DEPS is a list of variables to watch.
 COMPARE specifies comparison mode:
@@ -1645,7 +1645,7 @@ COMPARE specifies comparison mode:
 
 Example:
   ;; Use eq for fast symbol comparison
-  (use-memo* (mode)
+  (vui-use-memo* (mode)
     :compare eq
     (expensive-lookup mode))
 
@@ -1662,7 +1662,7 @@ COMPARE specifies comparison mode (default `equal').
 Called from within a component's render function.
 COMPUTE-FN is a thunk that computes the value to cache."
   (unless vui--current-instance
-    (error "use-memo called outside of component context"))
+    (error "vui-use-memo called outside of component context"))
   (let* ((instance vui--current-instance)
          (memo-id vui--memo-index)
          (cache (or (vui-instance-memos instance)
@@ -1673,7 +1673,7 @@ COMPUTE-FN is a thunk that computes the value to cache."
          (cached-deps (car cached))
          (cached-value (cdr cached))
          (cmp (or compare 'equal)))
-    ;; Increment memo counter for next use-memo call
+    ;; Increment memo counter for next vui-use-memo call
     (cl-incf vui--memo-index)
     ;; Return cached value if deps unchanged
     (if (and cached (vui--deps-equal-p cached-deps deps cmp))
@@ -1685,7 +1685,7 @@ COMPUTE-FN is a thunk that computes the value to cache."
 
 ;;; Async Data Loading
 
-(defmacro use-async (key loader)
+(defmacro vui-use-async (key loader)
   "Asynchronously load data using LOADER, identified by KEY.
 
 Returns a plist with:
@@ -1705,14 +1705,14 @@ operations, use async mechanisms like `make-process' inside the loader.
 
 Examples:
   ;; Synchronous computation (still useful for caching/error handling)
-  (use-async \\='user-data
+  (vui-use-async \\='user-data
     (lambda (resolve reject)
       (condition-case err
           (funcall resolve (compute-expensive-data))
         (error (funcall reject (error-message-string err))))))
 
   ;; Truly async with external process
-  (use-async \\='balance
+  (vui-use-async \\='balance
     (lambda (resolve reject)
       (make-process
         :name \"hledger\"
@@ -1723,7 +1723,7 @@ Examples:
                       (funcall reject \"hledger failed\"))))))
 
   ;; With dynamic key (reloads when user-id changes)
-  (use-async (list \\='user user-id)
+  (vui-use-async (list \\='user user-id)
     (lambda (resolve _reject)
       (funcall resolve (fetch-user-data user-id))))"
   (declare (indent 1))
@@ -1735,7 +1735,7 @@ Called from within a component's render function.
 LOADER-FN receives (resolve reject) callbacks.
 Returns a plist with :status, :data, and :error."
   (unless vui--current-instance
-    (error "use-async called outside of component context"))
+    (error "vui-use-async called outside of component context"))
   (let* ((instance vui--current-instance)
          (async-id vui--async-index)
          (cache (or (vui-instance-asyncs instance)
@@ -1745,7 +1745,7 @@ Returns a plist with :status, :data, and :error."
          (entry (gethash async-id cache))
          (prev-key (plist-get entry :key))
          (prev-process (plist-get entry :process)))
-    ;; Increment async counter for next use-async call
+    ;; Increment async counter for next vui-use-async call
     (cl-incf vui--async-index)
     ;; Check if key changed or first call
     (if (and entry (equal prev-key key))

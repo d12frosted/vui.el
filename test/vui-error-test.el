@@ -37,7 +37,7 @@
   (it "catches errors and renders fallback"
     (with-temp-buffer
       (clrhash vui--error-boundary-errors)
-      (defcomponent error-component ()
+      (vui-defcomponent error-component ()
         :render (error "Test error"))
       (vui-render (vui-error-boundary
                    :id 'test-catch-error
@@ -50,7 +50,7 @@
     (let ((error-log nil))
       (with-temp-buffer
         (clrhash vui--error-boundary-errors)
-        (defcomponent error-component2 ()
+        (vui-defcomponent error-component2 ()
           :render (error "Logged error"))
         (vui-render (vui-error-boundary
                      :id 'test-on-error
@@ -63,7 +63,7 @@
 
   (it "persists error state across re-renders"
     (clrhash vui--error-boundary-errors)
-    (defcomponent error-counter ()
+    (vui-defcomponent error-counter ()
       :state ((count 0))
       :render (progn
                 (when (> count 0)
@@ -98,7 +98,7 @@
 (describe "lifecycle error handling"
   (it "catches on-mount errors and stores them"
     (let ((vui-lifecycle-error-handler 'ignore))
-      (defcomponent error-on-mount ()
+      (vui-defcomponent error-on-mount ()
         :on-mount (error "Mount error")
         :render (vui-text "OK"))
       (setq vui-last-error nil)
@@ -112,7 +112,7 @@
 
   (it "catches on-update errors and stores them"
     (let ((vui-lifecycle-error-handler 'ignore))
-      (defcomponent error-on-update ()
+      (vui-defcomponent error-on-update ()
         :state ((count 0))
         :on-update (error "Update error")
         :render (vui-text (number-to-string count)))
@@ -133,10 +133,10 @@
 
   (it "catches on-unmount errors and stores them"
     (let ((vui-lifecycle-error-handler 'ignore))
-      (defcomponent error-on-unmount ()
+      (vui-defcomponent error-on-unmount ()
         :on-unmount (error "Unmount error")
         :render (vui-text "Content"))
-      (defcomponent unmount-wrapper ()
+      (vui-defcomponent unmount-wrapper ()
         :state ((show t))
         :render (if show
                     (vui-component 'error-on-unmount)
@@ -156,7 +156,7 @@
 
   (it "respects ignore handler"
     (let ((vui-lifecycle-error-handler 'ignore))
-      (defcomponent silent-error ()
+      (vui-defcomponent silent-error ()
         :on-mount (error "Silent")
         :render (vui-text "OK"))
       ;; Should not signal error
@@ -168,7 +168,7 @@
 
   (it "respects signal handler"
     (let ((vui-lifecycle-error-handler 'signal))
-      (defcomponent signal-error ()
+      (vui-defcomponent signal-error ()
         :on-mount (error "Should propagate")
         :render (vui-text "OK"))
       (expect (vui-mount (vui-component 'signal-error) "*test-signal*")
@@ -183,7 +183,7 @@
               (setq handler-called (list hook-name (cadr err)
                                          (vui-component-def-name
                                           (vui-instance-def instance)))))))
-      (defcomponent custom-handler-test ()
+      (vui-defcomponent custom-handler-test ()
         :on-mount (error "Custom error")
         :render (vui-text "OK"))
       (vui-mount (vui-component 'custom-handler-test) "*test-custom*")
@@ -198,7 +198,7 @@
 (describe "event error handling"
   (it "catches on-click errors and stores them"
     (let ((vui-event-error-handler 'ignore))
-      (defcomponent click-error ()
+      (vui-defcomponent click-error ()
         :render (vui-button "Click"
                             :on-click (lambda () (error "Click error"))))
       (setq vui-last-error nil)

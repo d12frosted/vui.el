@@ -222,7 +222,7 @@ Creates an editable text field:
 In event handlers, use =vui-field-value= to read the current field value:
 
 #+begin_src elisp
-(defcomponent search-form ()
+(vui-defcomponent search-form ()
   :state ((query ""))
   :render
   (vui-hstack
@@ -327,7 +327,7 @@ Groups multiple elements without adding any visible output:
 Fragments are essential when a render function needs to return multiple elements:
 
 #+begin_src elisp
-(defcomponent multi-line ()
+(vui-defcomponent multi-line ()
   :render
   (vui-fragment  ; Without this, only the last element would be returned
    (vui-text "First")
@@ -378,7 +378,7 @@ Fragments can be nested and will be flattened:
 Here's a component using multiple primitives:
 
 #+begin_src elisp
-(defcomponent user-form ()
+(vui-defcomponent user-form ()
   :state ((name "")
           (email "")
           (newsletter nil)
@@ -439,7 +439,7 @@ Here's a component using multiple primitives:
 #+end_quote
 
 #+begin_src elisp
-(defcomponent rating-input (value on-change)
+(vui-defcomponent rating-input (value on-change)
   :render
   ;; Hint: Use cl-loop and vui-hstack
   )

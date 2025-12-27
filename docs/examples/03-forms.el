@@ -14,7 +14,7 @@
 ;;; Example 1: Simple Contact Form
 ;; Basic form with validation messages
 
-(defcomponent contact-form ()
+(vui-defcomponent contact-form ()
   :state ((name "")
           (email "")
           (message "")
@@ -107,7 +107,7 @@
 ;;; Example 2: Registration Form
 ;; More complex validation with password confirmation
 
-(defcomponent registration-form ()
+(vui-defcomponent registration-form ()
   :state ((username "")
           (email "")
           (password "")
@@ -240,7 +240,7 @@
 ;;; Example 3: Multi-Step Wizard
 ;; Form split across multiple steps
 
-(defcomponent wizard-step-1 (data on-next)
+(vui-defcomponent wizard-step-1 (data on-next)
   :render
   (let ((name (plist-get data :name))
         (email (plist-get data :email)))
@@ -276,7 +276,7 @@
                      (funcall on-next data t)))))))
 
 
-(defcomponent wizard-step-2 (data on-next on-back)
+(vui-defcomponent wizard-step-2 (data on-next on-back)
   :render
   (let ((plan (plist-get data :plan)))
     (vui-vstack
@@ -303,7 +303,7 @@
                     (funcall on-next data t)))))))
 
 
-(defcomponent wizard-step-3 (data on-submit on-back)
+(vui-defcomponent wizard-step-3 (data on-submit on-back)
   :render
   (vui-vstack
    :spacing 1
@@ -322,7 +322,7 @@
                  :on-click on-submit))))
 
 
-(defcomponent wizard-complete (data)
+(vui-defcomponent wizard-complete (data)
   :render
   (vui-vstack :spacing 1
               (vui-text "Welcome!" :face '(bold success))
@@ -331,7 +331,7 @@
               (vui-text (format "Plan: %s" (or (plist-get data :plan) "free")))))
 
 
-(defcomponent signup-wizard ()
+(vui-defcomponent signup-wizard ()
   :state ((step 1)
           (data '(:name nil :email nil :plan "free"))
           (complete nil))
@@ -389,7 +389,7 @@
 ;;; Example 4: Settings Form with Sections
 ;; Organized form with collapsible sections
 
-(defcomponent settings-section (title expanded content on-toggle)
+(vui-defcomponent settings-section (title expanded content on-toggle)
   :render
   (vui-vstack
    (vui-hstack
@@ -400,7 +400,7 @@
      (vui-box content :padding-left 2))))
 
 
-(defcomponent settings-form ()
+(vui-defcomponent settings-form ()
   :state ((sections '(:general t :notifications nil :privacy nil))
           (settings '(:theme "light"
                       :font-size 14

@@ -426,7 +426,7 @@ Lists properly inherit indent from parent containers, or you can set it directly
 ** Complex List Items
 
 #+begin_src elisp
-(defcomponent product-list ()
+(vui-defcomponent product-list ()
   :state ((products '((:id 1 :name "Widget" :price 9.99)
                       (:id 2 :name "Gadget" :price 19.99))))
   :render
@@ -488,7 +488,7 @@ Layouts can be nested for complex structures:
 #+end_quote
 
 #+begin_src elisp
-(defcomponent dashboard ()
+(vui-defcomponent dashboard ()
   :state ((tasks '(("[ ]" "Write docs" "2024-01-15")
                    ("[X]" "Add tests" "2024-01-10")
                    ("[ ]" "Deploy" "2024-01-20"))))

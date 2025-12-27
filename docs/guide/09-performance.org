@@ -17,7 +17,7 @@ By default, when state changes, the component and all its children re-render. Th
 Use =:should-update= to skip unnecessary re-renders:
 
 #+begin_src elisp
-(defcomponent expensive-component (data)
+(vui-defcomponent expensive-component (data)
   :state ((internal 0))
 
   :should-update
@@ -43,7 +43,7 @@ Return =t= to render, =nil= to skip.
 ** Example: Skip if Props Unchanged
 
 #+begin_src elisp
-(defcomponent memoized-display (value)
+(vui-defcomponent memoized-display (value)
   :should-update
   (not (equal (plist-get props :value)
               (plist-get prev-props :value)))
@@ -55,7 +55,7 @@ Return =t= to render, =nil= to skip.
 ** Example: Skip on Internal State
 
 #+begin_src elisp
-(defcomponent selective-updates (data)
+(vui-defcomponent selective-updates (data)
   :state ((ui-state 'normal))
 
   :should-update
@@ -72,7 +72,7 @@ Return =t= to render, =nil= to skip.
 Cache expensive computations:
 
 #+begin_src elisp
-(defcomponent filtered-list ()
+(vui-defcomponent filtered-list ()
   :state ((items large-list)
           (filter ""))
   :render
@@ -116,7 +116,7 @@ For performance, use =eq= comparison when appropriate:
 Prevent unnecessary child re-renders by keeping callback references stable:
 
 #+begin_src elisp
-(defcomponent parent ()
+(vui-defcomponent parent ()
   :state ((count 0))
   :render
   (let ((increment (use-callback (count)

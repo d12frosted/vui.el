@@ -18,7 +18,7 @@
 
 (describe "vui-set-state functional updates"
   (it "accepts function as value"
-    (defcomponent fn-update-test ()
+    (vui-defcomponent fn-update-test ()
       :state ((count 0))
       :render (vui-button "Inc" :on-click (lambda () (vui-set-state :count #'1+))))
     (let ((instance (vui-mount (vui-component 'fn-update-test) "*test-fn*")))
@@ -33,7 +33,7 @@
         (kill-buffer "*test-fn*"))))
 
   (it "functional update receives current value"
-    (defcomponent fn-transform-test ()
+    (vui-defcomponent fn-transform-test ()
       :state ((items '("a" "b")))
       :render (vui-button "Add"
                 :on-click (lambda ()
@@ -50,7 +50,7 @@
         (kill-buffer "*test-fn2*"))))
 
   (it "handles non-function values normally"
-    (defcomponent mixed-update-test ()
+    (vui-defcomponent mixed-update-test ()
       :state ((value 10))
       :render (vui-hstack
                (vui-button "Set" :on-click (lambda () (vui-set-state :value 42)))
@@ -73,7 +73,7 @@
   (it "avoids stale closure issue with functional update"
     ;; This demonstrates why functional updates are important:
     ;; Without them, closures capture stale values
-    (defcomponent stale-closure-test ()
+    (vui-defcomponent stale-closure-test ()
       :state ((count 0))
       :render
       (progn
@@ -92,7 +92,7 @@
   (it "batches multiple state updates into single render"
     (let ((vui-render-delay nil)  ; Disable idle rendering
           (render-count 0))
-      (defcomponent batch-test ()
+      (vui-defcomponent batch-test ()
         :state ((a 0) (b 0))
         :render (progn
                   (setq render-count (1+ render-count))
@@ -118,7 +118,7 @@
   (it "handles nested batches correctly"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent nested-batch-test ()
+      (vui-defcomponent nested-batch-test ()
         :state ((x 0))
         :render (progn
                   (setq render-count (1+ render-count))
@@ -144,7 +144,7 @@
   (it "does not render if no state changes"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent no-change-batch ()
+      (vui-defcomponent no-change-batch ()
         :state ((val 0))
         :render (progn
                   (setq render-count (1+ render-count))
@@ -163,7 +163,7 @@
   (it "forces immediate render"
     (let ((vui-render-delay 10)  ; Long delay
           (render-count 0))
-      (defcomponent flush-test ()
+      (vui-defcomponent flush-test ()
         :state ((val 0))
         :render (progn
                   (setq render-count (1+ render-count))
@@ -191,7 +191,7 @@
   (it "always renders on first render"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent always-skip ()
+      (vui-defcomponent always-skip ()
         :should-update nil  ; Always return nil - but first render still happens
         :render (progn
                   (setq render-count (1+ render-count))
@@ -204,7 +204,7 @@
   (it "skips render when should-update returns nil"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent skip-renders ()
+      (vui-defcomponent skip-renders ()
         :state ((count 0))
         :should-update nil  ; Always skip re-renders
         :render (progn
@@ -231,7 +231,7 @@
   (it "renders when should-update returns t"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent always-render ()
+      (vui-defcomponent always-render ()
         :state ((count 0))
         :should-update t  ; Always re-render
         :render (progn
@@ -255,7 +255,7 @@
   (it "can compare prev values in should-update"
     (let ((vui-render-delay nil)
           (render-count 0))
-      (defcomponent smart-update ()
+      (vui-defcomponent smart-update ()
         :state ((important 0) (unimportant 0))
         ;; Only re-render when important changes
         :should-update (not (equal important (plist-get prev-state :important)))
@@ -285,7 +285,7 @@
   (it "does not call on-update when render skipped"
     (let ((vui-render-delay nil)
           (update-count 0))
-      (defcomponent no-update-call ()
+      (vui-defcomponent no-update-call ()
         :state ((val 0))
         :should-update nil
         :on-update (setq update-count (1+ update-count))
@@ -332,9 +332,9 @@
   (it "works with use-memo* macro"
     (let ((vui-render-delay nil)
           (compute-count 0))
-      (defcomponent memo-compare-test ()
+      (vui-defcomponent memo-compare-test ()
         :state ((mode 'view))
-        :render (let ((result (use-memo* (mode)
+        :render (let ((result (vui-use-memo* (mode)
                                 :compare 'eq
                                 (cl-incf compute-count)
                                 (symbol-name mode))))

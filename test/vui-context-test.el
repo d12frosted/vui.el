@@ -11,16 +11,16 @@
 
 (describe "context"
   (it "defines context with defcontext"
-    (defcontext test-ctx 'default-value "A test context.")
+    (vui-defcontext test-ctx 'default-value "A test context.")
     (expect (boundp 'test-ctx-context) :to-be-truthy)
     (expect (fboundp 'test-ctx-provider) :to-be-truthy)
     (expect (fboundp 'use-test-ctx) :to-be-truthy)
     (expect (vui-context-default-value test-ctx-context) :to-equal 'default-value))
 
   (it "returns default value when no provider"
-    (defcontext theme 'light)
+    (vui-defcontext theme 'light)
     (let ((captured-theme nil))
-      (defcomponent theme-consumer ()
+      (vui-defcomponent theme-consumer ()
         :render (progn
                   (setq captured-theme (use-theme))
                   (vui-text "test")))
@@ -30,13 +30,13 @@
           (kill-buffer "*test-ctx1*")))))
 
   (it "provides value to children"
-    (defcontext theme 'light)
+    (vui-defcontext theme 'light)
     (let ((captured-theme nil))
-      (defcomponent themed-button ()
+      (vui-defcomponent themed-button ()
         :render (progn
                   (setq captured-theme (use-theme))
                   (vui-text (format "theme: %s" captured-theme))))
-      (defcomponent app ()
+      (vui-defcomponent app ()
         :render (theme-provider 'dark
                                 (vui-component 'themed-button)))
       (let ((instance (vui-mount (vui-component 'app) "*test-ctx2*")))
@@ -47,13 +47,13 @@
           (kill-buffer "*test-ctx2*")))))
 
   (it "allows nested providers with different values"
-    (defcontext indent-level 0)
+    (vui-defcontext indent-level 0)
     (let ((captured-levels nil))
-      (defcomponent level-display ()
+      (vui-defcomponent level-display ()
         :render (progn
                   (push (use-indent-level) captured-levels)
                   (vui-text (number-to-string (use-indent-level)))))
-      (defcomponent nested-providers ()
+      (vui-defcomponent nested-providers ()
         :render (vui-fragment
                  (indent-level-provider 1
                                         (vui-component 'level-display)
@@ -69,16 +69,16 @@
           (kill-buffer "*test-ctx3*")))))
 
   (it "supports multiple contexts"
-    (defcontext user-name "anonymous")
-    (defcontext user-role 'guest)
+    (vui-defcontext user-name "anonymous")
+    (vui-defcontext user-role 'guest)
     (let ((captured-name nil)
           (captured-role nil))
-      (defcomponent multi-ctx-consumer ()
+      (vui-defcomponent multi-ctx-consumer ()
         :render (progn
                   (setq captured-name (use-user-name))
                   (setq captured-role (use-user-role))
                   (vui-text "test")))
-      (defcomponent multi-ctx-provider ()
+      (vui-defcomponent multi-ctx-provider ()
         :render (user-name-provider "alice"
                                     (user-role-provider 'admin
                                                         (vui-component 'multi-ctx-consumer))))

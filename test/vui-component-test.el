@@ -18,25 +18,25 @@
 
 (describe "defcomponent"
   (it "defines a component and registers it"
-    (defcomponent test-simple ()
+    (vui-defcomponent test-simple ()
       :render (vui-text "simple"))
     (expect (vui--get-component 'test-simple) :to-be-truthy))
 
   (it "defines component with props"
-    (defcomponent test-greeting (name)
+    (vui-defcomponent test-greeting (name)
       :render (vui-text (format "Hello, %s!" name)))
     (let ((def (vui--get-component 'test-greeting)))
       (expect (vui-component-def-props-spec def) :to-equal '(name))))
 
   (it "defines component with state"
-    (defcomponent test-counter ()
+    (vui-defcomponent test-counter ()
       :state ((count 0))
       :render (vui-text (number-to-string count)))
     (let ((def (vui--get-component 'test-counter)))
       (expect (vui-component-def-initial-state-fn def) :to-be-truthy)))
 
   (it "allows state initializers to access props"
-    (defcomponent test-prop-to-state (initial-value)
+    (vui-defcomponent test-prop-to-state (initial-value)
       :state ((value initial-value))  ; state initialized from prop
       :render (vui-text (format "Value: %s" value)))
     (with-temp-buffer
@@ -44,7 +44,7 @@
       (expect (buffer-string) :to-equal "Value: hello")))
 
   (it "supports optional docstring"
-    (defcomponent test-with-docstring (name)
+    (vui-defcomponent test-with-docstring (name)
       "A component with documentation."
       :render (vui-text name))
     (let ((def (vui--get-component 'test-with-docstring)))
@@ -52,7 +52,7 @@
               :to-equal "A component with documentation.")))
 
   (it "works without docstring"
-    (defcomponent test-no-docstring (name)
+    (vui-defcomponent test-no-docstring (name)
       :render (vui-text name))
     (let ((def (vui--get-component 'test-no-docstring)))
       (expect (vui-component-def-docstring def) :to-be nil))))
@@ -74,23 +74,23 @@
 
 (describe "component rendering"
   (it "renders a simple component"
-    (defcomponent render-test ()
+    (vui-defcomponent render-test ()
       :render (vui-text "rendered!"))
     (with-temp-buffer
       (vui-render (vui-component 'render-test))
       (expect (buffer-string) :to-equal "rendered!")))
 
   (it "renders component with props"
-    (defcomponent greeting-test (name)
+    (vui-defcomponent greeting-test (name)
       :render (vui-text (format "Hi, %s!" name)))
     (with-temp-buffer
       (vui-render (vui-component 'greeting-test :name "Alice"))
       (expect (buffer-string) :to-equal "Hi, Alice!")))
 
   (it "renders nested components"
-    (defcomponent inner-comp ()
+    (vui-defcomponent inner-comp ()
       :render (vui-text "[inner]"))
-    (defcomponent outer-comp ()
+    (vui-defcomponent outer-comp ()
       :render (vui-fragment
                (vui-text "outer:")
                (vui-component 'inner-comp)))
@@ -99,7 +99,7 @@
       (expect (buffer-string) :to-equal "outer:[inner]")))
 
   (it "passes children to component"
-    (defcomponent wrapper-comp ()
+    (vui-defcomponent wrapper-comp ()
       :render (vui-fragment
                (vui-text "[")
                (vui-vnode-fragment--create :children children)
@@ -112,7 +112,7 @@
 (describe "lifecycle hooks"
   (it "calls on-mount after first render"
     (let ((mounted nil))
-      (defcomponent mount-test ()
+      (vui-defcomponent mount-test ()
         :on-mount (setq mounted t)
         :render (vui-text "hello"))
       (let ((instance (vui-mount (vui-component 'mount-test) "*test-mount*")))
@@ -124,7 +124,7 @@
 
   (it "does not call on-mount on re-render"
     (let ((mount-count 0))
-      (defcomponent mount-once ()
+      (vui-defcomponent mount-once ()
         :state ((count 0))
         :on-mount (setq mount-count (1+ mount-count))
         :render (vui-text (number-to-string count)))
@@ -139,7 +139,7 @@
 
   (it "triggers re-render when vui-set-state called in on-mount"
     (let ((render-count 0))
-      (defcomponent mount-set-state ()
+      (vui-defcomponent mount-set-state ()
         :state ((value "initial"))
         :on-mount
         (vui-set-state :value "from-mount")
@@ -160,7 +160,7 @@
 
   (it "triggers re-render when vui-batch used in on-mount"
     (let ((render-count 0))
-      (defcomponent mount-batch-state ()
+      (vui-defcomponent mount-batch-state ()
         :state ((a "initial-a")
                 (b "initial-b"))
         :on-mount
@@ -184,7 +184,7 @@
 
   (it "deferred timer fires automatically for on-mount state changes"
     (let ((render-count 0))
-      (defcomponent mount-timer-test ()
+      (vui-defcomponent mount-timer-test ()
         :state ((value "initial"))
         :on-mount
         (vui-set-state :value "from-mount")
@@ -207,7 +207,7 @@
 
   (it "vui-batch works inside with-temp-buffer in on-mount"
     (let ((render-count 0))
-      (defcomponent mount-temp-buffer-test ()
+      (vui-defcomponent mount-temp-buffer-test ()
         :state ((data nil))
         :on-mount
         ;; Simulate loading data from a file using with-temp-buffer
@@ -233,10 +233,10 @@
   (it "calls on-unmount when component is removed"
     (let ((unmounted nil)
           (show-child t))
-      (defcomponent unmount-child ()
+      (vui-defcomponent unmount-child ()
         :on-unmount (setq unmounted t)
         :render (vui-text "child"))
-      (defcomponent unmount-parent ()
+      (vui-defcomponent unmount-parent ()
         :render (if show-child
                     (vui-component 'unmount-child)
                   (vui-text "no child")))
@@ -254,15 +254,15 @@
 
   (it "calls on-unmount for nested children depth-first"
     (let ((unmount-order nil))
-      (defcomponent nested-inner ()
+      (vui-defcomponent nested-inner ()
         :on-unmount (push 'inner unmount-order)
         :render (vui-text "inner"))
-      (defcomponent nested-outer ()
+      (vui-defcomponent nested-outer ()
         :on-unmount (push 'outer unmount-order)
         :render (vui-fragment
                  (vui-text "outer:")
                  (vui-component 'nested-inner)))
-      (defcomponent nested-root ()
+      (vui-defcomponent nested-root ()
         :state ((show t))
         :render (if show
                     (vui-component 'nested-outer)
@@ -281,7 +281,7 @@
   (it "provides props and state to lifecycle hooks"
     (let ((mount-props nil)
           (mount-state nil))
-      (defcomponent lifecycle-args (name)
+      (vui-defcomponent lifecycle-args (name)
         :state ((count 42))
         :on-mount (setq mount-props name
                         mount-state count)
@@ -297,7 +297,7 @@
   (it "calls on-update after re-render"
     (let ((update-count 0)
           (captured-prev-state nil))
-      (defcomponent test-update ()
+      (vui-defcomponent test-update ()
         :state ((count 0))
         :on-update (progn
                      (setq update-count (1+ update-count))
@@ -326,7 +326,7 @@
 
   (it "provides prev-props to on-update"
     (let ((captured-prev-label nil))
-      (defcomponent test-update-props (label)
+      (vui-defcomponent test-update-props (label)
         :on-update (setq captured-prev-label (plist-get prev-props :label))
         :render (vui-text label))
       (let ((instance (vui-mount (vui-component 'test-update-props :label "first")
@@ -344,11 +344,11 @@
 (describe "reconciliation"
   (it "preserves child component state across parent re-render"
     ;; Define a child component with state
-    (defcomponent stateful-child ()
+    (vui-defcomponent stateful-child ()
       :state ((value 42))
       :render (vui-text (number-to-string value)))
     ;; Define parent that renders the child
-    (defcomponent parent-comp ()
+    (vui-defcomponent parent-comp ()
       :state ((label "test"))
       :render (vui-fragment
                (vui-text label)
@@ -372,10 +372,10 @@
         (kill-buffer "*test-recon*"))))
 
   (it "reuses child by index when no key provided"
-    (defcomponent indexed-child (label)
+    (vui-defcomponent indexed-child (label)
       :state ((count 0))
       :render (vui-text (format "%s:%d" label count)))
-    (defcomponent indexed-parent ()
+    (vui-defcomponent indexed-parent ()
       :render (vui-fragment
                (vui-component 'indexed-child :label "A")
                (vui-component 'indexed-child :label "B")))
@@ -394,13 +394,13 @@
 
   (it "preserves state when items reordered by key"
     ;; Define a child component with internal state
-    (defcomponent keyed-item (id)
+    (vui-defcomponent keyed-item (id)
       :state ((clicks 0))
       :render (vui-button (format "%s:%d" id clicks)
                 :on-click (lambda () (vui-set-state :clicks (1+ clicks)))))
     ;; Parent component that renders a list with keys
     (let ((items '("A" "B" "C")))
-      (defcomponent keyed-list ()
+      (vui-defcomponent keyed-list ()
         :render (apply #'vui-vstack
                   (mapcar (lambda (id)
                             (vui-component 'keyed-item :key id :id id))
@@ -426,7 +426,7 @@
 
 (describe "cursor preservation"
   (it "maintains cursor position on same widget after re-render"
-    (defcomponent cursor-test ()
+    (vui-defcomponent cursor-test ()
       :state ((label "initial"))
       :render
       (vui-vstack
@@ -455,7 +455,7 @@
         (kill-buffer "*test-cursor*"))))
 
   (it "preserves cursor when content changes around widget"
-    (defcomponent cursor-content-test ()
+    (vui-defcomponent cursor-content-test ()
       :state ((prefix "short"))
       :render
       (vui-vstack
@@ -491,7 +491,7 @@
     ;; This tests the case where index-based tracking fails:
     ;; cursor is on widget at index 0, a new widget is inserted,
     ;; cursor should stay on original widget (now at index 1)
-    (defcomponent cursor-shift-test ()
+    (vui-defcomponent cursor-shift-test ()
       :state ((buttons nil))
       :render
       (vui-vstack
@@ -530,7 +530,7 @@
     ;; Tests that cursor follows structural position even when widget type changes.
     ;; Path (1) is at index 1 in the vstack: Header is 0, the button/checkbox is 1.
     ;; The cursor should follow the path to the new widget type.
-    (defcomponent widget-type-change-test ()
+    (vui-defcomponent widget-type-change-test ()
       :state ((use-checkbox nil))
       :render
       (vui-vstack
@@ -567,7 +567,7 @@
   (it "caps cursor offset when widget shrinks"
     ;; Tests that cursor stays within bounds when widget becomes smaller.
     ;; Cursor at offset 15 in a 20-char field should cap to end of 5-char field.
-    (defcomponent widget-shrink-test ()
+    (vui-defcomponent widget-shrink-test ()
       :state ((large t))
       :render
       (vui-vstack

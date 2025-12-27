@@ -266,11 +266,11 @@ Re-define a component and it takes effect on next render:
 
 #+begin_src elisp
 ;; Original
-(defcomponent my-comp ()
+(vui-defcomponent my-comp ()
   :render (vui-text "Original"))
 
 ;; Modify and re-evaluate
-(defcomponent my-comp ()
+(vui-defcomponent my-comp ()
   :render (vui-text "Modified"))
 
 ;; Trigger re-render to see changes
