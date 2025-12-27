@@ -1,6 +1,7 @@
 ;;; vui.el --- Declarative, component-based UI library -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Boris Buliga
+;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
