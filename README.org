@@ -3,6 +3,7 @@
 
 #+begin_html
 <p align="center">
+  <a href="https://melpa.org/#/vui"><img alt="MELPA" src="https://melpa.org/packages/vui-badge.svg"/></a>
   <img alt="version" src="https://img.shields.io/github/v/tag/d12frosted/vui.el?label=version"/>
 </p>
 #+end_html
@@ -116,6 +117,13 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 
 * Installation
 
+** MELPA
+
+#+begin_src elisp
+(use-package vui
+  :ensure t)
+#+end_src
+
 ** Manual
 
 Clone this repository and add to your load-path:
@@ -123,13 +131,6 @@ Clone this repository and add to your load-path:
 #+begin_src elisp
 (add-to-list 'load-path "/path/to/vui.el")
 (require 'vui)
-#+end_src
-
-** package.el (coming soon)
-
-#+begin_src elisp
-(use-package vui
-  :ensure t)
 #+end_src
 
 * Documentation
