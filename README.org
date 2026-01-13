@@ -29,6 +29,7 @@ The API is stable and used in [[#built-with-vui][real-world projects]].
 * Quick Example
 
 #+begin_src elisp
+;;; -*- lexical-binding: t -*-
 (require 'vui)
 
 ;; Define a component
@@ -263,6 +264,7 @@ Define aliases in your init file:
 * Requirements
 
 - Emacs 27.1 or later
+- Lexical binding enabled in your Elisp files (=;;; -*- lexical-binding: t -*-=)
 - Built-in =widget.el= (included with Emacs)
 
 ** Known Limitations
