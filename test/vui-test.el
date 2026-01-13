@@ -386,4 +386,78 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (widget-apply widget :notify widget))
         (expect new-value :to-equal "changed")))))
 
+(describe "vui-mode keymap"
+  (describe "keymap hierarchy"
+    (it "inherits special-mode-map bindings"
+      (vui-defcomponent keymap-test ()
+        :render (vui-text "test"))
+      (let ((instance (vui-mount (vui-component 'keymap-test) "*test-keymap*")))
+        (unwind-protect
+            (with-current-buffer "*test-keymap*"
+              ;; vui-quit shadows quit-window but provides same behavior outside fields
+              (expect (key-binding (kbd "q")) :to-equal 'vui-quit))
+          (kill-buffer "*test-keymap*"))))
+
+    (it "inherits widget-keymap bindings"
+      (vui-defcomponent keymap-test-2 ()
+        :render (vui-text "test"))
+      (let ((instance (vui-mount (vui-component 'keymap-test-2) "*test-keymap-2*")))
+        (unwind-protect
+            (with-current-buffer "*test-keymap-2*"
+              (expect (key-binding (kbd "TAB")) :to-equal 'widget-forward))
+          (kill-buffer "*test-keymap-2*")))))
+
+  (describe "q key behavior"
+    (it "quits window when outside widget field"
+      (vui-defcomponent q-quit-test ()
+        :render (vui-text "test"))
+      (let ((instance (vui-mount (vui-component 'q-quit-test) "*test-q-quit*")))
+        (with-current-buffer "*test-q-quit*"
+          (goto-char (point-min))
+          ;; Execute q - should quit and bury the buffer
+          (execute-kbd-macro "q")
+          ;; Buffer should be buried (not current)
+          (expect (current-buffer) :not :to-equal (get-buffer "*test-q-quit*")))
+        ;; Clean up if buffer still exists
+        (when (get-buffer "*test-q-quit*")
+          (kill-buffer "*test-q-quit*"))))
+
+    (it "self-inserts when inside widget field"
+      (vui-defcomponent q-field-test ()
+        :render (vui-field :value "" :key 'field))
+      (let ((instance (vui-mount (vui-component 'q-field-test) "*test-q-field*")))
+        (unwind-protect
+            (with-current-buffer "*test-q-field*"
+              (goto-char (point-min))
+              (widget-forward 1)
+              (let ((field-widget (widget-at (point))))
+                (expect field-widget :to-be-truthy)
+                (execute-kbd-macro "q")
+                (expect (widget-value field-widget) :to-equal "q")))
+          (kill-buffer "*test-q-field*")))))
+
+  (describe "g key behavior"
+    (it "triggers refresh when outside widget field"
+      (vui-defcomponent g-test ()
+        :render (vui-text "test"))
+      (let ((instance (vui-mount (vui-component 'g-test) "*test-g*")))
+        (unwind-protect
+            (with-current-buffer "*test-g*"
+              (expect (key-binding (kbd "g")) :to-equal 'vui-refresh))
+          (kill-buffer "*test-g*"))))
+
+    (it "self-inserts when inside widget field"
+      (vui-defcomponent g-field-test ()
+        :render (vui-field :value "" :key 'field))
+      (let ((instance (vui-mount (vui-component 'g-field-test) "*test-g-field*")))
+        (unwind-protect
+            (with-current-buffer "*test-g-field*"
+              (goto-char (point-min))
+              (widget-forward 1)
+              (let ((field-widget (widget-at (point))))
+                (expect field-widget :to-be-truthy)
+                (execute-kbd-macro "g")
+                (expect (widget-value field-widget) :to-equal "g")))
+          (kill-buffer "*test-g-field*"))))))
+
 ;;; vui-test.el ends here
