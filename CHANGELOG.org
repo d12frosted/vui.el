@@ -7,6 +7,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Fixed
+
+- *Keymap hierarchy*: =special-mode-map= bindings (like =h= for help) were inaccessible because =set-keymap-parent= overwrote the parent set by =define-derived-mode=. Now uses =make-composed-keymap= to include both =widget-keymap= and =special-mode-map=.
+
+** Added
+
+- =vui-quit= command bound to =q=: Quits window when outside widget fields, self-inserts when inside (so you can type "q" in text inputs).
+- =vui-refresh= command bound to =g=: Re-renders the UI with current state when outside widget fields, self-inserts when inside. Applications needing custom refresh logic (e.g., re-fetching data) can override in their derived mode.
+
 * v1.0.0 - 2025-12-28
 
 ** Breaking Changes

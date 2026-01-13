@@ -281,7 +281,9 @@ VUI buffers use =vui-mode=, a major mode derived from =special-mode=. This provi
 
 - =TAB= / =S-TAB= — Navigate between widgets (buttons, fields)
 - =RET= — Activate widget at point
-- Standard =special-mode= bindings (=q= to quit, =g= to revert, etc.)
+- =q= — Quit window (or self-insert when in a text field)
+- =g= — Refresh UI (or self-insert when in a text field)
+- Standard =special-mode= bindings (=h= for help, etc.)
 
 ** Extending with Custom Keybindings
 

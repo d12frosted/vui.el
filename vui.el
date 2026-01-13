@@ -385,9 +385,28 @@ Returns a list of instances."
 
 ;;; Major Mode
 
+(defun vui-quit ()
+  "Quit window unless point is in a widget field.
+When in a widget field, insert `q' instead."
+  (interactive)
+  (if (widget-field-at (point))
+      (self-insert-command 1)
+    (quit-window)))
+
+(defun vui-refresh ()
+  "Refresh the VUI buffer unless point is in a widget field.
+When in a widget field, insert `g' instead.
+Triggers a re-render of the mounted component with current state."
+  (interactive)
+  (if (widget-field-at (point))
+      (self-insert-command 1)
+    (when vui--root-instance
+      (vui--schedule-render))))
+
 (defvar vui-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; Users can add bindings here, e.g., for ace-link
+    (define-key map (kbd "q") #'vui-quit)
+    (define-key map (kbd "g") #'vui-refresh)
     map)
   "Keymap for `vui-mode'.
 This keymap is active in all VUI buffers.  Users and packages can
@@ -401,8 +420,10 @@ keybindings while preserving VUI and widget functionality.
 
 \\{vui-mode-map}"
   :group 'vui
-  ;; Set widget-keymap as parent so widget navigation (TAB, S-TAB) works
-  (set-keymap-parent vui-mode-map widget-keymap)
+  ;; Compose widget-keymap and special-mode-map so we get both widget
+  ;; navigation (TAB, S-TAB) and special-mode bindings (h for help, etc.)
+  (set-keymap-parent vui-mode-map
+                     (make-composed-keymap widget-keymap special-mode-map))
   ;; Disable buffer-read-only; widget-setup installs before-change-functions
   ;; that prevent editing outside of editable fields
   (setq-local buffer-read-only nil))
