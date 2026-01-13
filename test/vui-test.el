@@ -428,10 +428,11 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (let ((instance (vui-mount (vui-component 'q-field-test) "*test-q-field*")))
         (unwind-protect
             (with-current-buffer "*test-q-field*"
-              (goto-char (point-min))
-              (widget-forward 1)
-              (let ((field-widget (widget-at (point))))
+              ;; Get the field widget directly from widget-field-list
+              ;; (widget-forward doesn't work with single widget on Emacs 29)
+              (let ((field-widget (car widget-field-list)))
                 (expect field-widget :to-be-truthy)
+                (goto-char (widget-field-start field-widget))
                 (execute-kbd-macro "q")
                 (expect (widget-value field-widget) :to-equal "q")))
           (kill-buffer "*test-q-field*")))))
@@ -452,10 +453,11 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (let ((instance (vui-mount (vui-component 'g-field-test) "*test-g-field*")))
         (unwind-protect
             (with-current-buffer "*test-g-field*"
-              (goto-char (point-min))
-              (widget-forward 1)
-              (let ((field-widget (widget-at (point))))
+              ;; Get the field widget directly from widget-field-list
+              ;; (widget-forward doesn't work with single widget on Emacs 29)
+              (let ((field-widget (car widget-field-list)))
                 (expect field-widget :to-be-truthy)
+                (goto-char (widget-field-start field-widget))
                 (execute-kbd-macro "g")
                 (expect (widget-value field-widget) :to-equal "g")))
           (kill-buffer "*test-g-field*"))))))
