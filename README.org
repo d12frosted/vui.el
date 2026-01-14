@@ -335,9 +335,10 @@ Contributions welcome! Please:
 :CUSTOM_ID: built-with-vui
 :END:
 
-- [[https://github.com/d12frosted/vulpea-ui][vulpea-ui]] — Sidebar UI for vulpea notes
-- [[https://github.com/d12frosted/vulpea-journal][vulpea-journal]] — Journaling system with calendar widgets
-- [[https://github.com/d12frosted/brb][brb]] — Barberry Garden management system
+- [[https://github.com/d12frosted/vulpea-ui][d12frosted/vulpea-ui]] — Sidebar UI for vulpea notes
+- [[https://github.com/d12frosted/vulpea-journal][d12frosted/vulpea-journal]] — Journaling system with calendar widgets
+- [[https://github.com/d12frosted/brb][d12frosted/brb]] — Barberry Garden management system
+- [[https://github.com/zonuexe/unicode-inspector.el][zonuexe/unicode-inspector.el]] — Interactive Unicode character inspector
 
 * License
 
