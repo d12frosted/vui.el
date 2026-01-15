@@ -1,5 +1,7 @@
 ;;; vui-error-test.el --- Error handling tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el error handling: error boundaries, lifecycle errors, event errors.

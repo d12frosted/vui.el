@@ -1,5 +1,7 @@
 ;;; vui-hooks-test.el --- Hook tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el hooks: use-effect, use-memo, use-ref, use-callback, use-async.

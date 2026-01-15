@@ -1,5 +1,7 @@
 ;;; vui-state-test.el --- State management tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el state management: set-state, batch, flush-sync, should-update, memo.

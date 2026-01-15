@@ -1,5 +1,7 @@
 ;;; vui-layout-test.el --- Layout tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el layout primitives: vstack, hstack, box, list, table.

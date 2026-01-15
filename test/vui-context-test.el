@@ -1,5 +1,7 @@
 ;;; vui-context-test.el --- Context tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el context system: providers, consumers, use-context.

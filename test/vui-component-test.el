@@ -1,5 +1,7 @@
 ;;; vui-component-test.el --- Component tests for vui.el -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
 ;;; Commentary:
 
 ;; Tests for vui.el component system: defcomponent, rendering, lifecycle, reconciliation.
