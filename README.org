@@ -176,6 +176,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/03-forms.el][Forms]] — Form validation, multi-step wizards, settings
 - [[file:docs/examples/04-file-browser.el][File Browser]] — Directory navigation with sorting and search
 - [[file:docs/examples/05-wine-tasting.el][Wine Tasting]] — Dynamic tables with interactive cells, computed statistics
+- [[file:docs/examples/06-collapsible.el][Collapsible]] — Expandable/collapsible sections, FAQ style, nested sections
 
 * Available Components
 
@@ -201,6 +202,22 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 | =vui-box=    | Fixed-width container with alignment   |
 | =vui-table=  | Table with headers, borders, alignment |
 | =vui-list=   | Dynamic list with key-based reconcile  |
+
+** Higher-Level Components (vui-components.el)
+
+| Component          | Description                              |
+|--------------------+------------------------------------------|
+| =vui-collapsible=  | Expandable/collapsible section with header |
+
+#+begin_src elisp
+(require 'vui-components)
+
+(vui-collapsible :title "FAQ"
+  (vui-text "Hidden by default, click to reveal."))
+
+(vui-collapsible :title "Details" :initially-expanded t
+  (vui-text "Visible on load."))
+#+end_src
 
 * Hooks
 

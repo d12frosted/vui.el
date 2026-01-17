@@ -7,6 +7,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- *vui-components.el*: New component library with higher-level components built on vui primitives.
+- =vui-collapsible=: Togglable section that expands/collapses content. Supports both uncontrolled (manages own state) and controlled (=:expanded= prop) modes. Features customizable indicators, title face, indentation, and proper nested indentation via context propagation.
+
 ** Fixed
 
 - *Keymap hierarchy*: =special-mode-map= bindings (like =h= for help) were inaccessible because =set-keymap-parent= overwrote the parent set by =define-derived-mode=. Now uses =make-composed-keymap= to include both =widget-keymap= and =special-mode-map=.
