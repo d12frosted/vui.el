@@ -470,7 +470,9 @@ keybindings while preserving VUI and widget functionality.
   disabled-p
   max-width       ; For truncation in constrained spaces
   no-decoration   ; When t, render without [ ] brackets
-  (help-echo :default)) ; :default = widget default, nil = disabled, string = custom
+  (help-echo :default) ; :default = widget default, nil = disabled, string = custom
+  tab-order       ; nil=normal, -1=non-tabable
+  keymap)         ; custom keymap for this button
 
 ;; Primitive: editable text field
 (cl-defstruct (vui-vnode-field (:include vui-vnode)
@@ -816,11 +818,13 @@ PROPS is a plist accepting :face, :key, and other text properties."
 (defun vui-button (label &rest props)
   "Create a button vnode with LABEL and optional PROPS.
 PROPS is a plist accepting :on-click, :face, :disabled, :max-width,
-:no-decoration, :help-echo, :key.
+:no-decoration, :help-echo, :tab-order, :keymap, :key.
 When :max-width is set, the button will truncate its label to fit.
 When :no-decoration is t, the button renders without [ ] brackets.
 When :help-echo is nil, tooltip is disabled (improves performance).
-When :help-echo is a string, that string is used as tooltip."
+When :help-echo is a string, that string is used as tooltip.
+When :tab-order is -1, button is not reachable via TAB.
+When :keymap is set, this keymap is active when point is on the button."
   (declare (indent 1))
   (vui-vnode-button--create
    :label label
@@ -832,6 +836,8 @@ When :help-echo is a string, that string is used as tooltip."
    :help-echo (if (plist-member props :help-echo)
                   (plist-get props :help-echo)
                 :default)
+   :tab-order (plist-get props :tab-order)
+   :keymap (plist-get props :keymap)
    :key (plist-get props :key)))
 
 (cl-defun vui-field (&key value size placeholder on-change on-submit key face secret)
@@ -2535,6 +2541,8 @@ Handles :truncate and overflow:
            (max-width (vui-vnode-button-max-width vnode))
            (no-decoration (vui-vnode-button-no-decoration vnode))
            (help-echo (vui-vnode-button-help-echo vnode))
+           (tab-order (vui-vnode-button-tab-order vnode))
+           (keymap (vui-vnode-button-keymap vnode))
            ;; Pre-truncate label before passing to widget
            ;; Widget adds brackets (2 chars) unless no-decoration
            (bracket-width (if no-decoration 0 2))
@@ -2567,8 +2575,13 @@ Handles :truncate and overflow:
                                     (funcall wrapped-click))))
                       ;; Only pass :help-echo when explicitly set (not :default)
                       ;; nil disables tooltip (performance), string sets custom tooltip
-                      (unless (eq help-echo :default)
-                        (list :help-echo help-echo)))))
+                      (append
+                       (unless (eq help-echo :default)
+                         (list :help-echo help-echo))
+                       (when tab-order
+                         (list :tab-order tab-order))
+                       (when keymap
+                         (list :keymap keymap))))))
         ;; Store path for cursor tracking
         (widget-put w :vui-path captured-path))))
 
