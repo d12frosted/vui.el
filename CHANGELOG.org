@@ -9,6 +9,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- *Field validation*: =vui-field= now supports built-in validation with new props:
+  - =:valid-regexp= - regexp the value must match
+  - =:valid-p= - custom validation function =(value) -> t/nil=
+  - =:error-face= - face when invalid (default: =vui-field-error=)
+  - =:error-message= - message shown below field when invalid (auto-aligned with field)
+  - Error indicators only appear after the field has been "touched" (modified at least once) for better UX
+- =vui-field-valid-p= function to check field validity by key.
+- =vui-fields-validate= function for form submission: touches all specified fields, returns t if all valid, auto-renders to show errors if any invalid. This is the recommended way to validate on submit.
+- =vui-field-touch= function to mark fields as touched (lower-level primitive).
+- =vui-field-reset= function to clear touched state, useful when resetting forms to pristine state.
+- =vui-field-error= face for styling invalid field input (inherits from =error=).
 - *vui-components.el*: New component library with higher-level components built on vui primitives.
 - =vui-collapsible=: Togglable section that expands/collapses content. Supports both uncontrolled (manages own state) and controlled (=:expanded= prop) modes. Features customizable indicators, title face, indentation, and proper nested indentation via context propagation.
 - *Semantic text components*: Thin wrappers around =vui-text= with customizable faces that inherit from standard Emacs faces:
