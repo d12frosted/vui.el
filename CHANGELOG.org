@@ -11,6 +11,8 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 - *vui-components.el*: New component library with higher-level components built on vui primitives.
 - =vui-collapsible=: Togglable section that expands/collapses content. Supports both uncontrolled (manages own state) and controlled (=:expanded= prop) modes. Features customizable indicators, title face, indentation, and proper nested indentation via context propagation.
+- =vui-navigable-list=: List component that acts as a single TAB stop with internal arrow key navigation. When users navigate with up/down arrows (or n/p), selection updates and triggers =:on-select=. Supports controlled mode (=:selected= prop), custom rendering (=:render-item=), =:key-fn= for identity comparison, and =:allow-wrap= for boundary wrapping. Best suited for flat, homogeneous lists; for per-item interactivity or nested structure, use =vui-vstack= with individual buttons instead.
+- =vui-button= now accepts =:tab-order= and =:keymap= props. Use =:tab-order -1= to make a button non-tabbable, and =:keymap= to define custom key bindings active when point is on the button.
 
 ** Fixed
 

@@ -327,4 +327,226 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (looking-at "    Inner content") :to-be-truthy))
           (kill-buffer "*test-collapsible-16*"))))))
 
+(describe "vui-navigable-list"
+  (describe "basic structure"
+    (it "creates a component vnode"
+      (let ((node (vui-navigable-list :items '("a" "b" "c"))))
+        (expect (vui-vnode-component-p node) :to-be-truthy)
+        (expect (vui-vnode-component-type node) :to-equal 'vui-navigable-list--internal)))
+
+    (it "passes items prop"
+      (let ((node (vui-navigable-list :items '("x" "y" "z"))))
+        (expect (plist-get (vui-vnode-component-props node) :items)
+                :to-equal '("x" "y" "z")))))
+
+  (describe "rendering"
+    (it "displays all items"
+      (vui-defcomponent nav-list-test-1 ()
+        :render
+        (vui-navigable-list :items '("Alpha" "Beta" "Gamma")))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-1)
+                                  "*test-nav-list-1*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-1*"
+              (expect (buffer-string) :to-match "Alpha")
+              (expect (buffer-string) :to-match "Beta")
+              (expect (buffer-string) :to-match "Gamma"))
+          (kill-buffer "*test-nav-list-1*"))))
+
+    (it "shows first item selected by default"
+      (vui-defcomponent nav-list-test-2 ()
+        :render
+        (vui-navigable-list :items '("First" "Second" "Third")))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-2)
+                                  "*test-nav-list-2*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-2*"
+              ;; First item should have selection indicator
+              (expect (buffer-string) :to-match "> First")
+              ;; Others should not
+              (expect (buffer-string) :to-match "  Second")
+              (expect (buffer-string) :to-match "  Third"))
+          (kill-buffer "*test-nav-list-2*"))))
+
+    (it "shows empty message when no items"
+      (vui-defcomponent nav-list-test-3 ()
+        :render
+        (vui-navigable-list :items '()))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-3)
+                                  "*test-nav-list-3*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-3*"
+              (expect (buffer-string) :to-match "(empty)"))
+          (kill-buffer "*test-nav-list-3*")))))
+
+  (describe "keyboard navigation"
+    (it "moves selection down with arrow key"
+      (let ((selected-items '()))
+        (vui-defcomponent nav-list-test-4 ()
+          :render
+          (vui-navigable-list
+           :items '("One" "Two" "Three")
+           :on-select (lambda (item)
+                        (push item selected-items))))
+        (let ((instance (vui-mount (vui-component 'nav-list-test-4)
+                                    "*test-nav-list-4*")))
+          (unwind-protect
+              (with-current-buffer "*test-nav-list-4*"
+                ;; Move to the widget
+                (goto-char (point-min))
+                ;; Simulate down arrow via keymap
+                (let* ((widget (widget-at (point)))
+                       (keymap (and widget (widget-get widget :keymap))))
+                  (when keymap
+                    (funcall (lookup-key keymap (kbd "<down>")))))
+                (vui-flush-sync)
+                ;; Should have selected "Two"
+                (expect (car selected-items) :to-equal "Two")
+                (expect (buffer-string) :to-match "> Two"))
+            (kill-buffer "*test-nav-list-4*")))))
+
+    (it "moves selection up with arrow key"
+      (let ((selected-items '()))
+        (vui-defcomponent nav-list-test-5 ()
+          :state ((current "Two"))
+          :render
+          (vui-navigable-list
+           :items '("One" "Two" "Three")
+           :selected current
+           :on-select (lambda (item)
+                        (push item selected-items)
+                        (vui-set-state :current item))))
+        (let ((instance (vui-mount (vui-component 'nav-list-test-5)
+                                    "*test-nav-list-5*")))
+          (unwind-protect
+              (with-current-buffer "*test-nav-list-5*"
+                ;; Initial state: Two is selected
+                (expect (buffer-string) :to-match "> Two")
+                ;; Simulate up arrow
+                (goto-char (point-min))
+                (let* ((widget (widget-at (point)))
+                       (keymap (and widget (widget-get widget :keymap))))
+                  (when keymap
+                    (funcall (lookup-key keymap (kbd "<up>")))))
+                (vui-flush-sync)
+                ;; Should have selected "One"
+                (expect (car selected-items) :to-equal "One")
+                (expect (buffer-string) :to-match "> One"))
+            (kill-buffer "*test-nav-list-5*")))))
+
+    (it "stops at boundaries when wrap disabled"
+      (let ((selected-items '()))
+        (vui-defcomponent nav-list-test-6 ()
+          :render
+          (vui-navigable-list
+           :items '("Only" "Two")
+           :on-select (lambda (item)
+                        (push item selected-items))))
+        (let ((instance (vui-mount (vui-component 'nav-list-test-6)
+                                    "*test-nav-list-6*")))
+          (unwind-protect
+              (with-current-buffer "*test-nav-list-6*"
+                (goto-char (point-min))
+                ;; Try to go up from first item
+                (let* ((widget (widget-at (point)))
+                       (keymap (and widget (widget-get widget :keymap))))
+                  (when keymap
+                    (funcall (lookup-key keymap (kbd "<up>")))))
+                (vui-flush-sync)
+                ;; Should still be on first item (on-select called with "Only")
+                (expect (car selected-items) :to-equal "Only"))
+            (kill-buffer "*test-nav-list-6*")))))
+
+    (it "wraps when allow-wrap is enabled"
+      (let ((selected-items '()))
+        (vui-defcomponent nav-list-test-7 ()
+          :render
+          (vui-navigable-list
+           :items '("First" "Last")
+           :allow-wrap t
+           :on-select (lambda (item)
+                        (push item selected-items))))
+        (let ((instance (vui-mount (vui-component 'nav-list-test-7)
+                                    "*test-nav-list-7*")))
+          (unwind-protect
+              (with-current-buffer "*test-nav-list-7*"
+                (goto-char (point-min))
+                ;; Go up from first item should wrap to last
+                (let* ((widget (widget-at (point)))
+                       (keymap (and widget (widget-get widget :keymap))))
+                  (when keymap
+                    (funcall (lookup-key keymap (kbd "<up>")))))
+                (vui-flush-sync)
+                ;; Should have wrapped to "Last"
+                (expect (car selected-items) :to-equal "Last")
+                (expect (buffer-string) :to-match "> Last"))
+            (kill-buffer "*test-nav-list-7*"))))))
+
+  (describe "controlled mode"
+    (it "respects :selected prop"
+      (vui-defcomponent nav-list-test-8 ()
+        :render
+        (vui-navigable-list
+         :items '("A" "B" "C")
+         :selected "B"))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-8)
+                                  "*test-nav-list-8*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-8*"
+              (expect (buffer-string) :to-match "> B")
+              (expect (buffer-string) :to-match "  A")
+              (expect (buffer-string) :to-match "  C"))
+          (kill-buffer "*test-nav-list-8*"))))
+
+    (it "uses key-fn for comparison"
+      (vui-defcomponent nav-list-test-9 ()
+        :render
+        (vui-navigable-list
+         :items '((:id 1 :name "Alice")
+                  (:id 2 :name "Bob")
+                  (:id 3 :name "Carol"))
+         :selected '(:id 2 :name "Bob")
+         :key-fn (lambda (item) (plist-get item :id))
+         :render-item (lambda (item selected-p)
+                        (format "%s %s"
+                                (if selected-p ">" " ")
+                                (plist-get item :name)))))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-9)
+                                  "*test-nav-list-9*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-9*"
+              (expect (buffer-string) :to-match "> Bob")
+              (expect (buffer-string) :to-match "  Alice"))
+          (kill-buffer "*test-nav-list-9*")))))
+
+  (describe "custom rendering"
+    (it "uses custom render-item function"
+      (vui-defcomponent nav-list-test-10 ()
+        :render
+        (vui-navigable-list
+         :items '("Apple" "Banana")
+         :render-item (lambda (item selected-p)
+                        (if selected-p
+                            (format "[%s]" item)
+                          (format " %s " item)))))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-10)
+                                  "*test-nav-list-10*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-10*"
+              (expect (buffer-string) :to-match "\\[Apple\\]")
+              (expect (buffer-string) :to-match " Banana "))
+          (kill-buffer "*test-nav-list-10*")))))
+
+  (describe "single item"
+    (it "handles single item list"
+      (vui-defcomponent nav-list-test-11 ()
+        :render
+        (vui-navigable-list :items '("Lonely")))
+      (let ((instance (vui-mount (vui-component 'nav-list-test-11)
+                                  "*test-nav-list-11*")))
+        (unwind-protect
+            (with-current-buffer "*test-nav-list-11*"
+              (expect (buffer-string) :to-match "> Lonely"))
+          (kill-buffer "*test-nav-list-11*"))))))
+
 ;;; vui-components-test.el ends here
