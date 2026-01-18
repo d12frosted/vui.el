@@ -20,6 +20,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 - =vui-quit= command bound to =q=: Quits window when outside widget fields, self-inserts when inside (so you can type "q" in text inputs).
 - =vui-refresh= command bound to =g=: Re-renders the UI with current state when outside widget fields, self-inserts when inside. Applications needing custom refresh logic (e.g., re-fetching data) can override in their derived mode.
+- =vui-button= now accepts =:tab-order= and =:keymap= props. Use =:tab-order -1= to make a button non-tabbable, and =:keymap= to define custom key bindings active when point is on the button.
 
 * v1.0.0 - 2025-12-28
 
