@@ -177,6 +177,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/04-file-browser.el][File Browser]] — Directory navigation with sorting and search
 - [[file:docs/examples/05-wine-tasting.el][Wine Tasting]] — Dynamic tables with interactive cells, computed statistics
 - [[file:docs/examples/06-collapsible.el][Collapsible]] — Expandable/collapsible sections, FAQ style, nested sections
+- [[file:docs/examples/07-semantic-text.el][Semantic Text]] — Headings, emphasis, status messages with customizable faces
 
 * Available Components
 
@@ -217,6 +218,43 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
 (vui-collapsible :title "Details" :initially-expanded t
   (vui-text "Visible on load."))
+#+end_src
+
+** Semantic Text Components (vui-components.el)
+
+Thin wrappers around =vui-text= with customizable faces:
+
+| Component                       | Inherits From               |
+|---------------------------------+-----------------------------|
+| =vui-heading= / =vui-heading-N= | =outline-1= ... =outline-8= |
+| =vui-strong=                    | =bold=                      |
+| =vui-italic=                    | =italic=                    |
+| =vui-muted=                     | =shadow=                    |
+| =vui-code=                      | =fixed-pitch=               |
+| =vui-error=                     | =error=                     |
+| =vui-warning=                   | =warning=                   |
+| =vui-success=                   | =success=                   |
+
+#+begin_src elisp
+(require 'vui-components)
+
+(vui-vstack
+ (vui-heading-1 "Main Title")
+ (vui-heading-2 "Subsection")
+ (vui-strong "Important!")
+ (vui-muted "Less important...")
+ (vui-code "inline-code")
+ (vui-error "Something went wrong"))
+
+;; Or with :level for programmatic use
+(vui-heading "Dynamic Heading" :level depth)
+#+end_src
+
+Customize faces to fit your theme:
+
+#+begin_src elisp
+(set-face-attribute 'vui-heading-1 nil :height 1.3)
+(set-face-attribute 'vui-muted nil :slant 'italic)
 #+end_src
 
 * Hooks

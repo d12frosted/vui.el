@@ -30,10 +30,22 @@
 ;; Available components:
 ;;
 ;; - `vui-collapsible' - A togglable section that expands/collapses content
+;;
+;; Semantic text components (thin wrappers around `vui-text'):
+;;
+;; - `vui-heading', `vui-heading-1' ... `vui-heading-8' - Section headings
+;; - `vui-strong' - Bold emphasis
+;; - `vui-italic' - Italic emphasis
+;; - `vui-muted' - De-emphasized text
+;; - `vui-code' - Inline code
+;; - `vui-error' - Error messages
+;; - `vui-warning' - Warning messages
+;; - `vui-success' - Success messages
 
 ;;; Code:
 
 (require 'vui)
+(require 'outline)
 
 ;;; Indentation Context
 
@@ -153,6 +165,143 @@ Usage:
       :indent indent
       :key key
       :children children)))
+
+;;; Semantic Text Faces
+
+(defface vui-heading-1 '((t :inherit outline-1))
+  "Face for level 1 headings."
+  :group 'vui)
+
+(defface vui-heading-2 '((t :inherit outline-2))
+  "Face for level 2 headings."
+  :group 'vui)
+
+(defface vui-heading-3 '((t :inherit outline-3))
+  "Face for level 3 headings."
+  :group 'vui)
+
+(defface vui-heading-4 '((t :inherit outline-4))
+  "Face for level 4 headings."
+  :group 'vui)
+
+(defface vui-heading-5 '((t :inherit outline-5))
+  "Face for level 5 headings."
+  :group 'vui)
+
+(defface vui-heading-6 '((t :inherit outline-6))
+  "Face for level 6 headings."
+  :group 'vui)
+
+(defface vui-heading-7 '((t :inherit outline-7))
+  "Face for level 7 headings."
+  :group 'vui)
+
+(defface vui-heading-8 '((t :inherit outline-8))
+  "Face for level 8 headings."
+  :group 'vui)
+
+(defface vui-strong '((t :inherit bold))
+  "Face for strong/bold emphasis."
+  :group 'vui)
+
+(defface vui-italic '((t :inherit italic))
+  "Face for italic emphasis."
+  :group 'vui)
+
+(defface vui-muted '((t :inherit shadow))
+  "Face for de-emphasized text."
+  :group 'vui)
+
+(defface vui-code '((t :inherit fixed-pitch))
+  "Face for inline code."
+  :group 'vui)
+
+(defface vui-error '((t :inherit error))
+  "Face for error messages."
+  :group 'vui)
+
+(defface vui-warning '((t :inherit warning))
+  "Face for warning messages."
+  :group 'vui)
+
+(defface vui-success '((t :inherit success))
+  "Face for success messages."
+  :group 'vui)
+
+;;; Semantic Text Components
+
+(defconst vui--heading-faces
+  [vui-heading-1 vui-heading-2 vui-heading-3 vui-heading-4
+   vui-heading-5 vui-heading-6 vui-heading-7 vui-heading-8]
+  "Vector of heading faces indexed by level (0-7).")
+
+(defun vui-heading (text &rest props)
+  "Create a heading with TEXT.
+PROPS is a plist accepting :level (1-8, default 1) and :key."
+  (let* ((level (or (plist-get props :level) 1))
+         (key (plist-get props :key))
+         (face (aref vui--heading-faces (1- (max 1 (min 8 level))))))
+    (vui-text text :face face :key key)))
+
+(defun vui-heading-1 (text &optional key)
+  "Create a level 1 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-1 :key key))
+
+(defun vui-heading-2 (text &optional key)
+  "Create a level 2 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-2 :key key))
+
+(defun vui-heading-3 (text &optional key)
+  "Create a level 3 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-3 :key key))
+
+(defun vui-heading-4 (text &optional key)
+  "Create a level 4 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-4 :key key))
+
+(defun vui-heading-5 (text &optional key)
+  "Create a level 5 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-5 :key key))
+
+(defun vui-heading-6 (text &optional key)
+  "Create a level 6 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-6 :key key))
+
+(defun vui-heading-7 (text &optional key)
+  "Create a level 7 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-7 :key key))
+
+(defun vui-heading-8 (text &optional key)
+  "Create a level 8 heading with TEXT and optional KEY."
+  (vui-text text :face 'vui-heading-8 :key key))
+
+(defun vui-strong (text &optional key)
+  "Create bold/strong TEXT with optional KEY."
+  (vui-text text :face 'vui-strong :key key))
+
+(defun vui-italic (text &optional key)
+  "Create italic TEXT with optional KEY."
+  (vui-text text :face 'vui-italic :key key))
+
+(defun vui-muted (text &optional key)
+  "Create de-emphasized TEXT with optional KEY."
+  (vui-text text :face 'vui-muted :key key))
+
+(defun vui-code (text &optional key)
+  "Create inline code TEXT with optional KEY."
+  (vui-text text :face 'vui-code :key key))
+
+(defun vui-error (text &optional key)
+  "Create error message TEXT with optional KEY."
+  (vui-text text :face 'vui-error :key key))
+
+(defun vui-warning (text &optional key)
+  "Create warning message TEXT with optional KEY."
+  (vui-text text :face 'vui-warning :key key))
+
+(defun vui-success (text &optional key)
+  "Create success message TEXT with optional KEY."
+  (vui-text text :face 'vui-success :key key))
 
 (provide 'vui-components)
 ;;; vui-components.el ends here

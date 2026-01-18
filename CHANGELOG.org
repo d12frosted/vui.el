@@ -11,6 +11,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 - *vui-components.el*: New component library with higher-level components built on vui primitives.
 - =vui-collapsible=: Togglable section that expands/collapses content. Supports both uncontrolled (manages own state) and controlled (=:expanded= prop) modes. Features customizable indicators, title face, indentation, and proper nested indentation via context propagation.
+- *Semantic text components*: Thin wrappers around =vui-text= with customizable faces that inherit from standard Emacs faces:
+  - =vui-heading= with =:level= (1-8) and =vui-heading-1= through =vui-heading-8= (inherit from =outline-1= through =outline-8=)
+  - =vui-strong= (inherit from =bold=), =vui-italic= (inherit from =italic=)
+  - =vui-muted= (inherit from =shadow=), =vui-code= (inherit from =fixed-pitch=)
+  - =vui-error= (inherit from =error=), =vui-warning= (inherit from =warning=), =vui-success= (inherit from =success=)
 
 ** Fixed
 
