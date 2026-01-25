@@ -16,6 +16,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 - *vui-typed-field component*: New component in =vui-components.el= for typed input with parsing and validation. Uses component state to preserve raw input (e.g., users can see "123f" they typed while error is displayed).
   - Supported types: =integer=, =natnum=, =float=, =number=, =file=, =directory=, =symbol=, =sexp=
+  - Path types (=file=, =directory=) automatically expand =~= and relative paths via =expand-file-name=
   - =:on-change= and =:on-submit= receive typed values only when input is valid
   - =:on-error= callback receives =(error-msg raw-input)= on invalid input
   - Numeric constraints via =:min= and =:max=
