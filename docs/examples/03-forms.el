@@ -2,7 +2,7 @@
 
 ;; This file demonstrates form patterns:
 ;; - Controlled inputs
-;; - Field validation
+;; - Field validation with vui-typed-field
 ;; - Form-level validation
 ;; - Submit handling
 ;; - Multi-step forms
@@ -13,18 +13,28 @@
 (require 'vui-components)
 
 ;;; Example 1: Simple Contact Form
-;; Basic form with built-in validation
+;; Basic form with validation using vui-typed-field
 
 (vui-defcomponent contact-form ()
   :state ((name "")
           (email "")
           (message "")
+          (errors '())  ; Track which fields have errors
           (submitted nil))
 
   :render
-  (let ((submit (lambda ()
-                  (when (vui-fields-validate 'name 'email 'message)
-                    (vui-set-state :submitted t)))))
+  (let* ((set-error (lambda (key err)
+                      (vui-set-state :errors
+                                     (if err
+                                         (cons key (remove key errors))
+                                       (remove key errors)))))
+         (valid-p (and (not (string-empty-p name))
+                       (not (string-empty-p email))
+                       (not (string-empty-p message))
+                       (null errors)))
+         (submit (lambda ()
+                   (when valid-p
+                     (vui-set-state :submitted t)))))
 
     (if submitted
         ;; Success message
@@ -34,15 +44,14 @@
          (vui-newline)
          (vui-button "Send Another"
            :on-click (lambda ()
-                       ;; Reset touched state so errors don't show on fresh form
-                       (vui-field-reset)
                        (vui-batch
                         (vui-set-state :name "")
                         (vui-set-state :email "")
                         (vui-set-state :message "")
+                        (vui-set-state :errors '())
                         (vui-set-state :submitted nil)))))
 
-      ;; Form with built-in validation
+      ;; Form with validation using vui-typed-field
       (vui-vstack :spacing 1
                   (vui-heading-1 "Contact Us")
                   (vui-text (make-string 30 ?-))
@@ -50,36 +59,47 @@
                   ;; Name field with validation
                   (vui-hstack
                    (vui-text "Name:    ")
-                   (vui-field :key 'name
-                              :value name
-                              :size 25
-                              :valid-p (lambda (v) (not (string-empty-p v)))
-                              :error-message "Name is required"
-                              :on-change (lambda (v) (vui-set-state :name v))))
+                   (vui-typed-field
+                    :type nil  ; String field
+                    :value name
+                    :size 25
+                    :required t
+                    :show-error 'inline
+                    :on-change (lambda (v) (vui-set-state :name v))
+                    :on-error (lambda (err _) (funcall set-error 'name err))))
 
-                  ;; Email field with regexp validation
+                  ;; Email field with pattern validation
                   (vui-hstack
                    (vui-text "Email:   ")
-                   (vui-field :key 'email
-                              :value email
-                              :size 25
-                              :valid-regexp "^[^@]+@[^@]+$"
-                              :error-message "Invalid email format"
-                              :on-change (lambda (v) (vui-set-state :email v))))
+                   (vui-typed-field
+                    :type nil
+                    :value email
+                    :size 25
+                    :required t
+                    :validate (lambda (v)
+                                (unless (string-match-p "^[^@]+@[^@]+$" v)
+                                  "Invalid email format"))
+                    :show-error 'inline
+                    :on-change (lambda (v) (vui-set-state :email v))
+                    :on-error (lambda (err _) (funcall set-error 'email err))))
 
                   ;; Message field with validation
                   (vui-hstack
                    (vui-text "Message: ")
-                   (vui-field :key 'message
-                              :value message
-                              :size 25
-                              :valid-p (lambda (v) (not (string-empty-p v)))
-                              :error-message "Message is required"
-                              :on-change (lambda (v) (vui-set-state :message v))))
+                   (vui-typed-field
+                    :type nil
+                    :value message
+                    :size 25
+                    :required t
+                    :show-error 'inline
+                    :on-change (lambda (v) (vui-set-state :message v))
+                    :on-error (lambda (err _) (funcall set-error 'message err))))
 
                   ;; Submit button
                   (vui-newline)
-                  (vui-button "Submit" :on-click submit)))))
+                  (vui-button "Submit"
+                    :disabled (not valid-p)
+                    :on-click submit)))))
 
 
 (defun vui-example-contact-form ()
@@ -90,70 +110,101 @@
 
 ;;; Example 2: Registration Form
 ;; More complex validation with password confirmation
-;; Demonstrates both built-in validation and custom logic for password matching
 
 (vui-defcomponent registration-form ()
   :state ((username "")
           (email "")
           (password "")
           (confirm "")
-          (agree nil))
+          (agree nil)
+          (errors '()))
 
   :render
-  (let ((submit (lambda ()
-                  (when (and (vui-fields-validate 'username 'email 'password 'confirm)
-                             agree)
-                    (message "Registration successful for: %s" username)))))
+  (let* ((set-error (lambda (key err)
+                      (vui-set-state :errors
+                                     (if err
+                                         (cons key (remove key errors))
+                                       (remove key errors)))))
+         (valid-p (and (>= (length username) 3)
+                       (string-match-p "^[a-zA-Z0-9_]+$" username)
+                       (string-match-p "^[^@]+@[^@]+$" email)
+                       (>= (length password) 8)
+                       (string= password confirm)
+                       agree
+                       (null errors)))
+         (submit (lambda ()
+                   (when valid-p
+                     (message "Registration successful for: %s" username)))))
 
     (vui-vstack
      :spacing 1
      (vui-heading-1 "Create Account")
      (vui-text (make-string 35 ?-))
 
-     ;; Username with regexp and length validation
+     ;; Username with pattern and length validation
      (vui-hstack
       (vui-text "Username: ")
-      (vui-field :key 'username
-                 :value username
-                 :size 20
-                 :valid-regexp "^[a-zA-Z0-9_]+$"
-                 :valid-p (lambda (v) (>= (length v) 3))
-                 :error-message "Min 3 alphanumeric chars"
-                 :on-change (lambda (v) (vui-set-state :username v))))
+      (vui-typed-field
+       :type nil
+       :value username
+       :size 20
+       :required t
+       :validate (lambda (v)
+                   (cond
+                    ((< (length v) 3) "Min 3 characters")
+                    ((not (string-match-p "^[a-zA-Z0-9_]+$" v)) "Alphanumeric only")))
+       :show-error 'inline
+       :on-change (lambda (v) (vui-set-state :username v))
+       :on-error (lambda (err _) (funcall set-error 'username err))))
 
-     ;; Email with regexp validation
+     ;; Email with pattern validation
      (vui-hstack
       (vui-text "Email:    ")
-      (vui-field :key 'email
-                 :value email
-                 :size 20
-                 :valid-regexp "^[^@]+@[^@]+$"
-                 :error-message "Invalid email"
-                 :on-change (lambda (v) (vui-set-state :email v))))
+      (vui-typed-field
+       :type nil
+       :value email
+       :size 20
+       :required t
+       :validate (lambda (v)
+                   (unless (string-match-p "^[^@]+@[^@]+$" v)
+                     "Invalid email"))
+       :show-error 'inline
+       :on-change (lambda (v) (vui-set-state :email v))
+       :on-error (lambda (err _) (funcall set-error 'email err))))
 
      ;; Password with length validation
      (vui-hstack
       (vui-text "Password: ")
-      (vui-field :key 'password
-                 :value password
-                 :size 20
-                 :secret t
-                 :valid-p (lambda (v) (>= (length v) 8))
-                 :error-message "Min 8 characters"
-                 :on-change (lambda (v) (vui-set-state :password v))))
+      (vui-typed-field
+       :type nil
+       :value password
+       :size 20
+       :secret t
+       :required t
+       :validate (lambda (v)
+                   (when (< (length v) 8)
+                     "Min 8 characters"))
+       :show-error 'inline
+       :on-change (lambda (v) (vui-set-state :password v))
+       :on-error (lambda (err _) (funcall set-error 'password err))))
 
-     ;; Confirm Password - must match password (uses closure over password)
+     ;; Confirm Password - must match password
      (vui-hstack
       (vui-text "Confirm:  ")
-      (vui-field :key 'confirm
-                 :value confirm
-                 :size 20
-                 :secret t
-                 :valid-p (lambda (v) (string= v password))
-                 :error-message "Passwords don't match"
-                 :on-change (lambda (v) (vui-set-state :confirm v))))
+      (vui-typed-field
+       :type nil
+       :value confirm
+       :size 20
+       :secret t
+       :required t
+       :validate (lambda (v)
+                   (unless (string= v password)
+                     "Passwords don't match"))
+       :show-error 'inline
+       :on-change (lambda (v) (vui-set-state :confirm v))
+       :on-error (lambda (err _) (funcall set-error 'confirm err))))
 
-     ;; Terms checkbox (not a field, so manual validation)
+     ;; Terms checkbox
      (vui-newline)
      (vui-checkbox :checked agree
                    :label "I agree to the terms and conditions"
@@ -164,6 +215,7 @@
      ;; Submit
      (vui-newline)
      (vui-button "Create Account"
+       :disabled (not valid-p)
        :on-click submit))))
 
 
@@ -177,9 +229,19 @@
 ;; Form split across multiple steps
 
 (vui-defcomponent wizard-step-1 (data on-next)
+  :state ((errors '()))
+
   :render
-  (let ((name (plist-get data :name))
-        (email (plist-get data :email)))
+  (let* ((name (plist-get data :name))
+         (email (plist-get data :email))
+         (set-error (lambda (key err)
+                      (vui-set-state :errors
+                                     (if err
+                                         (cons key (remove key errors))
+                                       (remove key errors)))))
+         (valid-p (and name (not (string-empty-p name))
+                       email (string-match-p "^[^@]+@[^@]+$" email)
+                       (null errors))))
     (vui-vstack
      :spacing 1
      (vui-heading-2 "Step 1: Basic Info")
@@ -187,33 +249,40 @@
 
      (vui-hstack
       (vui-text "Name:  ")
-      (vui-field :key 'wizard-name
-                 :value (or name "")
-                 :size 25
-                 :valid-p (lambda (v) (not (string-empty-p v)))
-                 :error-message "Name is required"
-                 :on-change (lambda (v)
-                              (funcall on-next
-                                       (plist-put (copy-sequence data) :name v)
-                                       nil))))
+      (vui-typed-field
+       :type nil
+       :value (or name "")
+       :size 25
+       :required t
+       :show-error 'inline
+       :on-change (lambda (v)
+                    (funcall on-next
+                             (plist-put (copy-sequence data) :name v)
+                             nil))
+       :on-error (lambda (err _) (funcall set-error 'name err))))
 
      (vui-hstack
       (vui-text "Email: ")
-      (vui-field :key 'wizard-email
-                 :value (or email "")
-                 :size 25
-                 :valid-regexp "^[^@]+@[^@]+$"
-                 :error-message "Valid email required"
-                 :on-change (lambda (v)
-                              (funcall on-next
-                                       (plist-put (copy-sequence data) :email v)
-                                       nil))))
+      (vui-typed-field
+       :type nil
+       :value (or email "")
+       :size 25
+       :required t
+       :validate (lambda (v)
+                   (unless (string-match-p "^[^@]+@[^@]+$" v)
+                     "Valid email required"))
+       :show-error 'inline
+       :on-change (lambda (v)
+                    (funcall on-next
+                             (plist-put (copy-sequence data) :email v)
+                             nil))
+       :on-error (lambda (err _) (funcall set-error 'email err))))
 
      (vui-newline)
      (vui-button "Next →"
+       :disabled (not valid-p)
        :on-click (lambda ()
-                   (when (vui-fields-validate 'wizard-name 'wizard-email)
-                     (funcall on-next data t)))))))
+                   (funcall on-next data t))))))
 
 
 (vui-defcomponent wizard-step-2 (data on-next on-back)
@@ -366,15 +435,13 @@
                       (funcall set-setting :theme v))))
        (vui-hstack
         (vui-text "Font size: ")
-        (vui-select
-         :value (number-to-string
-                 (plist-get settings :font-size))
-         :options '(("12" . "Small (12)")
-                    ("14" . "Medium (14)")
-                    ("16" . "Large (16)"))
-         :on-change (lambda (v)
-                      (funcall set-setting :font-size
-                               (string-to-number v)))))))
+        (vui-integer-field
+         :value (plist-get settings :font-size)
+         :min 8
+         :max 24
+         :show-error 'inline
+         :on-change (lambda (n)
+                      (funcall set-setting :font-size n))))))
 
      ;; Notifications section
      (vui-collapsible
