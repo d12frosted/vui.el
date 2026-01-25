@@ -23,6 +23,11 @@
           (submitted nil))
 
   :render
+  ;; Track field errors via :on-error callbacks. The valid-p check combines:
+  ;; 1. Field values are non-empty (enables submit only when all filled)
+  ;; 2. No validation errors (field-level validation passed)
+  ;; Note: :required on fields shows inline errors, but we still need
+  ;; empty checks here since errors list is initially empty.
   (let* ((set-error (lambda (key err)
                       (vui-set-state :errors
                                      (if err
@@ -120,16 +125,17 @@
           (errors '()))
 
   :render
+  ;; Field validation is defined once in :validate lambdas.
+  ;; valid-p checks: fields have values, no errors, and checkbox agreed.
   (let* ((set-error (lambda (key err)
                       (vui-set-state :errors
                                      (if err
                                          (cons key (remove key errors))
                                        (remove key errors)))))
-         (valid-p (and (>= (length username) 3)
-                       (string-match-p "^[a-zA-Z0-9_]+$" username)
-                       (string-match-p "^[^@]+@[^@]+$" email)
-                       (>= (length password) 8)
-                       (string= password confirm)
+         (valid-p (and (not (string-empty-p username))
+                       (not (string-empty-p email))
+                       (not (string-empty-p password))
+                       (not (string-empty-p confirm))
                        agree
                        (null errors)))
          (submit (lambda ()
@@ -232,6 +238,7 @@
   :state ((errors '()))
 
   :render
+  ;; Email validation is in :validate, not duplicated here.
   (let* ((name (plist-get data :name))
          (email (plist-get data :email))
          (set-error (lambda (key err)
@@ -240,7 +247,7 @@
                                          (cons key (remove key errors))
                                        (remove key errors)))))
          (valid-p (and name (not (string-empty-p name))
-                       email (string-match-p "^[^@]+@[^@]+$" email)
+                       email (not (string-empty-p email))
                        (null errors))))
     (vui-vstack
      :spacing 1
