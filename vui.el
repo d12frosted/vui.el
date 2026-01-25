@@ -2160,7 +2160,7 @@ INSTANCE is the component instance."
   (vui--cleanup-instance-effects instance)
   (vui--cleanup-instance-asyncs instance)
   ;; Call mount cleanup function if one was returned from on-mount
-  (when-let ((cleanup (vui-instance-mount-cleanup instance)))
+  (when-let* ((cleanup (vui-instance-mount-cleanup instance)))
     (condition-case err
         (funcall cleanup)
       (error

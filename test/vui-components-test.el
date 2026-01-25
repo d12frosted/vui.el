@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'buttercup)
+(require 'cl-lib)
 (require 'vui)
 (require 'vui-components)
 
@@ -168,7 +169,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (let* ((received-value nil)
              (validator (lambda (v)
                           (setq received-value v)
-                          (when (oddp v) "Must be even")))
+                          (when (cl-oddp v) "Must be even")))
              (err (vui--typed-field-validate 5 'integer nil nil validator nil "5")))
         (expect received-value :to-equal 5)
         (expect err :to-equal "Must be even")))))
