@@ -137,12 +137,13 @@ When TYPE is nil, returns (ok . STRING) unchanged."
             (_ (cons 'ok string))))
       (error (cons 'error (format "Parse error: %s" (error-message-string err)))))))
 
-(defun vui--typed-field-validate (value _type min max validate required string-value)
+(defun vui--typed-field-validate (value type min max validate required must-exist string-value)
   "Validate VALUE against constraints.
 TYPE is the field type (may be nil for untyped fields).
 MIN and MAX are numeric constraints (only for numeric types).
 VALIDATE is a custom validator function.
 REQUIRED indicates if empty values are invalid.
+MUST-EXIST indicates if file/directory must exist.
 STRING-VALUE is the raw string (for :required check).
 Returns nil if valid, or an error message string if invalid."
   (cond
@@ -155,6 +156,12 @@ Returns nil if valid, or an error message string if invalid."
    ;; Check max constraint
    ((and max (numberp value) (> value max))
     (format "Must be at most %s" max))
+   ;; Check file existence
+   ((and must-exist (eq type 'file) value (not (file-exists-p value)))
+    "File does not exist")
+   ;; Check directory existence (must be a directory, not just exist)
+   ((and must-exist (eq type 'directory) value (not (file-directory-p value)))
+    "Directory does not exist")
    ;; Check custom validator
    (validate
     (funcall validate value))
@@ -420,7 +427,8 @@ PROPS is a plist accepting :level (1-8, default 1) and :key."
 ;;; Typed Field Component
 
 (vui-defcomponent vui-typed-field--internal
-    (type value min max validate on-change on-submit on-error show-error size secret key required)
+    (type value min max validate on-change on-submit on-error show-error
+     size secret key required must-exist)
   "Internal component for typed input fields.
 
 TYPE is the field type (integer, natnum, float, number, file, directory, symbol, sexp).
@@ -434,7 +442,8 @@ SHOW-ERROR can be t, \\='inline, or \\='below to display error.
 SIZE is field width.
 SECRET enables password mode.
 KEY is for field lookup.
-REQUIRED means empty is invalid."
+REQUIRED means empty is invalid.
+MUST-EXIST means file/directory must exist (for file/directory types)."
 
   :state ((raw-value (vui--field-value-to-string value type))
           (error-msg nil)
@@ -466,7 +475,8 @@ REQUIRED means empty is invalid."
                   ;; Parse succeeded - validate
                   (let* ((typed-value (cdr parse-result))
                          (validation-err (vui--typed-field-validate
-                                          typed-value type min max validate required string-input)))
+                                          typed-value type min max validate
+                                          required must-exist string-input)))
                     (if validation-err
                         ;; Validation failed
                         (progn
@@ -499,29 +509,31 @@ REQUIRED means empty is invalid."
   "Create a typed input field with parsing and validation.
 
 PROPS is a plist accepting:
-  :type      - Type for parsing: \\='integer, \\='natnum, \\='float,
-               \\='number, \\='file, \\='directory, \\='symbol, \\='sexp
-  :value     - Typed value (will be stringified for display)
-  :min/:max  - Numeric constraints
-  :validate  - (lambda (typed-value) error-string-or-nil)
-  :on-change - (lambda (typed-value)) called only when valid
-  :on-submit - (lambda (typed-value)) called only when valid on RET
-  :on-error  - (lambda (error-msg raw-input)) on parse/validation failure
+  :type       - Type for parsing: \\='integer, \\='natnum, \\='float,
+                \\='number, \\='file, \\='directory, \\='symbol, \\='sexp
+  :value      - Typed value (will be stringified for display)
+  :min/:max   - Numeric constraints
+  :must-exist - Non-nil means file/directory must exist
+  :validate   - (lambda (typed-value) error-string-or-nil)
+  :on-change  - (lambda (typed-value)) called only when valid
+  :on-submit  - (lambda (typed-value)) called only when valid on RET
+  :on-error   - (lambda (error-msg raw-input)) on parse/validation failure
   :show-error - t or \\='below for below, \\='inline for same line
-  :size      - Field width
-  :secret    - Password mode
-  :key       - Field key
-  :required  - Non-nil means empty is invalid
+  :size       - Field width
+  :secret     - Password mode
+  :key        - Field key
+  :required   - Non-nil means empty is invalid
 
 Examples:
   (vui-typed-field :type \\='integer :value 42 :min 0 :max 100
                    :on-change (lambda (n) (message \"Got: %d\" n)))
-  (vui-typed-field :type \\='float :value 3.14 :show-error t)"
+  (vui-typed-field :type \\='file :must-exist t :show-error t)"
   (vui-component 'vui-typed-field--internal
     :type (plist-get props :type)
     :value (plist-get props :value)
     :min (plist-get props :min)
     :max (plist-get props :max)
+    :must-exist (plist-get props :must-exist)
     :validate (plist-get props :validate)
     :on-change (plist-get props :on-change)
     :on-submit (plist-get props :on-submit)
