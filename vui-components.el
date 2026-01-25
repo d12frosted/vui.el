@@ -135,7 +135,7 @@ When TYPE is nil, returns (ok . STRING) unchanged."
             (_ (cons 'ok string))))
       (error (cons 'error (format "Parse error: %s" (error-message-string err)))))))
 
-(defun vui--typed-field-validate (value type min max validate required string-value)
+(defun vui--typed-field-validate (value _type min max validate required string-value)
   "Validate VALUE against constraints.
 TYPE is the field type (may be nil for untyped fields).
 MIN and MAX are numeric constraints (only for numeric types).
@@ -497,14 +497,15 @@ REQUIRED means empty is invalid."
   "Create a typed input field with parsing and validation.
 
 PROPS is a plist accepting:
-  :type      - \\='integer, \\='natnum, \\='float, \\='number, \\='file, \\='directory, \\='symbol, \\='sexp
+  :type      - Type for parsing: \\='integer, \\='natnum, \\='float,
+               \\='number, \\='file, \\='directory, \\='symbol, \\='sexp
   :value     - Typed value (will be stringified for display)
   :min/:max  - Numeric constraints
   :validate  - (lambda (typed-value) error-string-or-nil)
   :on-change - (lambda (typed-value)) called only when valid
   :on-submit - (lambda (typed-value)) called only when valid on RET
-  :on-error  - (lambda (error-msg raw-input)) called on parse/validation failure
-  :show-error - t or \\='below to display error below, \\='inline for same line
+  :on-error  - (lambda (error-msg raw-input)) on parse/validation failure
+  :show-error - t or \\='below for below, \\='inline for same line
   :size      - Field width
   :secret    - Password mode
   :key       - Field key
