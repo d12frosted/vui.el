@@ -490,13 +490,8 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
     (it "passes type prop"
       (let* ((node (vui-typed-field :type 'integer :value 42))
-             (props (vui-vnode-component-props node))
-             (type-val (plist-get props :type)))
-        ;; Debug: print props to see what's there
-        (message "DEBUG: props = %S" props)
-        (message "DEBUG: type-val = %S" type-val)
-        (message "DEBUG: (eq type-val 'integer) = %S" (eq type-val 'integer))
-        (expect type-val :to-equal 'integer)))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'integer)))
 
     (it "passes value prop"
       (let ((node (vui-typed-field :type 'integer :value 42)))
@@ -741,61 +736,74 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (looking-at ".*integer") :to-be-truthy))
           (kill-buffer "*test-typed-show-error-inline*"))))))
 
+;; Note: These tests extract props to variables to work around an Emacs 29
+;; byte-compilation issue where inline (plist-get (accessor node) :key)
+;; expressions can return nil unexpectedly in buttercup tests.
 (describe "typed field shortcuts"
   (describe "vui-integer-field"
     (it "creates integer typed field component"
-      (let ((node (vui-integer-field :value 42)))
+      (let* ((node (vui-integer-field :value 42))
+             (props (vui-vnode-component-props node)))
         (expect (vui-vnode-component-p node) :to-be-truthy)
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'integer)
-        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 42)))
+        (expect (plist-get props :type) :to-equal 'integer)
+        (expect (plist-get props :value) :to-equal 42)))
 
     (it "passes through all props"
-      (let ((node (vui-integer-field :value 10 :min 0 :max 100 :key 'age)))
-        (expect (plist-get (vui-vnode-component-props node) :min) :to-equal 0)
-        (expect (plist-get (vui-vnode-component-props node) :max) :to-equal 100)
-        (expect (plist-get (vui-vnode-component-props node) :key) :to-equal 'age))))
+      (let* ((node (vui-integer-field :value 10 :min 0 :max 100 :key 'age))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :min) :to-equal 0)
+        (expect (plist-get props :max) :to-equal 100)
+        (expect (plist-get props :key) :to-equal 'age))))
 
   (describe "vui-natnum-field"
     (it "creates natnum typed field component"
-      (let ((node (vui-natnum-field :value 0)))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'natnum))))
+      (let* ((node (vui-natnum-field :value 0))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'natnum))))
 
   (describe "vui-float-field"
     (it "creates float typed field component"
-      (let ((node (vui-float-field :value 3.14)))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'float)
-        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 3.14))))
+      (let* ((node (vui-float-field :value 3.14))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'float)
+        (expect (plist-get props :value) :to-equal 3.14))))
 
   (describe "vui-number-field"
     (it "creates number typed field component"
-      (let ((node (vui-number-field :value 42)))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'number))))
+      (let* ((node (vui-number-field :value 42))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'number))))
 
   (describe "vui-file-field"
     (it "creates file typed field component"
-      (let ((node (vui-file-field :value "/tmp/test.txt")))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'file)
-        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal "/tmp/test.txt"))))
+      (let* ((node (vui-file-field :value "/tmp/test.txt"))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'file)
+        (expect (plist-get props :value) :to-equal "/tmp/test.txt"))))
 
   (describe "vui-directory-field"
     (it "creates directory typed field component"
-      (let ((node (vui-directory-field :value "/home/user")))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'directory))))
+      (let* ((node (vui-directory-field :value "/home/user"))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'directory))))
 
   (describe "vui-symbol-field"
     (it "creates symbol typed field component"
-      (let ((node (vui-symbol-field :value 'my-symbol)))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'symbol)
-        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 'my-symbol))))
+      (let* ((node (vui-symbol-field :value 'my-symbol))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'symbol)
+        (expect (plist-get props :value) :to-equal 'my-symbol))))
 
   (describe "vui-sexp-field"
     (it "creates sexp typed field component"
-      (let ((node (vui-sexp-field :value '(1 2 3))))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'sexp)
-        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal '(1 2 3))))
+      (let* ((node (vui-sexp-field :value '(1 2 3)))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'sexp)
+        (expect (plist-get props :value) :to-equal '(1 2 3))))
 
     (it "handles complex sexp"
-      (let ((node (vui-sexp-field :value '(:key "value" :num 42))))
-        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'sexp)))))
+      (let* ((node (vui-sexp-field :value '(:key "value" :num 42)))
+             (props (vui-vnode-component-props node)))
+        (expect (plist-get props :type) :to-equal 'sexp)))))
 
 ;;; vui-components-test.el ends here
