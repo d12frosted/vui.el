@@ -18,7 +18,7 @@
 (vui-defcomponent age-calculator ()
   "Calculate age-related statistics."
   :state ((birth-year nil)
-          (current-year 2024))
+          (current-year (decoded-time-year (decode-time))))
 
   :render
   (let* ((age (when (and birth-year current-year)
