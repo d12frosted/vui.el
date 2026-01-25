@@ -31,6 +31,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Fixed
 
 - *Keymap hierarchy*: =special-mode-map= bindings (like =h= for help) were inaccessible because =set-keymap-parent= overwrote the parent set by =define-derived-mode=. Now uses =make-composed-keymap= to include both =widget-keymap= and =special-mode-map=.
+- *Table cursor preservation*: Widgets inside table cells now have unique paths based on row and column indices. Previously, all widgets in a table shared the same render path, causing cursor restoration to potentially jump to the wrong widget (e.g., from row 2's field to row 1's field) after re-render.
 
 ** Added
 

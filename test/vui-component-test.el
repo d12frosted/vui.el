@@ -825,7 +825,52 @@
       ;; Cell content must be 10 chars, button truncated
       ;; max-width=10: [] takes 2, ... takes 3, so 5 chars for label = "very "
       ;; | [very ...] | - button inside 10-char cell
-      (expect (buffer-string) :to-match "| \\[very \\.\\.\\.\\] |"))))
+      (expect (buffer-string) :to-match "| \\[very \\.\\.\\.\\] |")))
+
+  (it "preserves cursor in correct cell across re-renders"
+    ;; Tests that cursor stays in the correct table cell when the table re-renders.
+    ;; Each cell should have a unique path based on row and column indices.
+    ;; This is a regression test for a bug where all table cells shared the same
+    ;; render path, causing cursor to jump to wrong cell after re-render.
+    (vui-defcomponent table-cursor-test ()
+      :state ((data '((:id 1 :value "A") (:id 2 :value "B") (:id 3 :value "C"))))
+      :render
+      (vui-table
+       :columns '((:header "ID" :width 5) (:header "Value" :width 10))
+       :rows (mapcar (lambda (item)
+                       (list (format "%d" (plist-get item :id))
+                             (vui-field :value (plist-get item :value)
+                                        :size 8
+                                        :on-change #'ignore)))
+                     data)))
+    (let ((instance (vui-mount (vui-component 'table-cursor-test) "*test-table-cursor*")))
+      (unwind-protect
+          (with-current-buffer "*test-table-cursor*"
+            ;; Navigate to the second field (row 2)
+            (goto-char (point-min))
+            (widget-forward 1)  ; First field (row 1)
+            (widget-forward 1)  ; Second field (row 2)
+            (let* ((widget-before (widget-at (point)))
+                   (path-before (widget-get widget-before :vui-path)))
+              (expect widget-before :to-be-truthy)
+              (expect (widget-type widget-before) :to-equal 'editable-field)
+              ;; Path should indicate row 1 (0-indexed), column 1
+              (expect path-before :to-equal '(1 1))
+              ;; Trigger re-render
+              (let ((vui--current-instance instance)
+                    (vui--root-instance instance))
+                (vui-set-state :data '((:id 1 :value "X")
+                                       (:id 2 :value "Y")
+                                       (:id 3 :value "Z"))))
+              (vui-flush-sync)
+              ;; Cursor should still be on a field widget with the same path
+              (let* ((widget-after (widget-at (point)))
+                     (path-after (widget-get widget-after :vui-path)))
+                (expect widget-after :to-be-truthy)
+                (expect (widget-type widget-after) :to-equal 'editable-field)
+                ;; Path should be the same - row 1, column 1
+                (expect path-after :to-equal '(1 1)))))
+        (kill-buffer "*test-table-cursor*")))))
 
 
 ;;; vui-component-test.el ends here
