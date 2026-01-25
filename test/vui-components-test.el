@@ -124,10 +124,25 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (expect (car result) :to-equal 'ok)
         (expect (cdr result) :to-equal 3.14)))
 
-    (it "parses file path as-is"
-      (let ((result (vui--field-parse-string "/path/to/file" 'file)))
+    (it "expands file path with expand-file-name"
+      (let ((result (vui--field-parse-string "~/test.txt" 'file)))
         (expect (car result) :to-equal 'ok)
-        (expect (cdr result) :to-equal "/path/to/file")))
+        (expect (cdr result) :to-equal (expand-file-name "~/test.txt"))))
+
+    (it "expands directory path with expand-file-name"
+      (let ((result (vui--field-parse-string "~/Documents" 'directory)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal (expand-file-name "~/Documents"))))
+
+    (it "returns nil for empty file path"
+      (let ((result (vui--field-parse-string "" 'file)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-be nil)))
+
+    (it "returns nil for empty directory path"
+      (let ((result (vui--field-parse-string "  " 'directory)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-be nil)))
 
     (it "parses symbol"
       (let ((result (vui--field-parse-string "my-symbol" 'symbol)))

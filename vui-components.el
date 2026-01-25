@@ -123,7 +123,9 @@ When TYPE is nil, returns (ok . STRING) unchanged."
                (cons 'ok (string-to-number trimmed)))
               (t (cons 'error "Not a valid number"))))
             ((or 'file 'directory)
-             (cons 'ok string))
+             (if (string-empty-p trimmed)
+                 (cons 'ok nil)
+               (cons 'ok (expand-file-name trimmed))))
             ('symbol
              (if (string-empty-p trimmed)
                  (cons 'error "Symbol name cannot be empty")
