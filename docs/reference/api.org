@@ -188,38 +188,19 @@ Create a clickable button. By default, buttons render with brackets: =LABEL= bec
                VALID-REGEXP VALID-P ERROR-FACE ERROR-MESSAGE) -> vnode
 #+end_src
 
-Create a text input field.
+Create a text input field. This is a simple string-based primitive. For typed
+fields with parsing and validation, use =vui-typed-field= from =vui-components.el=.
 
-| Property         | Type     | Description                                   |
-|------------------+----------+-----------------------------------------------|
-| =:value=         | string   | Initial content (default "")                  |
-| =:size=          | integer  | Width in characters                           |
-| =:placeholder=   | string   | Hint text (not yet rendered)                  |
-| =:on-change=     | function | Called with value on change                   |
-| =:on-submit=     | function | Called with value on RET                      |
-| =:key=           | any      | Reconciliation key / lookup key               |
-| =:face=          | symbol   | Text face                                     |
-| =:secret=        | boolean  | Hide input (for passwords)                    |
-| =:valid-regexp=  | string   | Regexp the value must match for validation    |
-| =:valid-p=       | function | =(value) -> t/nil= custom validation function |
-| =:error-face=    | face     | Face when invalid (default: =vui-field-error=)  |
-| =:error-message= | string   | Message shown below field when invalid        |
-
-*** Validation
-
-Fields can have built-in validation using =:valid-regexp= and/or =:valid-p=.
-When validation is configured:
-
-- Validation runs on every change (via =:notify=)
-- Error messages only appear after the field has been "touched" (modified at least once)
-- When touched and invalid: =:error-message= (if set) is shown below the field with =:error-face=
-- When valid or pristine (never touched): no error message shown
-- The field itself always renders normally (error-face only applies to the error message)
-- Both =:valid-regexp= and =:valid-p= must pass when both are provided
-
-This "touched" behavior provides better UX - users don't see error messages before they've had a chance to interact with the form.
-
-Use =vui-field-valid-p= to check validity in submit handlers.
+| Property       | Type     | Description                     |
+|----------------+----------+---------------------------------|
+| =:value=       | string   | Initial content (default "")    |
+| =:size=        | integer  | Width in characters             |
+| =:placeholder= | string   | Hint text (not yet rendered)    |
+| =:on-change=   | function | Called with value on change     |
+| =:on-submit=   | function | Called with value on RET        |
+| =:key=         | any      | Reconciliation key / lookup key |
+| =:face=        | symbol   | Text face                       |
+| =:secret=      | boolean  | Hide input (for passwords)      |
 
 #+begin_src elisp
 (vui-field :value name
@@ -231,29 +212,6 @@ Use =vui-field-valid-p= to check validity in submit handlers.
            :size 20
            :secret t
            :on-change (lambda (v) (vui-set-state :password v)))
-
-;; Email validation with regexp
-(vui-field :key 'email
-           :value email
-           :valid-regexp "^[^@]+@[^@]+\\.[^@]+$"
-           :error-message "Please enter a valid email"
-           :on-change (lambda (v) (vui-set-state :email v)))
-
-;; Password with length validation
-(vui-field :key 'password
-           :value password
-           :secret t
-           :valid-p (lambda (v) (>= (length v) 8))
-           :error-message "Password must be at least 8 characters"
-           :on-change (lambda (v) (vui-set-state :password v)))
-
-;; Combined validation
-(vui-field :key 'username
-           :value username
-           :valid-regexp "^[a-zA-Z0-9_]+$"
-           :valid-p (lambda (v) (>= (length v) 3))
-           :error-message "Username must be 3+ alphanumeric chars"
-           :on-change (lambda (v) (vui-set-state :username v)))
 #+end_src
 
 ** vui-field-value
@@ -269,77 +227,6 @@ Get current value of field with KEY, without triggering re-render.
 (vui-button "Submit"
             :on-click (lambda ()
                         (process (vui-field-value 'my-input))))
-#+end_src
-
-** vui-field-valid-p
-
-#+begin_src elisp
-(vui-field-valid-p KEY) -> t or nil
-#+end_src
-
-Return =t= if field with KEY is valid, =nil= otherwise.
-Returns =nil= if no field with KEY exists.
-
-Use this in submit handlers to check if all fields pass validation before
-proceeding.
-
-** vui-fields-validate
-
-#+begin_src elisp
-(vui-fields-validate &rest KEYS) -> t or nil
-#+end_src
-
-Touch and validate all fields with KEYS. Returns =t= if all fields are valid,
-=nil= otherwise. If any field is invalid, automatically triggers re-render to
-show errors.
-
-This is the recommended way to validate forms on submit:
-
-#+begin_src elisp
-(vui-field :key 'email
-           :value email
-           :valid-regexp "^[^@]+@[^@]+$"
-           :error-message "Invalid email")
-(vui-field :key 'password
-           :value password
-           :valid-p (lambda (v) (>= (length v) 8))
-           :error-message "Min 8 characters")
-(vui-button "Submit"
-            :on-click (lambda ()
-                        (when (vui-fields-validate 'email 'password)
-                          (submit-form))))
-#+end_src
-
-** vui-field-touch
-
-#+begin_src elisp
-(vui-field-touch &rest KEYS)
-#+end_src
-
-Mark field(s) with KEYS as touched/dirty. This causes validation errors to be
-shown on next render. If KEYS is empty, marks ALL fields as touched.
-
-Note: For submit handlers, prefer =vui-fields-validate= which combines touching,
-validation checking, and re-rendering in one call.
-
-** vui-field-reset
-
-#+begin_src elisp
-(vui-field-reset &rest KEYS)
-#+end_src
-
-Clear touched/dirty state for field(s) with KEYS. After reset, validation errors
-won't show until the field is modified again. If KEYS is empty, resets ALL fields.
-
-Use this when resetting a form to pristine state:
-
-#+begin_src elisp
-(vui-button "Reset Form"
-            :on-click (lambda ()
-                        (vui-field-reset)  ; Clear all touched state
-                        (vui-batch
-                          (vui-set-state :name "")
-                          (vui-set-state :email ""))))
 #+end_src
 
 ** vui-checkbox
