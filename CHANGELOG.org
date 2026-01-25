@@ -7,19 +7,30 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Breaking Changes
+
+- *vui-field validation removed*: Validation support has been removed from =vui-field= to keep primitives simple and stateless. Use =vui-typed-field= from =vui-components.el= for validation. Removed:
+  - Props: =:valid-regexp=, =:valid-p=, =:error-face=, =:error-message=
+  - Functions: =vui-field-valid-p=, =vui-fields-validate=, =vui-field-touch=, =vui-field-reset=
+  - Face: =vui-field-error=
+
 ** Added
 
-- *Field validation*: =vui-field= now supports built-in validation with new props:
-  - =:valid-regexp= - regexp the value must match
-  - =:valid-p= - custom validation function =(value) -> t/nil=
-  - =:error-face= - face when invalid (default: =vui-field-error=)
-  - =:error-message= - message shown below field when invalid (auto-aligned with field)
-  - Error indicators only appear after the field has been "touched" (modified at least once) for better UX
-- =vui-field-valid-p= function to check field validity by key.
-- =vui-fields-validate= function for form submission: touches all specified fields, returns t if all valid, auto-renders to show errors if any invalid. This is the recommended way to validate on submit.
-- =vui-field-touch= function to mark fields as touched (lower-level primitive).
-- =vui-field-reset= function to clear touched state, useful when resetting forms to pristine state.
-- =vui-field-error= face for styling invalid field input (inherits from =error=).
+- *vui-typed-field component*: New component in =vui-components.el= for typed input with parsing and validation. Uses component state to preserve raw input (e.g., users can see "123f" they typed while error is displayed).
+  - Supported types: =integer=, =natnum=, =float=, =number=, =file=, =directory=, =symbol=, =sexp=
+  - =:on-change= and =:on-submit= receive typed values only when input is valid
+  - =:on-error= callback receives =(error-msg raw-input)= on invalid input
+  - Numeric constraints via =:min= and =:max=
+  - Custom validation via =:validate= (receives typed value)
+  - Error display via =:show-error= (=t= or ='below= for below field, ='inline= for same line)
+  - =:required= constraint for non-empty validation
+- *Typed field shortcuts* in =vui-components.el= (wrappers around =vui-typed-field=):
+  - =vui-integer-field=, =vui-natnum-field=, =vui-float-field=, =vui-number-field= for numeric input
+  - =vui-file-field=, =vui-directory-field= for path input
+  - =vui-symbol-field=, =vui-sexp-field= for Lisp input
+
+** Changed
+
 - *vui-components.el*: New component library with higher-level components built on vui primitives.
 - =vui-collapsible=: Togglable section that expands/collapses content. Supports both uncontrolled (manages own state) and controlled (=:expanded= prop) modes. Features customizable indicators, title face, indentation, and proper nested indentation via context propagation.
 - *Semantic text components*: Thin wrappers around =vui-text= with customizable faces that inherit from standard Emacs faces:
@@ -38,6 +49,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 - =vui-quit= command bound to =q=: Quits window when outside widget fields, self-inserts when inside (so you can type "q" in text inputs).
 - =vui-refresh= command bound to =g=: Re-renders the UI with current state when outside widget fields, self-inserts when inside. Applications needing custom refresh logic (e.g., re-fetching data) can override in their derived mode.
 - =vui-button= now accepts =:tab-order= and =:keymap= props. Use =:tab-order -1= to make a button non-tabbable, and =:keymap= to define custom key bindings active when point is on the button.
+- =vui-field= now accepts =:face= and =:placeholder= props. Use =:face= to style the field text, and =:placeholder= for placeholder text when the field is empty.
 
 * v1.0.0 - 2025-12-28
 

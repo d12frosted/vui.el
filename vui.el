@@ -77,37 +77,6 @@ Same options as `vui-lifecycle-error-handler'."
 Stored as (TYPE ERROR CONTEXT) where TYPE is `lifecycle' or `event',
 ERROR is the error object, and CONTEXT is additional information.")
 
-;;; Faces
-
-(defface vui-field-error
-  '((t :inherit error))
-  "Face for invalid field input."
-  :group 'vui)
-
-;;; Field Validation
-
-(defvar-local vui--dirty-fields nil
-  "Set of field keys that have been modified (touched) by the user.
-Used to defer showing validation errors until after first interaction.")
-
-(defun vui--field-dirty-p (key)
-  "Return non-nil if field KEY has been touched/modified by the user."
-  (and key (member key vui--dirty-fields)))
-
-(defun vui--field-mark-dirty (key)
-  "Mark field KEY as touched/modified."
-  (when (and key (not (member key vui--dirty-fields)))
-    (push key vui--dirty-fields)))
-
-(defun vui--field-validate (value valid-regexp valid-p)
-  "Validate VALUE against VALID-REGEXP and VALID-P.
-Returns t if valid, nil if invalid.
-Both checks must pass when provided."
-  (and (or (null valid-regexp)
-           (string-match-p valid-regexp value))
-       (or (null valid-p)
-           (funcall valid-p value))))
-
 ;;; Timing Instrumentation
 
 (defcustom vui-timing-enabled nil
@@ -508,18 +477,16 @@ keybindings while preserving VUI and widget functionality.
 ;; Primitive: editable text field
 (cl-defstruct (vui-vnode-field (:include vui-vnode)
                                (:constructor vui-vnode-field--create))
-  "Virtual node representing an editable text field."
+  "Virtual node representing an editable text field.
+This is a simple string-based primitive.  For typed fields with
+parsing and validation, use `vui-typed-field' from vui-components.el."
   value
   size
   placeholder
   on-change
   on-submit       ; Called with value when user presses RET
   face
-  secret-p        ; Hide input for passwords
-  valid-regexp    ; Regexp for validation
-  valid-p         ; Function: (value) -> t/nil for validation
-  error-face      ; Face when invalid
-  error-message)  ; Message shown when invalid
+  secret-p)       ; Hide input for passwords
 
 ;; Primitive: checkbox
 (cl-defstruct (vui-vnode-checkbox (:include vui-vnode)
@@ -615,6 +582,7 @@ keybindings while preserving VUI and widget functionality.
 ;; Error boundary state (keyed by boundary id)
 (defvar vui--error-boundary-errors (make-hash-table :test 'equal)
   "Hash table mapping error boundary IDs to caught errors.")
+
 
 ;;; Component System
 
@@ -875,27 +843,24 @@ When :keymap is set, this keymap is active when point is on the button."
    :keymap (plist-get props :keymap)
    :key (plist-get props :key)))
 
-(cl-defun vui-field (&key value size placeholder on-change on-submit key face secret
-                          valid-regexp valid-p error-face error-message)
+(cl-defun vui-field (&key value size placeholder on-change on-submit key face secret)
   "Create a field vnode.
 All arguments are keyword-based:
-  :VALUE         - initial field content (defaults to empty string)
-  :SIZE          - field width in characters
-  :PLACEHOLDER   - hint text shown when field is empty (not yet rendered)
-  :ON-CHANGE     - called with value on each change (triggers re-render)
-  :ON-SUBMIT     - called with value when user presses RET (no re-render)
-  :KEY           - identifier for `vui-field-value' lookup
-  :FACE          - text face
-  :SECRET        - if non-nil, hide input (for passwords)
-  :VALID-REGEXP  - regexp the value must match for validation
-  :VALID-P       - function (value) -> t/nil for custom validation
-  :ERROR-FACE    - face when invalid (default: `vui-field-error')
-  :ERROR-MESSAGE - message shown below field when invalid
+  :VALUE       - initial field content (defaults to empty string)
+  :SIZE        - field width in characters
+  :PLACEHOLDER - hint text shown when field is empty (not yet rendered)
+  :ON-CHANGE   - called with value on each change (triggers re-render)
+  :ON-SUBMIT   - called with value when user presses RET (no re-render)
+  :KEY         - identifier for `vui-field-value' lookup
+  :FACE        - text face
+  :SECRET      - if non-nil, hide input (for passwords)
+
+This is a simple string-based primitive.  For typed fields with
+parsing and validation, use `vui-typed-field' from vui-components.el.
 
 Examples:
   (vui-field :size 20 :key \\='my-input)
-  (vui-field :value \"initial\" :size 20 :on-submit #\\='handle-submit)
-  (vui-field :value email :valid-regexp \"^[^@]+@[^@]+$\")"
+  (vui-field :value \"initial\" :size 20 :on-submit #\\='handle-submit)"
   (vui-vnode-field--create
    :value (or value "")
    :size size
@@ -904,11 +869,7 @@ Examples:
    :on-submit on-submit
    :face face
    :secret-p secret
-   :key key
-   :valid-regexp valid-regexp
-   :valid-p valid-p
-   :error-face error-face
-   :error-message error-message))
+   :key key))
 
 (defun vui-field-value (key)
   "Get the current value of a field identified by KEY.
@@ -926,90 +887,6 @@ Example:
       (when (and (eq (car w) 'editable-field)
                  (eq (widget-get w :vui-key) key))
         (throw 'found (widget-value w))))))
-
-(defun vui-field-valid-p (key)
-  "Return t if field KEY is valid, nil otherwise.
-Returns nil if no field with KEY exists.
-
-Example:
-  (vui-field :key \\='email
-             :value email
-             :valid-regexp \"^[^@]+@[^@]+$\")
-  (vui-button \"Submit\"
-    :on-click (lambda ()
-                (when (vui-field-valid-p \\='email)
-                  ...)))"
-  (catch 'found
-    (dolist (w widget-field-list)
-      (when (and (eq (car w) 'editable-field)
-                 (eq (widget-get w :vui-key) key))
-        (throw 'found (widget-get w :vui-valid))))))
-
-(defun vui-field-touch (&rest keys)
-  "Mark field(s) with KEYS as touched/dirty.
-This causes validation errors to be shown on next render.
-Useful in submit handlers to show all validation errors.
-
-If KEYS is empty, marks ALL fields as touched.
-
-Example:
-  (vui-button \"Submit\"
-    :on-click (lambda ()
-                ;; Mark all fields as touched to show errors
-                (vui-field-touch \\='name \\='email \\='password)
-                (when (and (vui-field-valid-p \\='name)
-                           (vui-field-valid-p \\='email)
-                           (vui-field-valid-p \\='password))
-                  (submit-form))))"
-  (if keys
-      ;; Mark specific fields
-      (dolist (key keys)
-        (vui--field-mark-dirty key))
-    ;; Mark all fields with keys
-    (dolist (w widget-field-list)
-      (when (eq (car w) 'editable-field)
-        (let ((key (widget-get w :vui-key)))
-          (when key
-            (vui--field-mark-dirty key)))))))
-
-(defun vui-field-reset (&rest keys)
-  "Clear touched/dirty state for field(s) with KEYS.
-After reset, validation errors won't show until field is modified again.
-Useful when resetting a form to pristine state.
-
-If KEYS is empty, resets ALL fields.
-
-Example:
-  (vui-button \"Reset Form\"
-    :on-click (lambda ()
-                (vui-field-reset)  ; Clear all touched state
-                (vui-batch
-                  (vui-set-state :name \"\")
-                  (vui-set-state :email \"\"))))"
-  (if keys
-      ;; Reset specific fields
-      (dolist (key keys)
-        (setq vui--dirty-fields (delete key vui--dirty-fields)))
-    ;; Reset all fields
-    (setq vui--dirty-fields nil)))
-
-(defun vui-fields-validate (&rest keys)
-  "Touch and validate all fields with KEYS.
-Returns t if all fields are valid, nil otherwise.
-If any field is invalid, triggers re-render to show errors.
-
-This is the recommended way to validate forms on submit:
-
-Example:
-  (vui-button \"Submit\"
-    :on-click (lambda ()
-                (when (vui-fields-validate \\='name \\='email \\='password)
-                  (submit-form))))"
-  (apply #'vui-field-touch keys)
-  (let ((all-valid (cl-every #'vui-field-valid-p keys)))
-    (unless all-valid
-      (vui-flush-sync))
-    all-valid))
 
 (defun vui-checkbox (&rest props)
   "Create a checkbox vnode.
@@ -2702,7 +2579,7 @@ Handles :truncate and overflow:
            (widget-push-button-suffix (if no-decoration "" widget-push-button-suffix)))
       (let ((w (apply #'widget-create 'push-button
                       :tag display-label
-                      :button-face (or face 'link)
+                      :button-face (if disabled 'widget-inactive (or face 'link))
                       :inactive (when disabled t)
                       :action (lambda (_widget &optional _event)
                                 (when wrapped-click
@@ -2974,16 +2851,7 @@ Handles :truncate and overflow:
            (on-submit (vui-vnode-field-on-submit vnode))
            (secret-p (vui-vnode-field-secret-p vnode))
            (user-face (vui-vnode-field-face vnode))
-           ;; Validation props
-           (valid-regexp (vui-vnode-field-valid-regexp vnode))
-           (valid-p (vui-vnode-field-valid-p vnode))
-           (error-face (or (vui-vnode-field-error-face vnode) 'vui-field-error))
-           (error-message (vui-vnode-field-error-message vnode))
-           ;; Compute validity
-           (is-valid (vui--field-validate value valid-regexp valid-p))
-           ;; Only show errors if field has been touched (dirty)
-           (is-dirty (vui--field-dirty-p field-key))
-           (show-error (and is-dirty (not is-valid)))
+           (placeholder (vui-vnode-field-placeholder vnode))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
@@ -2998,12 +2866,6 @@ Handles :truncate and overflow:
                               :secret (when secret-p ?*)
                               :value-face user-face  ; Always use user face for field content
                               :notify (lambda (widget &rest _)
-                                        ;; Mark field as dirty (touched) on first edit
-                                        (vui--field-mark-dirty field-key)
-                                        ;; Recompute validity and update widget property
-                                        (let* ((new-value (widget-value widget))
-                                               (new-valid (vui--field-validate new-value valid-regexp valid-p)))
-                                          (widget-put widget :vui-valid new-valid))
                                         (when wrapped-change
                                           (let ((vui--current-instance captured-instance)
                                                 (vui--root-instance captured-root))
@@ -3018,22 +2880,9 @@ Handles :truncate and overflow:
         ;; Store key on widget for vui-field-value lookup
         (when field-key
           (widget-put w :vui-key field-key))
-        ;; Store validity on widget
-        (widget-put w :vui-valid is-valid)
-        ;; If field is dirty, invalid, and error-message is set, show error
-        (when (and show-error error-message)
-          ;; Get the column where the field started (for error message alignment)
-          (let ((field-start-col
-                 (save-excursion
-                   (goto-char (widget-field-start w))
-                   (current-column))))
-            (insert "\n")
-            ;; Indent error message to align with field start
-            (when (> field-start-col 0)
-              (insert (make-string field-start-col ?\s)))
-            (let ((start (point)))
-              (insert error-message)
-              (add-text-properties start (point) `(face ,error-face))))))))
+        ;; Store placeholder on widget for potential future use
+        (when placeholder
+          (widget-put w :vui-placeholder placeholder)))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
