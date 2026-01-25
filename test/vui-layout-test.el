@@ -556,6 +556,29 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       ;; | [very ...] | - button inside 10-char cell
       (expect (buffer-string) :to-match "| \\[very \\.\\.\\.\\] |")))
 
+  (it "preserves button :tab-order and :keymap in truncated table cells"
+    ;; Bug: when buttons are truncated in table cells, :tab-order and :keymap
+    ;; were not being copied to the reconstructed button vnode
+    (let ((custom-keymap (make-sparse-keymap)))
+      (define-key custom-keymap (kbd "x") #'ignore)
+      (let* ((btn (vui-button "very long button label"
+                    :tab-order -1
+                    :keymap custom-keymap))
+             (table (vui-table
+                     :columns '((:width 10 :truncate t))
+                     :rows (list (list btn)))))
+        ;; Render the table to trigger button reconstruction
+        (with-temp-buffer
+          (vui-render table)
+          ;; Find the widget and check its properties
+          (goto-char (point-min))
+          (let ((widget (widget-at (point))))
+            (expect widget :to-be-truthy)
+            ;; The widget should have tab-order -1 (non-tabbable)
+            (expect (widget-get widget :tab-order) :to-equal -1)
+            ;; The widget should have the custom keymap
+            (expect (widget-get widget :keymap) :to-equal custom-keymap))))))
+
   (it "respects indent from parent vstack"
     (with-temp-buffer
       (vui-render (vui-vstack :indent 2
