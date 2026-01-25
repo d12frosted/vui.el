@@ -2458,6 +2458,8 @@ Handles :truncate and overflow:
                                :max-width declared-width
                                :no-decoration (vui-vnode-button-no-decoration cell)
                                :help-echo (vui-vnode-button-help-echo cell)
+                               :tab-order (vui-vnode-button-tab-order cell)
+                               :keymap (vui-vnode-button-keymap cell)
                                :key (vui-vnode-key cell))
                             cell))
                          ;; Update path for table cells: (col row ...parent-path...)
