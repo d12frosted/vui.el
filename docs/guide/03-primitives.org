@@ -99,6 +99,8 @@ Output:
 | =:max-width=     | Maximum width including brackets         |
 | =:no-decoration= | When non-nil, render without brackets    |
 | =:help-echo=     | Tooltip text (nil to disable for perf)   |
+| =:tab-order=     | Tab navigation order (-1 = skip button)  |
+| =:keymap=        | Custom keymap active when on button      |
 | =:key=           | Key for reconciliation                   |
 
 *** Disabled Button

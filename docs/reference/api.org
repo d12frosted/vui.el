@@ -161,6 +161,8 @@ Create a clickable button. By default, buttons render with brackets: =LABEL= bec
 | =:max-width=     | integer     | Max width including brackets (truncates)   |
 | =:no-decoration= | boolean     | Render without brackets                    |
 | =:help-echo=     | string/nil  | Tooltip (nil disables for performance)     |
+| =:tab-order=     | integer     | Tab navigation order (-1 = skip)           |
+| =:keymap=        | keymap      | Custom keymap active when on button        |
 | =:key=           | any         | Reconciliation key                         |
 
 #+begin_src elisp
