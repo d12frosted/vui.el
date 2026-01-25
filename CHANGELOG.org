@@ -14,6 +14,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   - Functions: =vui-field-valid-p=, =vui-fields-validate=, =vui-field-touch=, =vui-field-reset=
   - Face: =vui-field-error=
 
+** Fixed
+
+- Disabled buttons now use =widget-inactive= face instead of the regular button face.
+
 ** Added
 
 - *vui-typed-field component*: New component in =vui-components.el= for typed input with parsing and validation. Uses component state to preserve raw input (e.g., users can see "123f" they typed while error is displayed).
