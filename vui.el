@@ -2504,13 +2504,14 @@ CELL-PADDING is the padding added to each side of cell content."
                     (insert right))))
     (insert "\n")))
 
-(defun vui--render-table-row (cells col-widths columns border-style header-p)
+(defun vui--render-table-row (cells col-widths columns border-style header-p &optional row-idx)
   "Render a table row.
 CELLS is list of cell contents.
 COL-WIDTHS is list of column widths.
 COLUMNS is list of column specs.
 BORDER-STYLE is nil, :ascii, or :unicode.
 HEADER-P indicates if this is a header row.
+ROW-IDX is the row index for cursor tracking (nil for headers).
 
 Handles :truncate and overflow:
 - If content > width and :truncate t: truncate with ...
@@ -2581,7 +2582,13 @@ Handles :truncate and overflow:
                                :no-decoration (vui-vnode-button-no-decoration cell)
                                :help-echo (vui-vnode-button-help-echo cell)
                                :key (vui-vnode-key cell))
-                            cell)))
+                            cell))
+                         ;; Update path for table cells: (col row ...parent-path...)
+                         ;; Only for data rows (row-idx is non-nil)
+                         (vui--render-path
+                          (if (and is-vnode row-idx)
+                              (cons i (cons row-idx vui--render-path))
+                            vui--render-path)))
                     (pcase align
                       (:left
                        (if is-vnode
@@ -2929,14 +2936,15 @@ Handles :truncate and overflow:
            ;; Calculate column widths
            (col-widths (vui--calculate-table-widths columns rows)))
       ;; Cell padding when borders are enabled
-      (let ((cell-padding (if border 1 0)))
+      (let ((cell-padding (if border 1 0))
+            (row-idx 0))
         ;; Render header if any column has one
         (when (cl-some (lambda (c) (plist-get c :header)) columns)
           (when border
             (vui--render-table-border col-widths border 'top cell-padding))
           (vui--render-table-row
            (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
-           col-widths columns border 'header)
+           col-widths columns border 'header nil)
           (when border
             (vui--render-table-border col-widths border 'separator cell-padding)))
         ;; Render data rows
@@ -2948,8 +2956,9 @@ Handles :truncate and overflow:
                 ;; Render separator line
                 (when border
                   (vui--render-table-border col-widths border 'separator cell-padding))
-              ;; Render data row
-              (vui--render-table-row row col-widths columns border nil)))
+              ;; Render data row with row index for path tracking
+              (vui--render-table-row row col-widths columns border nil row-idx)
+              (cl-incf row-idx)))
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding))))
       ;; Remove trailing newline - tables emit content only, no trailing newline
