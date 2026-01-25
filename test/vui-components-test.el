@@ -490,12 +490,13 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
     (it "passes type prop"
       (let* ((node (vui-typed-field :type 'integer :value 42))
-             (props (vui-vnode-component-props node)))
+             (props (vui-vnode-component-props node))
+             (type-val (plist-get props :type)))
         ;; Debug: print props to see what's there
         (message "DEBUG: props = %S" props)
-        (message "DEBUG: (plist-get props :type) = %S" (plist-get props :type))
-        (message "DEBUG: (plist-get props :value) = %S" (plist-get props :value))
-        (expect (plist-get props :type) :to-equal 'integer)))
+        (message "DEBUG: type-val = %S" type-val)
+        (message "DEBUG: (eq type-val 'integer) = %S" (eq type-val 'integer))
+        (expect type-val :to-equal 'integer)))
 
     (it "passes value prop"
       (let ((node (vui-typed-field :type 'integer :value 42)))
