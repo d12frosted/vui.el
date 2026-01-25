@@ -30,6 +30,7 @@
 ;; Available components:
 ;;
 ;; - `vui-collapsible' - A togglable section that expands/collapses content
+;; - `vui-typed-field' - Typed input field with parsing/validation
 ;;
 ;; Semantic text components (thin wrappers around `vui-text'):
 ;;
@@ -41,11 +42,122 @@
 ;; - `vui-error' - Error messages
 ;; - `vui-warning' - Warning messages
 ;; - `vui-success' - Success messages
+;;
+;; Typed field shortcuts (wrappers around `vui-typed-field'):
+;;
+;; - `vui-integer-field' - Integer input
+;; - `vui-natnum-field' - Non-negative integer input
+;; - `vui-float-field' - Decimal number input
+;; - `vui-number-field' - Numeric input (int or float)
+;; - `vui-file-field' - File path input
+;; - `vui-directory-field' - Directory path input
+;; - `vui-symbol-field' - Symbol input
+;; - `vui-sexp-field' - Lisp expression input
 
 ;;; Code:
 
 (require 'vui)
 (require 'outline)
+
+;;; Field Type Conversion and Validation
+
+(defun vui--field-value-to-string (value type)
+  "Convert typed VALUE to string for display.
+TYPE determines the conversion strategy.  When TYPE is nil, VALUE
+is returned as-is (assumed to be a string already)."
+  (cond
+   ((null type) (or value ""))
+   ((null value) "")
+   ((stringp value) value)
+   ((memq type '(integer natnum float number))
+    (number-to-string value))
+   ((eq type 'symbol)
+    (symbol-name value))
+   ((eq type 'sexp)
+    (prin1-to-string value))
+   ((memq type '(file directory))
+    value)  ; Already a string
+   (t (format "%s" value))))
+
+(defun vui--field-parse-string (string type)
+  "Parse STRING to typed value according to TYPE.
+Returns a cons (ok . VALUE) on success, or (error . MESSAGE) on failure.
+When TYPE is nil, returns (ok . STRING) unchanged."
+  (if (null type)
+      (cons 'ok string)
+    (condition-case err
+        (let ((trimmed (string-trim string)))
+          (pcase type
+            ('integer
+             (cond
+              ((string-empty-p trimmed) (cons 'ok nil))
+              ((string-match-p "\\`-?[0-9]+\\'" trimmed)
+               (cons 'ok (string-to-number trimmed)))
+              (t (cons 'error "Not a valid integer"))))
+            ('natnum
+             (cond
+              ((string-empty-p trimmed) (cons 'ok nil))
+              ((string-match-p "\\`[0-9]+\\'" trimmed)
+               (let ((n (string-to-number trimmed)))
+                 (if (>= n 0)
+                     (cons 'ok n)
+                   (cons 'error "Must be a non-negative integer"))))
+              (t (cons 'error "Not a valid non-negative integer"))))
+            ('float
+             (cond
+              ((string-empty-p trimmed) (cons 'ok nil))
+              ;; Accept: "32", "32.0", "32.", ".20" (leading/trailing decimal)
+              ((string-match-p "\\`-?\\(?:[0-9]+\\.?[0-9]*\\|\\.[0-9]+\\)\\(?:[eE][-+]?[0-9]+\\)?\\'" trimmed)
+               (let ((n (string-to-number trimmed)))
+                 ;; Only force to float if input has digits after decimal point
+                 ;; "42." → 42 (int), "42.0" → 42.0 (float), ".5" → 0.5 (float)
+                 ;; This supports clean backspace: "12.2" → "12." shows "12." but parses as 12
+                 (if (and (integerp n) (string-match-p "\\.[0-9]" trimmed))
+                     (cons 'ok (float n))
+                   (cons 'ok n))))
+              (t (cons 'error "Not a valid decimal number"))))
+            ('number
+             (cond
+              ((string-empty-p trimmed) (cons 'ok nil))
+              ((string-match-p "\\`-?[0-9]*\\.?[0-9]+\\(?:[eE][-+]?[0-9]+\\)?\\'" trimmed)
+               (cons 'ok (string-to-number trimmed)))
+              (t (cons 'error "Not a valid number"))))
+            ((or 'file 'directory)
+             (cons 'ok string))
+            ('symbol
+             (if (string-empty-p trimmed)
+                 (cons 'error "Symbol name cannot be empty")
+               (cons 'ok (intern trimmed))))
+            ('sexp
+             (if (string-empty-p trimmed)
+                 (cons 'error "Expression cannot be empty")
+               (cons 'ok (car (read-from-string trimmed)))))
+            (_ (cons 'ok string))))
+      (error (cons 'error (format "Parse error: %s" (error-message-string err)))))))
+
+(defun vui--typed-field-validate (value type min max validate required string-value)
+  "Validate VALUE against constraints.
+TYPE is the field type (may be nil for untyped fields).
+MIN and MAX are numeric constraints (only for numeric types).
+VALIDATE is a custom validator function.
+REQUIRED indicates if empty values are invalid.
+STRING-VALUE is the raw string (for :required check).
+Returns nil if valid, or an error message string if invalid."
+  (cond
+   ;; Check required first (before type conversion)
+   ((and required (string-empty-p (string-trim string-value)))
+    "Value is required")
+   ;; Check min constraint
+   ((and min (numberp value) (< value min))
+    (format "Must be at least %s" min))
+   ;; Check max constraint
+   ((and max (numberp value) (> value max))
+    (format "Must be at most %s" max))
+   ;; Check custom validator
+   (validate
+    (funcall validate value))
+   ;; All valid
+   (t nil)))
 
 ;;; Indentation Context
 
@@ -302,6 +414,170 @@ PROPS is a plist accepting :level (1-8, default 1) and :key."
 (defun vui-success (text &optional key)
   "Create success message TEXT with optional KEY."
   (vui-text text :face 'vui-success :key key))
+
+;;; Typed Field Component
+
+(vui-defcomponent vui-typed-field--internal
+    (type value min max validate on-change on-submit on-error show-error size secret key required)
+  "Internal component for typed input fields.
+
+TYPE is the field type (integer, natnum, float, number, file, directory, symbol, sexp).
+VALUE is the typed value (will be stringified for display).
+MIN/MAX are numeric constraints.
+VALIDATE is a custom validator (receives typed value, returns error string or nil).
+ON-CHANGE is called with typed value when input is valid.
+ON-SUBMIT is called with typed value when user presses RET and input is valid.
+ON-ERROR is called with (error-msg raw-input) on parse/validation failure.
+SHOW-ERROR can be t, \\='inline, or \\='below to display error.
+SIZE is field width.
+SECRET enables password mode.
+KEY is for field lookup.
+REQUIRED means empty is invalid."
+
+  :state ((raw-value (vui--field-value-to-string value type))
+          (error-msg nil)
+          (synced-value value))
+
+  :on-update
+  ;; When parent's :value changes, sync raw-value
+  (unless (equal value (plist-get prev-props :value))
+    (vui-set-state :raw-value (vui--field-value-to-string value type))
+    (vui-set-state :error-msg nil)
+    (vui-set-state :synced-value value))
+
+  :render
+  (let* ((handle-input
+          (lambda (string-input callback)
+            ;; Batch all state updates so only ONE re-render happens.
+            ;; This prevents cursor jumping when error text appears/disappears.
+            (vui-batch
+              ;; Always update raw-value to show what user typed
+              (vui-set-state :raw-value string-input)
+              ;; Parse and validate
+              (let ((parse-result (vui--field-parse-string string-input type)))
+                (if (eq (car parse-result) 'error)
+                    ;; Parse failed
+                    (progn
+                      (vui-set-state :error-msg (cdr parse-result))
+                      (when on-error
+                        (funcall on-error (cdr parse-result) string-input)))
+                  ;; Parse succeeded - validate
+                  (let* ((typed-value (cdr parse-result))
+                         (validation-err (vui--typed-field-validate
+                                          typed-value type min max validate required string-input)))
+                    (if validation-err
+                        ;; Validation failed
+                        (progn
+                          (vui-set-state :error-msg validation-err)
+                          (when on-error
+                            (funcall on-error validation-err string-input)))
+                      ;; All valid
+                      (vui-set-state :error-msg nil)
+                      (vui-set-state :synced-value typed-value)
+                      (when callback
+                        (funcall callback typed-value))))))))))
+    (vui-fragment
+     (vui-field
+      :value raw-value
+      :size size
+      :secret secret
+      :key key
+      :on-change (lambda (s) (funcall handle-input s on-change))
+      :on-submit (lambda (s) (funcall handle-input s on-submit)))
+     ;; Error display
+     (when (and show-error error-msg)
+       (if (eq show-error 'inline)
+           (vui-text (concat " " error-msg) :face 'vui-error)
+         (vui-fragment
+          (vui-newline)
+          (vui-text error-msg :face 'vui-error)))))))
+
+;;;###autoload
+(defun vui-typed-field (&rest props)
+  "Create a typed input field with parsing and validation.
+
+PROPS is a plist accepting:
+  :type      - \\='integer, \\='natnum, \\='float, \\='number, \\='file, \\='directory, \\='symbol, \\='sexp
+  :value     - Typed value (will be stringified for display)
+  :min/:max  - Numeric constraints
+  :validate  - (lambda (typed-value) error-string-or-nil)
+  :on-change - (lambda (typed-value)) called only when valid
+  :on-submit - (lambda (typed-value)) called only when valid on RET
+  :on-error  - (lambda (error-msg raw-input)) called on parse/validation failure
+  :show-error - t or \\='below to display error below, \\='inline for same line
+  :size      - Field width
+  :secret    - Password mode
+  :key       - Field key
+  :required  - Non-nil means empty is invalid
+
+Examples:
+  (vui-typed-field :type \\='integer :value 42 :min 0 :max 100
+                   :on-change (lambda (n) (message \"Got: %d\" n)))
+  (vui-typed-field :type \\='float :value 3.14 :show-error t)"
+  (vui-component 'vui-typed-field--internal
+    :type (plist-get props :type)
+    :value (plist-get props :value)
+    :min (plist-get props :min)
+    :max (plist-get props :max)
+    :validate (plist-get props :validate)
+    :on-change (plist-get props :on-change)
+    :on-submit (plist-get props :on-submit)
+    :on-error (plist-get props :on-error)
+    :show-error (plist-get props :show-error)
+    :size (plist-get props :size)
+    :secret (plist-get props :secret)
+    :key (plist-get props :key)
+    :required (plist-get props :required)))
+
+;;; Typed Field Shortcuts
+
+;;;###autoload
+(defun vui-integer-field (&rest props)
+  "Create an integer input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `integer'."
+  (apply #'vui-typed-field :type 'integer props))
+
+;;;###autoload
+(defun vui-natnum-field (&rest props)
+  "Create a non-negative integer input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `natnum'."
+  (apply #'vui-typed-field :type 'natnum props))
+
+;;;###autoload
+(defun vui-float-field (&rest props)
+  "Create a float input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `float'."
+  (apply #'vui-typed-field :type 'float props))
+
+;;;###autoload
+(defun vui-number-field (&rest props)
+  "Create a numeric input field (accepts integers or floats).
+PROPS accepts all `vui-typed-field' props.  Sets :type to `number'."
+  (apply #'vui-typed-field :type 'number props))
+
+;;;###autoload
+(defun vui-file-field (&rest props)
+  "Create a file path input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `file'."
+  (apply #'vui-typed-field :type 'file props))
+
+;;;###autoload
+(defun vui-directory-field (&rest props)
+  "Create a directory path input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `directory'."
+  (apply #'vui-typed-field :type 'directory props))
+
+;;;###autoload
+(defun vui-symbol-field (&rest props)
+  "Create a symbol input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `symbol'."
+  (apply #'vui-typed-field :type 'symbol props))
+
+;;;###autoload
+(defun vui-sexp-field (&rest props)
+  "Create a Lisp expression input field.
+PROPS accepts all `vui-typed-field' props.  Sets :type to `sexp'."
+  (apply #'vui-typed-field :type 'sexp props))
 
 (provide 'vui-components)
 ;;; vui-components.el ends here
