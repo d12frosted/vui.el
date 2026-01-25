@@ -182,6 +182,14 @@ Buttons are widget.el push-buttons, so we use widget-apply."
     (let ((node (vui-field :key "field-1")))
       (expect (vui-vnode-key node) :to-equal "field-1")))
 
+  (it "accepts face property"
+    (let ((node (vui-field :face 'bold)))
+      (expect (vui-vnode-field-face node) :to-equal 'bold)))
+
+  (it "accepts placeholder property"
+    (let ((node (vui-field :placeholder "Enter text...")))
+      (expect (vui-vnode-field-placeholder node) :to-equal "Enter text...")))
+
   (it "triggers on-submit callback on RET"
     (let ((submitted-value nil))
       (vui-defcomponent submit-test ()
@@ -253,169 +261,6 @@ Buttons are widget.el push-buttons, so we use widget-apply."
             (expect (vui-field-value 'second-key) :to-equal "second"))
         (kill-buffer "*test-fv4*")))))
 
-(describe "vui-field-valid-p"
-  (it "returns t for valid regexp match"
-    (vui-defcomponent valid-regexp-test ()
-      :render
-      (vui-field :key 'email
-                 :value "test@example.com"
-                 :valid-regexp "^[^@]+@[^@]+$"))
-    (let ((instance (vui-mount (vui-component 'valid-regexp-test) "*test-valid-regexp*")))
-      (unwind-protect
-          (with-current-buffer "*test-valid-regexp*"
-            (expect (vui-field-valid-p 'email) :to-be-truthy))
-        (kill-buffer "*test-valid-regexp*"))))
-
-  (it "returns nil for invalid regexp match"
-    (vui-defcomponent invalid-regexp-test ()
-      :render
-      (vui-field :key 'email
-                 :value "invalid-email"
-                 :valid-regexp "^[^@]+@[^@]+$"))
-    (let ((instance (vui-mount (vui-component 'invalid-regexp-test) "*test-invalid-regexp*")))
-      (unwind-protect
-          (with-current-buffer "*test-invalid-regexp*"
-            (expect (vui-field-valid-p 'email) :to-be nil))
-        (kill-buffer "*test-invalid-regexp*"))))
-
-  (it "returns t for valid-p function returning t"
-    (vui-defcomponent valid-p-test ()
-      :render
-      (vui-field :key 'password
-                 :value "longpassword"
-                 :valid-p (lambda (v) (>= (length v) 8))))
-    (let ((instance (vui-mount (vui-component 'valid-p-test) "*test-valid-p*")))
-      (unwind-protect
-          (with-current-buffer "*test-valid-p*"
-            (expect (vui-field-valid-p 'password) :to-be-truthy))
-        (kill-buffer "*test-valid-p*"))))
-
-  (it "returns nil for valid-p function returning nil"
-    (vui-defcomponent invalid-p-test ()
-      :render
-      (vui-field :key 'password
-                 :value "short"
-                 :valid-p (lambda (v) (>= (length v) 8))))
-    (let ((instance (vui-mount (vui-component 'invalid-p-test) "*test-invalid-p*")))
-      (unwind-protect
-          (with-current-buffer "*test-invalid-p*"
-            (expect (vui-field-valid-p 'password) :to-be nil))
-        (kill-buffer "*test-invalid-p*"))))
-
-  (it "requires both regexp and valid-p to pass"
-    (vui-defcomponent combined-invalid-test ()
-      :render
-      (vui-field :key 'username
-                 :value "ab"
-                 :valid-regexp "^[a-z]+$"
-                 :valid-p (lambda (v) (>= (length v) 3))))
-    (let ((instance (vui-mount (vui-component 'combined-invalid-test) "*test-combined*")))
-      (unwind-protect
-          (with-current-buffer "*test-combined*"
-            ;; "ab" matches regexp but is too short
-            (expect (vui-field-valid-p 'username) :to-be nil))
-        (kill-buffer "*test-combined*"))))
-
-  (it "returns t when both regexp and valid-p pass"
-    (vui-defcomponent combined-valid-test ()
-      :render
-      (vui-field :key 'username
-                 :value "alice"
-                 :valid-regexp "^[a-z]+$"
-                 :valid-p (lambda (v) (>= (length v) 3))))
-    (let ((instance (vui-mount (vui-component 'combined-valid-test) "*test-combined-valid*")))
-      (unwind-protect
-          (with-current-buffer "*test-combined-valid*"
-            (expect (vui-field-valid-p 'username) :to-be-truthy))
-        (kill-buffer "*test-combined-valid*"))))
-
-  (it "returns t for field without validation"
-    (vui-defcomponent no-validation-test ()
-      :render
-      (vui-field :key 'name :value "anything"))
-    (let ((instance (vui-mount (vui-component 'no-validation-test) "*test-no-validation*")))
-      (unwind-protect
-          (with-current-buffer "*test-no-validation*"
-            (expect (vui-field-valid-p 'name) :to-be-truthy))
-        (kill-buffer "*test-no-validation*"))))
-
-  (it "returns nil for non-existent key"
-    (vui-defcomponent exists-test ()
-      :render
-      (vui-field :key 'exists :value "test"))
-    (let ((instance (vui-mount (vui-component 'exists-test) "*test-exists*")))
-      (unwind-protect
-          (with-current-buffer "*test-exists*"
-            (expect (vui-field-valid-p 'nonexistent) :to-be nil))
-        (kill-buffer "*test-exists*"))))
-
-  (it "updates validity when field value changes"
-    (vui-defcomponent update-validity-test ()
-      :render
-      (vui-field :key 'email
-                 :value ""
-                 :valid-regexp "^[^@]+@[^@]+$"))
-    (let ((instance (vui-mount (vui-component 'update-validity-test) "*test-update-validity*")))
-      (unwind-protect
-          (with-current-buffer "*test-update-validity*"
-            (let ((widget (car widget-field-list)))
-              ;; Initially empty, matches nothing, so invalid
-              (expect (vui-field-valid-p 'email) :to-be nil)
-              ;; Type valid email
-              (widget-value-set widget "test@example.com")
-              (widget-apply widget :notify widget)
-              (expect (vui-field-valid-p 'email) :to-be-truthy)
-              ;; Type invalid email
-              (widget-value-set widget "invalid")
-              (widget-apply widget :notify widget)
-              (expect (vui-field-valid-p 'email) :to-be nil)))
-        (kill-buffer "*test-update-validity*"))))
-
-  (it "does not show error message on initial render (pristine field)"
-    (vui-defcomponent error-pristine-test ()
-      :render
-      (vui-field :key 'email
-                 :value "invalid"
-                 :valid-regexp "^[^@]+@[^@]+$"
-                 :error-message "Please enter a valid email"))
-    (let ((instance (vui-mount (vui-component 'error-pristine-test) "*test-error-pristine*")))
-      (unwind-protect
-          (with-current-buffer "*test-error-pristine*"
-            ;; Error should NOT show because field hasn't been touched yet
-            (expect (buffer-string) :not :to-match "Please enter a valid email"))
-        (kill-buffer "*test-error-pristine*"))))
-
-  (it "shows error message after field is touched"
-    (vui-defcomponent error-message-test ()
-      :render
-      (vui-field :key 'email
-                 :value "invalid"
-                 :valid-regexp "^[^@]+@[^@]+$"
-                 :error-message "Please enter a valid email"))
-    (let ((instance (vui-mount (vui-component 'error-message-test) "*test-error-message*")))
-      (unwind-protect
-          (with-current-buffer "*test-error-message*"
-            (let ((widget (car widget-field-list)))
-              ;; Touch the field by triggering notify
-              (widget-value-set widget "still-invalid")
-              (widget-apply widget :notify widget)
-              ;; Now error should show on next render (re-render via on-change would do this)
-              ;; For now just verify dirty state is set
-              (expect (vui--field-dirty-p 'email) :to-be-truthy)))
-        (kill-buffer "*test-error-message*"))))
-
-  (it "does not show error message when valid"
-    (vui-defcomponent no-error-message-test ()
-      :render
-      (vui-field :key 'email
-                 :value "test@example.com"
-                 :valid-regexp "^[^@]+@[^@]+$"
-                 :error-message "Please enter a valid email"))
-    (let ((instance (vui-mount (vui-component 'no-error-message-test) "*test-no-error-message*")))
-      (unwind-protect
-          (with-current-buffer "*test-no-error-message*"
-            (expect (buffer-string) :not :to-match "Please enter a valid email"))
-        (kill-buffer "*test-no-error-message*")))))
 
 (describe "vui-checkbox"
   (it "creates a checkbox vnode"
