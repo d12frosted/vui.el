@@ -184,8 +184,7 @@ Create a clickable button. By default, buttons render with brackets: =LABEL= bec
 ** vui-field
 
 #+begin_src elisp
-(vui-field &key VALUE SIZE PLACEHOLDER ON-CHANGE ON-SUBMIT KEY FACE SECRET
-               VALID-REGEXP VALID-P ERROR-FACE ERROR-MESSAGE) -> vnode
+(vui-field &key VALUE SIZE PLACEHOLDER ON-CHANGE ON-SUBMIT KEY FACE SECRET) -> vnode
 #+end_src
 
 Create a text input field. This is a simple string-based primitive. For typed
