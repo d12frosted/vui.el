@@ -193,13 +193,16 @@ Creates an editable text field:
 
 *** Field Properties
 
-| Property     | Description                         |
-|--------------+-------------------------------------|
-| =:value=     | Current field value (string)        |
-| =:on-change= | Callback with new value when edited |
-| =:on-submit= | Callback when RET pressed in field  |
-| =:size=      | Field width in characters           |
-| =:key=       | Key for reconciliation              |
+| Property       | Description                         |
+|----------------+-------------------------------------|
+| =:value=       | Current field value (string)        |
+| =:on-change=   | Callback with new value when edited |
+| =:on-submit=   | Callback when RET pressed in field  |
+| =:size=        | Field width in characters           |
+| =:key=         | Key for reconciliation              |
+| =:secret=      | Hide input (for passwords)          |
+| =:face=        | Face for field text                 |
+| =:placeholder= | Placeholder text when empty         |
 
 *** Field with Size
 
