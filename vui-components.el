@@ -137,13 +137,15 @@ When TYPE is nil, returns (ok . STRING) unchanged."
             (_ (cons 'ok string))))
       (error (cons 'error (format "Parse error: %s" (error-message-string err)))))))
 
-(defun vui--typed-field-validate (value type min max validate required must-exist string-value)
+(defun vui--typed-field-validate (value type min max validate required must-exist
+                                        extensions string-value)
   "Validate VALUE against constraints.
 TYPE is the field type (may be nil for untyped fields).
 MIN and MAX are numeric constraints (only for numeric types).
 VALIDATE is a custom validator function.
 REQUIRED indicates if empty values are invalid.
 MUST-EXIST indicates if file/directory must exist.
+EXTENSIONS is a list of allowed file extensions (for file type).
 STRING-VALUE is the raw string (for :required check).
 Returns nil if valid, or an error message string if invalid."
   (cond
@@ -156,6 +158,10 @@ Returns nil if valid, or an error message string if invalid."
    ;; Check max constraint
    ((and max (numberp value) (> value max))
     (format "Must be at most %s" max))
+   ;; Check file extension
+   ((and extensions (eq type 'file) value
+         (not (member (file-name-extension value) extensions)))
+    (format "Must be a .%s file" (string-join extensions " or .")))
    ;; Check file existence
    ((and must-exist (eq type 'file) value (not (file-exists-p value)))
     "File does not exist")
@@ -428,7 +434,7 @@ PROPS is a plist accepting :level (1-8, default 1) and :key."
 
 (vui-defcomponent vui-typed-field--internal
     (type value min max validate on-change on-submit on-error show-error
-     size secret key required must-exist)
+     size secret key required must-exist extensions)
   "Internal component for typed input fields.
 
 TYPE is the field type (integer, natnum, float, number, file, directory, symbol, sexp).
@@ -443,7 +449,8 @@ SIZE is field width.
 SECRET enables password mode.
 KEY is for field lookup.
 REQUIRED means empty is invalid.
-MUST-EXIST means file/directory must exist (for file/directory types)."
+MUST-EXIST means file/directory must exist (for file/directory types).
+EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"org\"))."
 
   :state ((raw-value (vui--field-value-to-string value type))
           (error-msg nil)
@@ -476,7 +483,7 @@ MUST-EXIST means file/directory must exist (for file/directory types)."
                   (let* ((typed-value (cdr parse-result))
                          (validation-err (vui--typed-field-validate
                                           typed-value type min max validate
-                                          required must-exist string-input)))
+                                          required must-exist extensions string-input)))
                     (if validation-err
                         ;; Validation failed
                         (progn
@@ -514,6 +521,7 @@ PROPS is a plist accepting:
   :value      - Typed value (will be stringified for display)
   :min/:max   - Numeric constraints
   :must-exist - Non-nil means file/directory must exist
+  :extensions - List of allowed extensions for file type (e.g., \\='(\"el\" \"org\"))
   :validate   - (lambda (typed-value) error-string-or-nil)
   :on-change  - (lambda (typed-value)) called only when valid
   :on-submit  - (lambda (typed-value)) called only when valid on RET
@@ -527,13 +535,14 @@ PROPS is a plist accepting:
 Examples:
   (vui-typed-field :type \\='integer :value 42 :min 0 :max 100
                    :on-change (lambda (n) (message \"Got: %d\" n)))
-  (vui-typed-field :type \\='file :must-exist t :show-error t)"
+  (vui-typed-field :type \\='file :extensions \\='(\"el\" \"org\") :show-error t)"
   (vui-component 'vui-typed-field--internal
     :type (plist-get props :type)
     :value (plist-get props :value)
     :min (plist-get props :min)
     :max (plist-get props :max)
     :must-exist (plist-get props :must-exist)
+    :extensions (plist-get props :extensions)
     :validate (plist-get props :validate)
     :on-change (plist-get props :on-change)
     :on-submit (plist-get props :on-submit)
