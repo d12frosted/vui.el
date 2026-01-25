@@ -165,19 +165,19 @@ Buttons are widget.el push-buttons, so we use widget-apply."
 
   (describe "vui--typed-field-validate"
     (it "validates :min constraint"
-      (let ((err (vui--typed-field-validate 5 'integer 10 nil nil nil "5")))
+      (let ((err (vui--typed-field-validate 5 'integer 10 nil nil nil nil "5")))
         (expect err :to-match "at least 10")))
 
     (it "validates :max constraint"
-      (let ((err (vui--typed-field-validate 100 'integer nil 50 nil nil "100")))
+      (let ((err (vui--typed-field-validate 100 'integer nil 50 nil nil nil "100")))
         (expect err :to-match "at most 50")))
 
     (it "validates :required constraint"
-      (let ((err (vui--typed-field-validate nil 'integer nil nil nil t "  ")))
+      (let ((err (vui--typed-field-validate nil 'integer nil nil nil t nil "  ")))
         (expect err :to-match "required")))
 
     (it "passes when constraints are met"
-      (let ((err (vui--typed-field-validate 25 'integer 10 50 nil nil "25")))
+      (let ((err (vui--typed-field-validate 25 'integer 10 50 nil nil nil "25")))
         (expect err :to-be nil)))
 
     (it "calls custom validator with typed value"
@@ -185,9 +185,33 @@ Buttons are widget.el push-buttons, so we use widget-apply."
              (validator (lambda (v)
                           (setq received-value v)
                           (when (cl-oddp v) "Must be even")))
-             (err (vui--typed-field-validate 5 'integer nil nil validator nil "5")))
+             (err (vui--typed-field-validate 5 'integer nil nil validator nil nil "5")))
         (expect received-value :to-equal 5)
-        (expect err :to-equal "Must be even")))))
+        (expect err :to-equal "Must be even")))
+
+    (it "validates :must-exist for file type"
+      (let ((err (vui--typed-field-validate "/nonexistent/file.txt" 'file
+                                             nil nil nil nil t "/nonexistent/file.txt")))
+        (expect err :to-match "File does not exist")))
+
+    (it "validates :must-exist for directory type"
+      (let ((err (vui--typed-field-validate "/nonexistent/dir" 'directory
+                                             nil nil nil nil t "/nonexistent/dir")))
+        (expect err :to-match "Directory does not exist")))
+
+    (it "passes :must-exist when file exists"
+      (let ((err (vui--typed-field-validate (expand-file-name "vui.el") 'file
+                                             nil nil nil nil t "vui.el")))
+        (expect err :to-be nil)))
+
+    (it "passes :must-exist when directory exists"
+      (let ((err (vui--typed-field-validate (expand-file-name "test") 'directory
+                                             nil nil nil nil t "test")))
+        (expect err :to-be nil)))
+
+    (it "skips :must-exist check for nil value"
+      (let ((err (vui--typed-field-validate nil 'file nil nil nil nil t "")))
+        (expect err :to-be nil)))))
 
 (describe "vui-collapsible"
   (describe "basic structure"
