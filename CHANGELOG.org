@@ -17,6 +17,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Fixed
 
 - Disabled buttons now use =widget-inactive= face instead of the regular button face.
+- Button =:tab-order= and =:keymap= properties are now preserved when buttons are truncated in table cells.
 
 ** Added
 
