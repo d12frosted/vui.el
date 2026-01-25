@@ -7,13 +7,6 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
-** Breaking Changes
-
-- *vui-field validation removed*: Validation support has been removed from =vui-field= to keep primitives simple and stateless. Use =vui-typed-field= from =vui-components.el= for validation. Removed:
-  - Props: =:valid-regexp=, =:valid-p=, =:error-face=, =:error-message=
-  - Functions: =vui-field-valid-p=, =vui-fields-validate=, =vui-field-touch=, =vui-field-reset=
-  - Face: =vui-field-error=
-
 ** Fixed
 
 - Disabled buttons now use =widget-inactive= face instead of the regular button face.
