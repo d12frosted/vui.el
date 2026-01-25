@@ -223,7 +223,8 @@
                     :port 8080
                     :timeout 30.0
                     :features (logging metrics)
-                    :data-dir "/var/data")))
+                    :data-dir "/var/data"
+                    :config-file "~/.config/app.el")))
 
   :render
   (let ((update (lambda (key val)
@@ -286,6 +287,16 @@
        :must-exist t
        :show-error 'inline
        :on-change (lambda (path) (funcall update :data-dir path))))
+
+     ;; Config file (file path with extension validation)
+     (vui-hstack
+      (vui-text "Config:   ")
+      (vui-file-field
+       :value (plist-get config :config-file)
+       :size 30
+       :extensions '("el" "json" "yaml")
+       :show-error 'inline
+       :on-change (lambda (path) (funcall update :config-file path))))
 
      ;; Preview
      (vui-newline)
