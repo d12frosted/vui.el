@@ -454,20 +454,38 @@ EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"o
 
   :state ((raw-value (vui--field-value-to-string value type))
           (error-msg nil)
+          ;; Track the last value synced FROM props (for external change detection)
+          (last-prop-value value)
+          ;; Track the last typed value from user input (for on-change callbacks)
           (synced-value value))
 
   :on-update
-  ;; When parent's :value changes, sync raw-value
-  (unless (equal value (plist-get prev-props :value))
-    (vui-set-state :raw-value (vui--field-value-to-string value type))
-    (vui-set-state :error-msg nil)
-    (vui-set-state :synced-value value))
+  ;; When parent changes :value externally, sync raw-value.
+  ;; Don't sync if EITHER:
+  ;; - Prop unchanged from last (last-prop-value) - no change at all
+  ;; - Prop matches user's typed value (synced-value) - user input echoed back
+  ;; Only sync when prop changed AND doesn't match user input (external change).
+  (let ((external-change (not (or (equal value last-prop-value)
+                                   (equal value synced-value)))))
+    (when (bound-and-true-p vui-debug)
+      (message "on-update: value=%S last-prop=%S synced=%S raw=%S external=%S"
+               value last-prop-value synced-value raw-value external-change))
+    (when external-change
+      (vui-set-state :raw-value (vui--field-value-to-string value type))
+      (vui-set-state :error-msg nil)
+      (vui-set-state :synced-value value))
+    ;; Always track current prop value
+    (unless (equal value last-prop-value)
+      (vui-set-state :last-prop-value value)))
 
   :render
   (let* ((handle-input
           (lambda (string-input callback)
             ;; Batch all state updates so only ONE re-render happens.
             ;; This prevents cursor jumping when error text appears/disappears.
+            (when (bound-and-true-p vui-debug)
+              (message "handle-input: %S (current raw=%S synced=%S)"
+                       string-input raw-value synced-value))
             (vui-batch
               ;; Always update raw-value to show what user typed
               (vui-set-state :raw-value string-input)
@@ -494,6 +512,8 @@ EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"o
                       (vui-set-state :error-msg nil)
                       (vui-set-state :synced-value typed-value)
                       (when callback
+                        (when (bound-and-true-p vui-debug)
+                          (message "calling on-change with: %S" typed-value))
                         (funcall callback typed-value))))))))))
     (vui-fragment
      (vui-field
