@@ -277,12 +277,14 @@
        :on-change (lambda (expr) (funcall update :features expr))))
      (vui-text "  (a list of symbols)" :face 'shadow)
 
-     ;; Data directory (file path)
+     ;; Data directory (file path with existence check)
      (vui-hstack
       (vui-text "Data Dir: ")
       (vui-directory-field
        :value (plist-get config :data-dir)
        :size 30
+       :must-exist t
+       :show-error 'inline
        :on-change (lambda (path) (funcall update :data-dir path))))
 
      ;; Preview
