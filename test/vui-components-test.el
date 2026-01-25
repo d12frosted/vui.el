@@ -20,6 +20,159 @@ Buttons are widget.el push-buttons, so we use widget-apply."
     (when widget
       (widget-apply widget :action))))
 
+(describe "vui type conversion functions"
+  (describe "vui--field-value-to-string"
+    (it "returns empty string for nil value with type"
+      (expect (vui--field-value-to-string nil 'integer) :to-equal ""))
+
+    (it "returns value as-is when type is nil"
+      (expect (vui--field-value-to-string "hello" nil) :to-equal "hello")
+      (expect (vui--field-value-to-string nil nil) :to-equal ""))
+
+    (it "converts integer to string"
+      (expect (vui--field-value-to-string 42 'integer) :to-equal "42")
+      (expect (vui--field-value-to-string -5 'integer) :to-equal "-5"))
+
+    (it "converts float to string"
+      (expect (vui--field-value-to-string 3.14 'float) :to-equal "3.14"))
+
+    (it "converts symbol to string"
+      (expect (vui--field-value-to-string 'foo 'symbol) :to-equal "foo"))
+
+    (it "converts sexp to string"
+      (expect (vui--field-value-to-string '(a b c) 'sexp) :to-equal "(a b c)")))
+
+  (describe "vui--field-parse-string"
+    (it "returns string unchanged when type is nil"
+      (let ((result (vui--field-parse-string "hello" nil)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal "hello")))
+
+    (it "parses valid integer"
+      (let ((result (vui--field-parse-string "42" 'integer)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 42)))
+
+    (it "parses negative integer"
+      (let ((result (vui--field-parse-string "-5" 'integer)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal -5)))
+
+    (it "parses empty string as nil for numeric types"
+      ;; This allows clearing a field to type a new number
+      (let ((int-result (vui--field-parse-string "" 'integer))
+            (nat-result (vui--field-parse-string "  " 'natnum))
+            (float-result (vui--field-parse-string "" 'float))
+            (num-result (vui--field-parse-string "" 'number)))
+        (expect (car int-result) :to-equal 'ok)
+        (expect (cdr int-result) :to-be nil)
+        (expect (car nat-result) :to-equal 'ok)
+        (expect (cdr nat-result) :to-be nil)
+        (expect (car float-result) :to-equal 'ok)
+        (expect (cdr float-result) :to-be nil)
+        (expect (car num-result) :to-equal 'ok)
+        (expect (cdr num-result) :to-be nil)))
+
+    (it "rejects non-integer for integer type"
+      (let ((result (vui--field-parse-string "abc" 'integer)))
+        (expect (car result) :to-equal 'error)))
+
+    (it "rejects float for integer type"
+      (let ((result (vui--field-parse-string "3.14" 'integer)))
+        (expect (car result) :to-equal 'error)))
+
+    (it "parses valid natnum"
+      (let ((result (vui--field-parse-string "0" 'natnum)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 0)))
+
+    (it "rejects negative for natnum type"
+      (let ((result (vui--field-parse-string "-5" 'natnum)))
+        (expect (car result) :to-equal 'error)))
+
+    (it "parses valid float"
+      (let ((result (vui--field-parse-string "3.14" 'float)))
+        (expect (car result) :to-equal 'ok)
+        (expect (floatp (cdr result)) :to-be-truthy)))
+
+    (it "accepts integer input for float type without coercion"
+      (let ((result (vui--field-parse-string "42" 'float)))
+        (expect (car result) :to-equal 'ok)
+        (expect (integerp (cdr result)) :to-be-truthy)
+        (expect (cdr result) :to-equal 42)))
+
+    (it "treats trailing decimal as integer for clean backspace"
+      (let ((result (vui--field-parse-string "42." 'float)))
+        (expect (car result) :to-equal 'ok)
+        (expect (integerp (cdr result)) :to-be-truthy)
+        (expect (cdr result) :to-equal 42)))
+
+    (it "accepts leading decimal for float type"
+      (let ((result (vui--field-parse-string ".5" 'float)))
+        (expect (car result) :to-equal 'ok)
+        (expect (floatp (cdr result)) :to-be-truthy)
+        (expect (cdr result) :to-equal 0.5)))
+
+    (it "parses valid number (integer)"
+      (let ((result (vui--field-parse-string "42" 'number)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 42)))
+
+    (it "parses valid number (float)"
+      (let ((result (vui--field-parse-string "3.14" 'number)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 3.14)))
+
+    (it "parses file path as-is"
+      (let ((result (vui--field-parse-string "/path/to/file" 'file)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal "/path/to/file")))
+
+    (it "parses symbol"
+      (let ((result (vui--field-parse-string "my-symbol" 'symbol)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 'my-symbol)))
+
+    (it "rejects empty string for symbol"
+      (let ((result (vui--field-parse-string "  " 'symbol)))
+        (expect (car result) :to-equal 'error)))
+
+    (it "parses sexp"
+      (let ((result (vui--field-parse-string "(1 2 3)" 'sexp)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal '(1 2 3))))
+
+    (it "handles whitespace in input"
+      (let ((result (vui--field-parse-string "  42  " 'integer)))
+        (expect (car result) :to-equal 'ok)
+        (expect (cdr result) :to-equal 42))))
+
+  (describe "vui--typed-field-validate"
+    (it "validates :min constraint"
+      (let ((err (vui--typed-field-validate 5 'integer 10 nil nil nil "5")))
+        (expect err :to-match "at least 10")))
+
+    (it "validates :max constraint"
+      (let ((err (vui--typed-field-validate 100 'integer nil 50 nil nil "100")))
+        (expect err :to-match "at most 50")))
+
+    (it "validates :required constraint"
+      (let ((err (vui--typed-field-validate nil 'integer nil nil nil t "  ")))
+        (expect err :to-match "required")))
+
+    (it "passes when constraints are met"
+      (let ((err (vui--typed-field-validate 25 'integer 10 50 nil nil "25")))
+        (expect err :to-be nil)))
+
+    (it "calls custom validator with typed value"
+      (let* ((received-value nil)
+             (validator (lambda (v)
+                          (setq received-value v)
+                          (when (oddp v) "Must be even")))
+             (err (vui--typed-field-validate 5 'integer nil nil validator nil "5")))
+        (expect received-value :to-equal 5)
+        (expect err :to-equal "Must be even")))))
+
 (describe "vui-collapsible"
   (describe "basic structure"
     (it "creates a component vnode"
@@ -326,5 +479,316 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               ;; Line 4: "    Inner content" at column 4 (accumulated indent)
               (expect (looking-at "    Inner content") :to-be-truthy))
           (kill-buffer "*test-collapsible-16*"))))))
+
+(describe "vui-typed-field"
+  (describe "vnode creation"
+    (it "creates a component vnode"
+      (let ((node (vui-typed-field :type 'integer :value 42)))
+        (expect (vui-vnode-component-p node) :to-be-truthy)
+        (expect (vui-vnode-component-type node) :to-equal 'vui-typed-field--internal)))
+
+    (it "passes type prop"
+      (let ((node (vui-typed-field :type 'integer :value 42)))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'integer)))
+
+    (it "passes value prop"
+      (let ((node (vui-typed-field :type 'integer :value 42)))
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 42)))
+
+    (it "passes all props"
+      (let ((node (vui-typed-field :type 'integer :value 10 :min 0 :max 100 :key 'age)))
+        (expect (plist-get (vui-vnode-component-props node) :min) :to-equal 0)
+        (expect (plist-get (vui-vnode-component-props node) :max) :to-equal 100)
+        (expect (plist-get (vui-vnode-component-props node) :key) :to-equal 'age))))
+
+  (describe "rendering"
+    (it "displays value converted to string"
+      (vui-defcomponent typed-field-render-test ()
+        :render
+        (vui-typed-field :type 'integer :value 42 :key 'test-field))
+      (let ((instance (vui-mount (vui-component 'typed-field-render-test)
+                                  "*test-typed-field-render*")))
+        (unwind-protect
+            (with-current-buffer "*test-typed-field-render*"
+              (expect (buffer-string) :to-match "42"))
+          (kill-buffer "*test-typed-field-render*"))))
+
+    (it "displays float value"
+      (vui-defcomponent typed-field-float-test ()
+        :render
+        (vui-typed-field :type 'float :value 3.14 :key 'test-field))
+      (let ((instance (vui-mount (vui-component 'typed-field-float-test)
+                                  "*test-typed-field-float*")))
+        (unwind-protect
+            (with-current-buffer "*test-typed-field-float*"
+              (expect (buffer-string) :to-match "3.14"))
+          (kill-buffer "*test-typed-field-float*")))))
+
+  (describe "callback integration"
+    (it "calls on-change with typed integer value"
+      (let ((received nil))
+        (vui-defcomponent typed-change-test ()
+          :render
+          (vui-typed-field :type 'integer
+                           :value 0
+                           :key 'test-field
+                           :on-change (lambda (v) (setq received v))))
+        (let ((instance (vui-mount (vui-component 'typed-change-test)
+                                    "*test-typed-change*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-change*"
+                (let ((widget (car widget-field-list)))
+                  ;; Simulate typing a number
+                  (widget-value-set widget "42")
+                  ;; Trigger notify
+                  (widget-apply widget :notify widget))
+                ;; Flush any deferred renders
+                (vui-flush-sync)
+                ;; Check that we received an integer, not a string
+                (expect (integerp received) :to-be-truthy)
+                (expect received :to-equal 42))
+            (kill-buffer "*test-typed-change*")))))
+
+    (it "calls on-error for invalid input"
+      (let ((error-received nil))
+        (vui-defcomponent typed-error-test ()
+          :render
+          (vui-typed-field :type 'integer
+                           :value 0
+                           :key 'test-field
+                           :on-error (lambda (err _raw) (setq error-received err))
+                           :on-change #'identity))
+        (let ((instance (vui-mount (vui-component 'typed-error-test)
+                                    "*test-typed-error*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-error*"
+                (let ((widget (car widget-field-list)))
+                  ;; Simulate typing invalid input
+                  (widget-value-set widget "abc")
+                  (widget-apply widget :notify widget))
+                ;; Flush deferred renders
+                (vui-flush-sync)
+                ;; Should have received an error
+                (expect error-received :to-be-truthy)
+                (expect error-received :to-match "integer"))
+            (kill-buffer "*test-typed-error*")))))
+
+    (it "validates :min and calls on-error"
+      (let ((error-received nil))
+        (vui-defcomponent typed-min-test ()
+          :render
+          (vui-typed-field :type 'integer
+                           :value 50
+                           :min 10
+                           :key 'test-field
+                           :on-error (lambda (err _raw) (setq error-received err))
+                           :on-change #'identity))
+        (let ((instance (vui-mount (vui-component 'typed-min-test)
+                                    "*test-typed-min*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-min*"
+                (let ((widget (car widget-field-list)))
+                  ;; Simulate typing value below min
+                  (widget-value-set widget "5")
+                  (widget-apply widget :notify widget))
+                (vui-flush-sync)
+                (expect error-received :to-match "at least 10"))
+            (kill-buffer "*test-typed-min*")))))
+
+    (it "does not call on-change when validation fails"
+      (let ((change-received nil)
+            (error-received nil))
+        (vui-defcomponent typed-validation-ux-test ()
+          :render
+          (vui-typed-field :type 'integer
+                           :value 1900
+                           :min 1900
+                           :key 'test-field
+                           :on-error (lambda (err _raw) (setq error-received err))
+                           :on-change (lambda (v) (setq change-received v))))
+        (let ((instance (vui-mount (vui-component 'typed-validation-ux-test)
+                                    "*test-typed-validation-ux*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-validation-ux*"
+                (let ((widget (car widget-field-list)))
+                  ;; Simulate typing intermediate value "1" (below min 1900)
+                  (widget-value-set widget "1")
+                  (widget-apply widget :notify widget))
+                (vui-flush-sync)
+                ;; on-change should NOT be called when validation fails
+                (expect change-received :to-be nil)
+                ;; on-error SHOULD be called
+                (expect error-received :to-match "at least 1900"))
+            (kill-buffer "*test-typed-validation-ux*"))))))
+
+  (describe "raw input preservation"
+    (it "preserves invalid input across re-renders"
+      (let ((error-received nil))
+        (vui-defcomponent typed-preserve-test ()
+          :state ((counter 0))
+          :render
+          (vui-vstack
+            (vui-typed-field :type 'integer
+                             :value 0
+                             :key 'test-field
+                             :on-error (lambda (err _raw) (setq error-received err))
+                             :on-change #'identity)
+            (vui-button "Increment"
+              :key 'btn
+              :on-click (lambda ()
+                          (vui-set-state :counter (1+ counter))))))
+        (let ((instance (vui-mount (vui-component 'typed-preserve-test)
+                                    "*test-typed-preserve*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-preserve*"
+                (let ((widget (car widget-field-list)))
+                  ;; Type invalid input
+                  (widget-value-set widget "123f")
+                  (widget-apply widget :notify widget))
+                (vui-flush-sync)
+                ;; Error should be set
+                (expect error-received :to-be-truthy)
+                ;; Click button to trigger re-render
+                (goto-char (point-min))
+                (search-forward "[Increment]")
+                (vui-components-test--click-button-at (- (point) 5))
+                (vui-flush-sync)
+                ;; Check that the invalid input is preserved
+                (let ((widget (car widget-field-list)))
+                  (expect (widget-value widget) :to-equal "123f")))
+            (kill-buffer "*test-typed-preserve*")))))
+
+    (it "syncs when parent value changes"
+      (vui-defcomponent typed-sync-test ()
+        :state ((value 10))
+        :render
+        (vui-vstack
+          (vui-typed-field :type 'integer
+                           :value value
+                           :key 'test-field
+                           :on-change (lambda (v) (vui-set-state :value v)))
+          (vui-button "Set to 99"
+            :key 'btn
+            :on-click (lambda () (vui-set-state :value 99)))))
+      (let ((instance (vui-mount (vui-component 'typed-sync-test)
+                                  "*test-typed-sync*")))
+        (unwind-protect
+            (with-current-buffer "*test-typed-sync*"
+              ;; Initial value should be 10
+              (let ((widget (car widget-field-list)))
+                (expect (widget-value widget) :to-equal "10"))
+              ;; Click button to set value to 99
+              (goto-char (point-min))
+              (search-forward "[Set to 99]")
+              (vui-components-test--click-button-at (- (point) 5))
+              (vui-flush-sync)
+              ;; The first flush processes the parent re-render; the child's
+              ;; on-update detects the prop change and schedules another render
+              (vui-flush-sync)
+              ;; Field should now show 99
+              (let ((widget (car widget-field-list)))
+                (expect (widget-value widget) :to-equal "99")))
+          (kill-buffer "*test-typed-sync*")))))
+
+  (describe "error display"
+    (it "shows error below field when show-error is t"
+      (vui-defcomponent typed-show-error-test ()
+        :render
+        (vui-typed-field :type 'integer
+                         :value 0
+                         :key 'test-field
+                         :show-error t
+                         :on-change #'identity))
+      (let ((instance (vui-mount (vui-component 'typed-show-error-test)
+                                  "*test-typed-show-error*")))
+        (unwind-protect
+            (with-current-buffer "*test-typed-show-error*"
+              (let ((widget (car widget-field-list)))
+                ;; Type invalid input
+                (widget-value-set widget "abc")
+                (widget-apply widget :notify widget))
+              (vui-flush-sync)
+              ;; Error should be displayed in buffer
+              (expect (buffer-string) :to-match "integer"))
+          (kill-buffer "*test-typed-show-error*"))))
+
+    (it "shows error inline when show-error is inline"
+      (vui-defcomponent typed-show-error-inline-test ()
+        :render
+        (vui-typed-field :type 'integer
+                         :value 0
+                         :key 'test-field
+                         :show-error 'inline
+                         :on-change #'identity))
+      (let ((instance (vui-mount (vui-component 'typed-show-error-inline-test)
+                                  "*test-typed-show-error-inline*")))
+        (unwind-protect
+            (with-current-buffer "*test-typed-show-error-inline*"
+              (let ((widget (car widget-field-list)))
+                ;; Type invalid input
+                (widget-value-set widget "abc")
+                (widget-apply widget :notify widget))
+              (vui-flush-sync)
+              ;; Error should be displayed inline (on same line)
+              (goto-char (point-min))
+              (expect (looking-at ".*integer") :to-be-truthy))
+          (kill-buffer "*test-typed-show-error-inline*"))))))
+
+(describe "typed field shortcuts"
+  (describe "vui-integer-field"
+    (it "creates integer typed field component"
+      (let ((node (vui-integer-field :value 42)))
+        (expect (vui-vnode-component-p node) :to-be-truthy)
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'integer)
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 42)))
+
+    (it "passes through all props"
+      (let ((node (vui-integer-field :value 10 :min 0 :max 100 :key 'age)))
+        (expect (plist-get (vui-vnode-component-props node) :min) :to-equal 0)
+        (expect (plist-get (vui-vnode-component-props node) :max) :to-equal 100)
+        (expect (plist-get (vui-vnode-component-props node) :key) :to-equal 'age))))
+
+  (describe "vui-natnum-field"
+    (it "creates natnum typed field component"
+      (let ((node (vui-natnum-field :value 0)))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'natnum))))
+
+  (describe "vui-float-field"
+    (it "creates float typed field component"
+      (let ((node (vui-float-field :value 3.14)))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'float)
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 3.14))))
+
+  (describe "vui-number-field"
+    (it "creates number typed field component"
+      (let ((node (vui-number-field :value 42)))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'number))))
+
+  (describe "vui-file-field"
+    (it "creates file typed field component"
+      (let ((node (vui-file-field :value "/tmp/test.txt")))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'file)
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal "/tmp/test.txt"))))
+
+  (describe "vui-directory-field"
+    (it "creates directory typed field component"
+      (let ((node (vui-directory-field :value "/home/user")))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'directory))))
+
+  (describe "vui-symbol-field"
+    (it "creates symbol typed field component"
+      (let ((node (vui-symbol-field :value 'my-symbol)))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'symbol)
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal 'my-symbol))))
+
+  (describe "vui-sexp-field"
+    (it "creates sexp typed field component"
+      (let ((node (vui-sexp-field :value '(1 2 3))))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'sexp)
+        (expect (plist-get (vui-vnode-component-props node) :value) :to-equal '(1 2 3))))
+
+    (it "handles complex sexp"
+      (let ((node (vui-sexp-field :value '(:key "value" :num 42))))
+        (expect (plist-get (vui-vnode-component-props node) :type) :to-equal 'sexp)))))
 
 ;;; vui-components-test.el ends here

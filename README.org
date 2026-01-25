@@ -178,6 +178,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/05-wine-tasting.el][Wine Tasting]] — Dynamic tables with interactive cells, computed statistics
 - [[file:docs/examples/06-collapsible.el][Collapsible]] — Expandable/collapsible sections, FAQ style, nested sections
 - [[file:docs/examples/07-semantic-text.el][Semantic Text]] — Headings, emphasis, status messages with customizable faces
+- [[file:docs/examples/08-typed-fields.el][Typed Fields]] — Integer/float/symbol input with validation, shopping cart, forms
 
 * Available Components
 
@@ -206,9 +207,11 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
 ** Higher-Level Components (vui-components.el)
 
-| Component          | Description                              |
-|--------------------+------------------------------------------|
-| =vui-collapsible=  | Expandable/collapsible section with header |
+| Component          | Description                                      |
+|--------------------+--------------------------------------------------|
+| =vui-collapsible=  | Expandable/collapsible section with header       |
+| =vui-typed-field=  | Input with type conversion and validation        |
+| =vui-integer-field=, =vui-float-field=, etc. | Shortcuts for common types |
 
 #+begin_src elisp
 (require 'vui-components)
@@ -218,6 +221,12 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
 (vui-collapsible :title "Details" :initially-expanded t
   (vui-text "Visible on load."))
+
+;; Typed field with validation
+(vui-integer-field :value 42
+                   :min 0 :max 100
+                   :show-error 'inline
+                   :on-change (lambda (n) (vui-set-state :count n)))
 #+end_src
 
 ** Semantic Text Components (vui-components.el)
