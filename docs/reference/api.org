@@ -91,6 +91,54 @@ Mount a component as root and render to a buffer.
 (vui-mount (vui-component 'my-app :title "Hello") "*my-app*")
 #+end_src
 
+** vui-rerender
+
+#+begin_src elisp
+(vui-rerender INSTANCE) -> instance
+#+end_src
+
+Re-render an existing instance, preserving component state.
+
+Triggers a re-render of the component tree rooted at INSTANCE. Component state
+(including collapsed sections, internal state) is preserved through
+reconciliation. Memoized values are also preserved and will only recompute if
+their dependencies change.
+
+Returns INSTANCE for chaining.
+
+#+begin_src elisp
+;; Re-render without changing anything (useful for forcing a redraw)
+(vui-rerender instance)
+#+end_src
+
+** vui-update
+
+#+begin_src elisp
+(vui-update INSTANCE NEW-PROPS) -> instance
+#+end_src
+
+Update instance props, invalidate memos, and re-render.
+
+This is useful when new data arrives and you want computed values to refresh
+while preserving UI state (like collapsed sections).
+
+NEW-PROPS completely replaces the instance's current props. All memoized values
+in the instance tree are invalidated, forcing recomputation on the next render.
+Component state is preserved through reconciliation.
+
+Returns INSTANCE for chaining.
+
+#+begin_src elisp
+;; Update with new data - memos recompute, but collapse state preserved
+(if existing-instance
+    (vui-update existing-instance (list :note new-note))
+  (vui-mount (vui-component 'my-sidebar :note new-note) "*sidebar*"))
+#+end_src
+
+*Difference from vui-rerender:*
+- =vui-rerender= - preserves memos (deps-based caching works normally)
+- =vui-update= - invalidates all memos (forces recomputation)
+
 * Primitives
 
 Interactive primitives (buttons, fields, checkboxes, selects) support =TAB= /

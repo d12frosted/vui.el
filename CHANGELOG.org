@@ -14,6 +14,9 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- *Instance update API*: New public functions for re-rendering mounted instances:
+  - =vui-rerender= - Re-render an instance preserving component state and memos. Useful for forcing a redraw.
+  - =vui-update= - Update instance props, invalidate all memos, and re-render. Useful when new data arrives and computed values need to refresh while preserving UI state (like collapsed sections).
 - *vui-typed-field component*: New component in =vui-components.el= for typed input with parsing and validation. Uses component state to preserve raw input (e.g., users can see "123f" they typed while error is displayed).
   - Supported types: =integer=, =natnum=, =float=, =number=, =file=, =directory=, =symbol=, =sexp=
   - Path types (=file=, =directory=) automatically expand =~= and relative paths via =expand-file-name=

@@ -1913,6 +1913,41 @@ WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
           ;; Run effects after commit
           (vui--run-pending-effects))))))
 
+(defun vui-rerender (instance)
+  "Re-render INSTANCE, preserving component state.
+This triggers a re-render of the component tree rooted at INSTANCE.
+Component state (including collapsed sections, internal state) is
+preserved through reconciliation.  Memoized values are also preserved
+and will only recompute if their dependencies change.
+
+Returns INSTANCE for chaining."
+  (vui--rerender-instance instance)
+  instance)
+
+(defun vui--invalidate-memos (instance)
+  "Recursively clear all memoized values in INSTANCE and its children."
+  (when-let* ((memos (vui-instance-memos instance)))
+    (clrhash memos))
+  (dolist (child (vui-instance-children instance))
+    (vui--invalidate-memos child)))
+
+(defun vui-update (instance new-props)
+  "Update INSTANCE with NEW-PROPS, invalidate memos, and re-render.
+This is useful when new data arrives and you want computed values to
+refresh while preserving UI state (like collapsed sections).
+
+NEW-PROPS completely replaces the instance's current props.
+
+All memoized values in the instance tree are invalidated, forcing
+recomputation on the next render.  Component state is preserved
+through reconciliation.
+
+Returns INSTANCE for chaining."
+  (vui--invalidate-memos instance)
+  (setf (vui-instance-props instance) new-props)
+  (vui--rerender-instance instance)
+  instance)
+
 (defun vui--widget-bounds (widget)
   "Get (START . END) bounds for WIDGET's editable area.
 For editable fields, returns the actual text area, not widget decoration."

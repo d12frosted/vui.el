@@ -305,6 +305,148 @@
               (expect update-count :to-equal 0))
           (kill-buffer "*test-no-update*"))))))
 
+(describe "vui-rerender"
+  (it "re-renders instance preserving state"
+    (let ((vui-render-delay nil)
+          (render-count 0))
+      (vui-defcomponent rerender-test ()
+        :state ((count 0))
+        :render (progn
+                  (setq render-count (1+ render-count))
+                  (vui-text (number-to-string count))))
+      (let ((instance (vui-mount (vui-component 'rerender-test) "*test-rerender*")))
+        (unwind-protect
+            (progn
+              (expect render-count :to-equal 1)
+              ;; Manually set state (bypassing set-state to avoid auto-render)
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :count 42))
+              ;; Use vui-rerender to re-render
+              (vui-rerender instance)
+              (expect render-count :to-equal 2)
+              (expect (with-current-buffer "*test-rerender*" (buffer-string))
+                      :to-equal "42"))
+          (kill-buffer "*test-rerender*")))))
+
+  (it "returns instance for chaining"
+    (vui-defcomponent chain-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'chain-test) "*test-chain*")))
+      (unwind-protect
+          (expect (vui-rerender instance) :to-be instance)
+        (kill-buffer "*test-chain*"))))
+
+  (it "preserves memoized values"
+    (let ((vui-render-delay nil)
+          (compute-count 0))
+      (vui-defcomponent memo-preserve-test ()
+        :state ((data "hello"))
+        :render (let ((result (vui-use-memo (data)
+                                (cl-incf compute-count)
+                                (upcase data))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-preserve-test) "*test-memo-pres*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; Re-render without changing deps - memo should be preserved
+              (vui-rerender instance)
+              (expect compute-count :to-equal 1)
+              (expect (with-current-buffer "*test-memo-pres*" (buffer-string))
+                      :to-equal "HELLO"))
+          (kill-buffer "*test-memo-pres*"))))))
+
+(describe "vui-update"
+  (it "updates props and re-renders"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent update-props-test (message)
+        :render (vui-text message))
+      (let ((instance (vui-mount (vui-component 'update-props-test :message "old")
+                                 "*test-update-props*")))
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*test-update-props*" (buffer-string))
+                      :to-equal "old")
+              (vui-update instance '(:message "new"))
+              (expect (with-current-buffer "*test-update-props*" (buffer-string))
+                      :to-equal "new"))
+          (kill-buffer "*test-update-props*")))))
+
+  (it "returns instance for chaining"
+    (vui-defcomponent update-chain-test ()
+      :render (vui-text "OK"))
+    (let ((instance (vui-mount (vui-component 'update-chain-test) "*test-up-chain*")))
+      (unwind-protect
+          (expect (vui-update instance '()) :to-be instance)
+        (kill-buffer "*test-up-chain*"))))
+
+  (it "invalidates memos forcing recomputation"
+    (let ((vui-render-delay nil)
+          (compute-count 0))
+      (vui-defcomponent memo-invalidate-test (data)
+        :render (let ((result (vui-use-memo (data)
+                                (cl-incf compute-count)
+                                (upcase data))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-invalidate-test :data "hello")
+                                 "*test-memo-inv*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; Update with same data - memo would normally be preserved
+              ;; but vui-update invalidates it
+              (vui-update instance '(:data "hello"))
+              (expect compute-count :to-equal 2)
+              (expect (with-current-buffer "*test-memo-inv*" (buffer-string))
+                      :to-equal "HELLO"))
+          (kill-buffer "*test-memo-inv*")))))
+
+  (it "invalidates memos in child components"
+    (let ((vui-render-delay nil)
+          (child-compute-count 0))
+      (vui-defcomponent memo-child (value)
+        :render (let ((result (vui-use-memo (value)
+                                (cl-incf child-compute-count)
+                                (format "child:%s" value))))
+                  (vui-text result)))
+      (vui-defcomponent memo-parent (data)
+        :render (vui-component 'memo-child :value data))
+      (let ((instance (vui-mount (vui-component 'memo-parent :data "x")
+                                 "*test-memo-child*")))
+        (unwind-protect
+            (progn
+              (expect child-compute-count :to-equal 1)
+              ;; Update parent with same data - child memo should be invalidated
+              (vui-update instance '(:data "x"))
+              (expect child-compute-count :to-equal 2))
+          (kill-buffer "*test-memo-child*")))))
+
+  (it "preserves component state (not memos)"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent state-preserve-test (label)
+        :state ((internal-count 0))
+        :render (vui-vstack
+                 (vui-text (format "count:%d" internal-count))
+                 (vui-text (format "prop:%s" label))))
+      (let ((instance (vui-mount (vui-component 'state-preserve-test :label "a")
+                                 "*test-state-pres*")))
+        (unwind-protect
+            (progn
+              ;; Set internal state
+              (with-current-buffer "*test-state-pres*"
+                (let ((vui--current-instance instance)
+                      (vui--root-instance instance))
+                  (vui-set-state :internal-count 42)))
+              (expect (with-current-buffer "*test-state-pres*" (buffer-string))
+                      :to-match "count:42")
+              ;; Update props - internal state should be preserved
+              (vui-update instance '(:label "b"))
+              (expect (with-current-buffer "*test-state-pres*" (buffer-string))
+                      :to-match "count:42")
+              (expect (with-current-buffer "*test-state-pres*" (buffer-string))
+                      :to-match "prop:b"))
+          (kill-buffer "*test-state-pres*"))))))
+
 (describe "memo comparison modes"
   (it "uses equal by default"
     ;; Default should use equal (structural comparison)
