@@ -117,10 +117,10 @@ Returns INSTANCE for chaining.
 (vui-update INSTANCE NEW-PROPS) -> instance
 #+end_src
 
-Update instance props, invalidate memos, and re-render.
+Update instance props, invalidate all memos, and re-render.
 
-This is useful when new data arrives and you want computed values to refresh
-while preserving UI state (like collapsed sections).
+Use this when external data has changed and cached computations should be
+discarded (e.g., after a file save, database update, or user-triggered refresh).
 
 NEW-PROPS completely replaces the instance's current props. All memoized values
 in the instance tree are invalidated, forcing recomputation on the next render.
@@ -129,15 +129,44 @@ Component state is preserved through reconciliation.
 Returns INSTANCE for chaining.
 
 #+begin_src elisp
-;; Update with new data - memos recompute, but collapse state preserved
-(if existing-instance
-    (vui-update existing-instance (list :note new-note))
-  (vui-mount (vui-component 'my-sidebar :note new-note) "*sidebar*"))
+;; After save - data on disk changed, force recomputation
+(vui-update instance (list :note (fetch-note)))
 #+end_src
 
-*Difference from vui-rerender:*
-- =vui-rerender= - preserves memos (deps-based caching works normally)
-- =vui-update= - invalidates all memos (forces recomputation)
+** vui-update-props
+
+#+begin_src elisp
+(vui-update-props INSTANCE NEW-PROPS) -> instance
+#+end_src
+
+Update instance props and re-render, preserving memos.
+
+Use this for periodic or speculative refreshes where data may not have changed.
+Memoized values are preserved and only recompute if their dependencies change,
+avoiding unnecessary expensive work.
+
+NEW-PROPS completely replaces the instance's current props. Component state is
+preserved through reconciliation.
+
+Returns INSTANCE for chaining.
+
+#+begin_src elisp
+;; Idle timer - data probably hasn't changed, let memos decide
+(vui-update-props instance (list :note (fetch-note)))
+#+end_src
+
+** When to use which
+
+| Function            | Props   | Memos       | Use case                                    |
+|---------------------+---------+-------------+---------------------------------------------|
+| =vui-rerender=      | Keep    | Preserved   | Force redraw, same props                    |
+| =vui-update-props=  | Replace | Preserved   | Periodic refresh, data may not have changed |
+| =vui-update=        | Replace | Invalidated | Data changed, force recomputation           |
+
+As a rule of thumb:
+- *Save hooks, manual refresh* → =vui-update= (data changed, recompute everything)
+- *Idle timers, window focus* → =vui-update-props= (data probably unchanged, let memos skip work)
+- *Internal triggers* → =vui-rerender= (just redraw with current props and state)
 
 * Primitives
 
