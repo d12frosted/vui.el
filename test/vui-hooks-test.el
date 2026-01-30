@@ -440,7 +440,49 @@
               ;; Re-render without changing filter deps
               (vui--rerender-instance instance)
               (expect filter-count :to-equal 1))
-          (kill-buffer "*test-memo3*"))))))
+          (kill-buffer "*test-memo3*")))))
+
+  (it "preserves cache with vui-update-props when deps unchanged"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-update-props-test (value)
+        :render (let ((result (vui-use-memo (value)
+                                (setq compute-count (1+ compute-count))
+                                (* value 10))))
+                  (vui-text (number-to-string result))))
+      (let ((instance (vui-mount (vui-component 'memo-update-props-test :value 3)
+                                 "*test-memo-up1*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "30")
+              ;; vui-update-props with same value - memo should NOT recompute
+              (vui-update-props instance (list :value 3))
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "30")
+              ;; vui-update-props with different value - memo should recompute
+              (vui-update-props instance (list :value 7))
+              (expect compute-count :to-equal 2)
+              (expect (buffer-string) :to-equal "70"))
+          (kill-buffer "*test-memo-up1*")))))
+
+  (it "invalidates cache with vui-update even when deps unchanged"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-update-test (value)
+        :render (let ((result (vui-use-memo (value)
+                                (setq compute-count (1+ compute-count))
+                                (* value 10))))
+                  (vui-text (number-to-string result))))
+      (let ((instance (vui-mount (vui-component 'memo-update-test :value 3)
+                                 "*test-memo-up2*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              (expect (buffer-string) :to-equal "30")
+              ;; vui-update with same value - memo IS invalidated, recomputes
+              (vui-update instance (list :value 3))
+              (expect compute-count :to-equal 2)
+              (expect (buffer-string) :to-equal "30"))
+          (kill-buffer "*test-memo-up2*"))))))
 
 (describe "use-async"
   (it "returns ready status when resolve called synchronously"

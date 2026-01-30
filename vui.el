@@ -1948,6 +1948,22 @@ Returns INSTANCE for chaining."
   (vui--rerender-instance instance)
   instance)
 
+(defun vui-update-props (instance new-props)
+  "Update INSTANCE with NEW-PROPS and re-render, preserving memos.
+This is useful for periodic refreshes where data may not have changed.
+Memoized values are preserved and only recompute if their dependencies
+change.
+
+NEW-PROPS completely replaces the instance's current props.
+
+Use `vui-update' instead when external data has changed and all cached
+computations should be discarded.
+
+Returns INSTANCE for chaining."
+  (setf (vui-instance-props instance) new-props)
+  (vui--rerender-instance instance)
+  instance)
+
 (defun vui--widget-bounds (widget)
   "Get (START . END) bounds for WIDGET's editable area.
 For editable fields, returns the actual text area, not widget decoration."
