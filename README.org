@@ -5,6 +5,8 @@
 <p align="center">
   <a href="https://melpa.org/#/vui"><img alt="MELPA" src="https://melpa.org/packages/vui-badge.svg"/></a>
   <img alt="version" src="https://img.shields.io/github/v/tag/d12frosted/vui.el?label=version"/>
+
+  <a href="https://github.com/sponsors/d12frosted"><img alt="Sponsor" src="https://img.shields.io/badge/Sponsor-d12frosted-pink?logo=githubsponsors&logoColor=white"/></a>
 </p>
 #+end_html
 
@@ -415,3 +417,7 @@ Inspired by:
 - Svelte (reactivity)
 - SolidJS (fine-grained updates)
 - Emacs widget.el (underlying implementation)
+
+* Support
+
+If you enjoy this project, you can support its development via [[https://github.com/sponsors/d12frosted][GitHub Sponsors]] or [[https://www.patreon.com/d12frosted][Patreon]].
