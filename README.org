@@ -405,6 +405,7 @@ Contributions welcome! Please:
 - [[https://github.com/d12frosted/vulpea-journal][d12frosted/vulpea-journal]] — Journaling system with calendar widgets
 - [[https://github.com/d12frosted/brb][d12frosted/brb]] — Barberry Garden management system
 - [[https://github.com/zonuexe/unicode-inspector.el][zonuexe/unicode-inspector.el]] — Interactive Unicode character inspector
+- [[https://github.com/zonuexe/eijiro-search.el][zonuexe/eijiro-search.el]] — Interactive English-Japanese dictionary viewer
 
 * License
 
