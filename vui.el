@@ -1266,6 +1266,7 @@ Example:
 Compare with `vui-with-async-context':
 - `vui-with-async-context' - for fire-and-forget callbacks (timers)
 - `vui-async-callback' - when callback receives data from async operation"
+  (declare (indent defun))
   (let ((buf (make-symbol "buf"))
         (instance (make-symbol "instance"))
         (root (make-symbol "root")))
