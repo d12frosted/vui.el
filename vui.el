@@ -1548,7 +1548,12 @@ where the captured value may be stale:
   (vui-set-state :count #\\='1+)
 
   ;; Or with a lambda for more complex updates:
-  (vui-set-state :items (lambda (old) (cons new-item old)))"
+  (vui-set-state :items (lambda (old) (cons new-item old)))
+
+Treat state values as immutable: replace them (as both examples
+above do) rather than mutating them in place with setcar, push, or
+sort.  In-place mutation is invisible to change detection
+\(should-update, on-update, and hook dependency comparisons)."
   (unless vui--current-instance
     (error "vui-set-state called outside of component context"))
   (let* ((target (vui--find-state-owner vui--current-instance key))
@@ -2877,10 +2882,14 @@ INSTANCE is the component instance."
            instance
            props state prev-props prev-state)
           (vui--timing-record 'update component-name))))
-    ;; Store current props/state for next render's on-update
-    ;; Use copy-tree to deep copy, since plist-put modifies in place
-    (setf (vui-instance-prev-props instance) (copy-tree props))
-    (setf (vui-instance-prev-state instance) (copy-tree state))))
+    ;; Store current props/state for next render's on-update.  A
+    ;; shallow copy is enough: it owns its own plist cells, so the
+    ;; in-place plist-put done by `vui-set-state' cannot reach it,
+    ;; while the values themselves are shared.  Values are treated as
+    ;; immutable - replace them (e.g. with functional updates) rather
+    ;; than mutating them in place, or change detection cannot see it.
+    (setf (vui-instance-prev-props instance) (copy-sequence props))
+    (setf (vui-instance-prev-state instance) (copy-sequence state))))
 
 (defun vui--call-unmount-recursive (instance)
   "Call on-unmount for INSTANCE and all its children recursively."

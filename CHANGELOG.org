@@ -9,6 +9,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- The previous-props/state snapshots kept for =:on-update= / =:should-update= are now shallow copies instead of deep =copy-tree= copies, eliminating per-render copying (and the associated GC) of large state values. State and props values are treated as immutable: replace them (e.g. with functional =vui-set-state= updates) rather than mutating them in place - in-place mutation of a value was unreliable for change detection before and is invisible to it now.
 - Cursor preservation no longer walks the buffer character by character to enumerate widgets on every render; widgets are collected from button overlays and the field list instead. Collection time depends on the number of widgets rather than the buffer size (about 6x faster at 300 widgets / 15k characters, with the gap growing with buffer size).
 
 ** Fixed
