@@ -9,6 +9,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Deferred re-renders now use a per-instance timer instead of a single global one. Previously, state updates in two VUI buffers within the same =vui-render-delay= window cancelled each other's pending render, silently leaving the first buffer stale. =vui-flush-sync= likewise no longer cancels pending renders that belong to other buffers.
 - Disabled buttons now use =widget-inactive= face instead of the regular button face.
 - Button =:tab-order= and =:keymap= properties are now preserved when buttons are truncated in table cells.
 

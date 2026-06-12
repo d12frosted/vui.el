@@ -619,7 +619,8 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   memos       ; Hash table of memo-id -> (deps . value) for let-memo
   asyncs      ; Hash table of async-id -> (key status data error timer) for vui-use-async
   prev-props  ; Props from previous render (for on-update)
-  prev-state) ; State from previous render (for on-update)
+  prev-state  ; State from previous render (for on-update)
+  render-timer) ; Pending deferred-render timer (only used on root instances)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -1152,9 +1153,6 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
 (defvar vui--render-pending-p nil
   "Non-nil if a re-render is pending (during batched updates).")
 
-(defvar vui--render-timer nil
-  "Timer for deferred rendering.")
-
 (defcustom vui-render-delay 0.01
   "Seconds to wait before rendering when using deferred rendering.
 This delay allows multiple state changes to be batched into a single
@@ -1315,18 +1313,25 @@ Otherwise, render immediately or after delay based on config."
   "Schedule a deferred render using current context."
   (vui--schedule-deferred-render-for (vui--get-root-instance)))
 
+(defun vui--cancel-render-timer (root)
+  "Cancel ROOT's pending deferred-render timer, if any."
+  (when-let* ((timer (vui-instance-render-timer root)))
+    (cancel-timer timer)
+    (setf (vui-instance-render-timer root) nil)))
+
 (defun vui--schedule-deferred-render-for (root)
   "Schedule a render of ROOT after a short delay.
 Uses a regular timer so the render fires reliably regardless of
-whether Emacs is idle."
+whether Emacs is idle.  The timer is stored on ROOT itself, so each
+mounted root has its own schedule and re-scheduling one root never
+cancels another root's pending render."
   (when root
-    (when vui--render-timer
-      (cancel-timer vui--render-timer))
-    (setq vui--render-timer
+    (vui--cancel-render-timer root)
+    (setf (vui-instance-render-timer root)
           (run-with-timer
            vui-render-delay nil
            (lambda ()
-             (setq vui--render-timer nil)
+             (setf (vui-instance-render-timer root) nil)
              (vui--rerender-instance root))))))
 
 (defmacro vui-batch (&rest body)
@@ -1357,12 +1362,11 @@ Example:
          (vui--rerender-instance vui--batch-root))))))
 
 (defun vui-flush-sync ()
-  "Force immediate re-render, bypassing any pending timers.
-Use when you need the UI to update synchronously."
-  (when vui--render-timer
-    (cancel-timer vui--render-timer)
-    (setq vui--render-timer nil))
+  "Force immediate re-render of the current root, bypassing its pending timer.
+Use when you need the UI to update synchronously.  Pending renders
+scheduled for other roots (other buffers) are not affected."
   (when vui--root-instance
+    (vui--cancel-render-timer vui--root-instance)
     (vui--rerender-instance vui--root-instance)))
 
 ;;; Effects System
