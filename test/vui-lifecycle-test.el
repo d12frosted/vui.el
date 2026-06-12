@@ -149,5 +149,48 @@
               (expect body-ran :to-be t))
           (kill-buffer "*test-live-async*"))))))
 
+(describe "remounting into the same buffer"
+  (it "unmounts the previous tree first"
+    (let ((unmounted nil))
+      (vui-defcomponent remount-old ()
+        :on-unmount (setq unmounted t)
+        :render (vui-text "OLD"))
+      (vui-defcomponent remount-new ()
+        :render (vui-text "NEW"))
+      (vui-mount (vui-component 'remount-old) "*test-remount*")
+      (unwind-protect
+          (progn
+            (expect unmounted :to-be nil)
+            (vui-mount (vui-component 'remount-new) "*test-remount*")
+            (expect unmounted :to-be t)
+            (expect (with-current-buffer "*test-remount*" (buffer-string))
+                    :to-equal "NEW"))
+        (kill-buffer "*test-remount*"))))
+
+  (it "prevents stale async callbacks from clobbering the new mount"
+    (vui-defcomponent remount-stale-old ()
+      :state ((x 0))
+      :render (vui-text (format "OLD %d" x)))
+    (vui-defcomponent remount-stale-new ()
+      :render (vui-text "NEW"))
+    (let* ((old (vui-mount (vui-component 'remount-stale-old)
+                           "*test-remount-stale*"))
+           ;; Simulates a timer callback created by the old tree
+           (callback (with-current-buffer "*test-remount-stale*"
+                       (let ((vui--current-instance old))
+                         (vui-with-async-context
+                          (vui-set-state :x 99))))))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'remount-stale-new)
+                       "*test-remount-stale*")
+            ;; Old tree's timer fires after the new mount
+            (funcall callback)
+            (sleep-for 0.05)
+            (expect (with-current-buffer "*test-remount-stale*"
+                      (buffer-string))
+                    :to-equal "NEW"))
+        (kill-buffer "*test-remount-stale*")))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

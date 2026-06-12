@@ -83,6 +83,10 @@ In =:on-update= and =:should-update= additionally:
 
 Mount a component as root and render to a buffer.
 
+If the buffer already has a mounted instance, it is unmounted first
+(see =vui-unmount=), so the old tree's lifecycle cleanups run before the
+new tree renders.
+
 - COMPONENT-VNODE :: Created with =vui-component=
 - BUFFER-NAME :: String (default ="*vui*"=)
 - Returns :: The root instance

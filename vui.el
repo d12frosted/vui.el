@@ -3073,6 +3073,12 @@ Returns the root instance."
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf
       (let ((inhibit-read-only t))
+        ;; Tear down any previously mounted tree first so its lifecycle
+        ;; cleanups run and its stale async callbacks detach.  Without
+        ;; this, the old tree stays live and a timer created by it can
+        ;; re-render the old UI over the new mount.
+        (when vui--root-instance
+          (vui--unmount-root vui--root-instance))
         ;; Enable vui-mode (this also sets up the keymap hierarchy)
         (unless (derived-mode-p 'vui-mode)
           (vui-mode))
