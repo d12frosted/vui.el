@@ -529,6 +529,39 @@ Fixed-width container for CHILD.
 (vui-box (vui-text "Centered") :width 30 :align :center)
 #+end_src
 
+** vui-region
+
+#+begin_src elisp
+(vui-region [OPTIONS...] CHILDREN...) -> vnode
+#+end_src
+
+Styling wrapper: apply a face and/or keymap to the children's whole
+extent, without affecting layout.
+
+| Property  | Type   | Description                                  |
+|-----------+--------+----------------------------------------------|
+| =:face=   | face   | Applied beneath the children's own faces     |
+| =:keymap= | keymap | Cascades beneath the children's own keymaps  |
+| =:key=    | any    | Reconciliation key                           |
+
+The face is layered with the lowest priority: children that set their
+own faces keep them, while plain text - including separators, padding,
+and indentation inserted by nested layout containers - gets the region
+face. Useful for row highlighting and panel backgrounds.
+
+The keymap cascades innermost-first: a nested region's or a button's
+own keymap wins for keys it defines, unbound keys fall through to the
+region's map, then to the buffer's usual keymaps. Buttons keep their
+default =RET= / =TAB= behavior, and input fields keep their own keymap.
+
+#+begin_src elisp
+;; Highlight a selected row and give it row-level bindings
+(vui-region :face 'highlight :keymap my-row-map
+  (vui-hstack
+   (vui-text "item")
+   (vui-button "open" :on-click #'my-open)))
+#+end_src
+
 ** vui-table
 
 #+begin_src elisp

@@ -546,6 +546,14 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   rows        ; List of rows, each row is list of cell content (strings or vnodes)
   border)     ; nil, :ascii, :unicode
 
+;; Styling wrapper: face/keymap over the children's extent
+(cl-defstruct (vui-vnode-region (:include vui-vnode)
+                                (:constructor vui-vnode-region--create))
+  "Virtual node that applies face and keymap to its children's extent."
+  children   ; List of child vnodes
+  face       ; Face applied beneath the children's own faces
+  keymap)    ; Keymap cascading beneath the children's own keymaps
+
 ;; Component reference in vtree
 (cl-defstruct (vui-vnode-component (:include vui-vnode)
                                    (:constructor vui-vnode-component--create))
@@ -1076,6 +1084,45 @@ Example:
      :columns columns
      :rows rows
      :border border
+     :key key)))
+
+(defun vui-region (&rest args)
+  "Apply container-level styling to children.
+ARGS can start with keyword options, followed by children.
+
+Options:
+  :face FACE   - applied to the children's whole extent, beneath any
+                 faces the children set themselves, so child faces
+                 win.  Whitespace inserted by nested layout
+                 containers (separators, padding, indentation) is
+                 covered too.
+  :keymap MAP  - active over the children's extent.  Bindings
+                 cascade: a nested region's or a button's own keymap
+                 wins for keys it defines, unbound keys fall through
+                 to MAP, and keys unbound in MAP fall through to the
+                 buffer's usual keymaps.  Input fields keep their own
+                 keymap.
+  :key KEY     - for reconciliation
+
+Usage:
+  (vui-region :face \\='highlight :keymap my-map
+    (vui-hstack child1 child2))"
+  (let ((face nil)
+        (keymap nil)
+        (key nil)
+        (children nil))
+    ;; Parse keyword arguments
+    (while (and args (keywordp (car args)))
+      (pcase (pop args)
+        (:face (setq face (pop args)))
+        (:keymap (setq keymap (pop args)))
+        (:key (setq key (pop args)))))
+    ;; Remaining args are children
+    (setq children (remq nil (flatten-list args)))
+    (vui-vnode-region--create
+     :children children
+     :face face
+     :keymap keymap
      :key key)))
 
 (cl-defun vui-error-boundary (&key fallback on-error id children)
@@ -2357,6 +2404,45 @@ like hl-line."
               (overlay-get ov 'vui-placeholder))
       (delete-overlay ov))))
 
+(defun vui--apply-region-props (start end face keymap)
+  "Apply container-level FACE and KEYMAP to the region START..END.
+
+FACE is added with the lowest priority, so faces set by children win;
+whitespace inserted by layout containers (separators, padding,
+indentation) is covered as well.
+
+KEYMAP cascades beneath the children's own keymaps: plain text that
+already carries a keymap (from a nested styled region) gets a
+composed keymap where the existing map wins and unbound keys fall
+through to KEYMAP.  Buttons compose KEYMAP beneath their own keymap
+on their overlay (`widget-keymap' for buttons without a custom one),
+so button keys keep working.  Input fields are untouched: their
+overlay keymap shadows text properties."
+  (when (< start end)
+    (when face
+      (add-face-text-property start end face t))
+    (when keymap
+      (let ((pos start))
+        (while (< pos end)
+          (let ((next (min (next-single-char-property-change pos 'button nil end)
+                           (or (next-property-change pos nil end) end))))
+            (if (get-char-property pos 'button)
+                ;; Button: compose on its overlay so its own keys win
+                (dolist (overlay (overlays-at pos))
+                  (when (overlay-get overlay 'button)
+                    (overlay-put overlay 'keymap
+                                 (make-composed-keymap
+                                  (or (overlay-get overlay 'keymap)
+                                      widget-keymap)
+                                  keymap))))
+              ;; Plain text: compose under any nested region's keymap
+              (let ((existing (get-text-property pos 'keymap)))
+                (put-text-property pos next 'keymap
+                                   (if existing
+                                       (make-composed-keymap existing keymap)
+                                     keymap))))
+            (setq pos next)))))))
+
 (defun vui--inline-p (instance)
   "Return non-nil if INSTANCE was mounted inline (owns a region)."
   (and (vui-instance-region-start instance) t))
@@ -3333,6 +3419,19 @@ Handles :truncate and overflow:
         ;; by `vui--setup-field-placeholders'
         (when placeholder
           (widget-put w :vui-placeholder placeholder)))))
+
+   ;; Styled region - render children, then apply face/keymap on top
+   ((vui-vnode-region-p vnode)
+    (let ((start (point))
+          (children (vui-vnode-region-children vnode))
+          (idx 0))
+      (dolist (child children)
+        (let ((vui--render-path (cons idx vui--render-path)))
+          (vui--render-vnode child))
+        (cl-incf idx))
+      (vui--apply-region-props start (point)
+                               (vui-vnode-region-face vnode)
+                               (vui-vnode-region-keymap vnode))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
