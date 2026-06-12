@@ -1227,9 +1227,11 @@ The macro captures:
 - The current component instance
 - The root instance
 
-When the returned function is called, it checks if the buffer is still
-alive, switches to it, and restores the component context before
-executing BODY."
+When the returned function is called, it checks that the buffer is
+still alive and that the captured component tree has not been
+unmounted (see `vui-unmount'); if either check fails, BODY is
+skipped.  Otherwise it switches to the buffer and restores the
+component context before executing BODY."
   (let ((buf (make-symbol "buf"))
         (instance (make-symbol "instance"))
         (root (make-symbol "root")))
@@ -1237,7 +1239,8 @@ executing BODY."
            (,instance vui--current-instance)
            (,root vui--root-instance))
       (lambda ()
-        (when (buffer-live-p ,buf)
+        (when (and (buffer-live-p ,buf)
+                   (or (null ,root) (vui-instance-buffer ,root)))
          (with-current-buffer ,buf
           (let ((vui--current-instance ,instance)
                 (vui--root-instance ,root))
@@ -1263,7 +1266,10 @@ Example:
 
 Compare with `vui-with-async-context':
 - `vui-with-async-context' - for fire-and-forget callbacks (timers)
-- `vui-async-callback' - when callback receives data from async operation"
+- `vui-async-callback' - when callback receives data from async operation
+
+Like `vui-with-async-context', the callback does nothing when its
+buffer has been killed or its component tree has been unmounted."
   (declare (indent defun))
   (let ((buf (make-symbol "buf"))
         (instance (make-symbol "instance"))
@@ -1272,7 +1278,8 @@ Compare with `vui-with-async-context':
            (,instance vui--current-instance)
            (,root vui--root-instance))
       (lambda ,args
-        (when (buffer-live-p ,buf)
+        (when (and (buffer-live-p ,buf)
+                   (or (null ,root) (vui-instance-buffer ,root)))
          (with-current-buffer ,buf
           (let ((vui--current-instance ,instance)
                 (vui--root-instance ,root))
@@ -2235,6 +2242,27 @@ INSTANCE is the component instance."
      (vui-instance-state instance))
     (vui--timing-record 'unmount component-name)))
 
+(defun vui--detach-instance (instance)
+  "Clear buffer references for INSTANCE and all its children, recursively.
+A detached instance can no longer be re-rendered: `vui--rerender-instance'
+becomes a no-op for it, and async callbacks created via
+`vui-with-async-context' that captured it do nothing."
+  (setf (vui-instance-buffer instance) nil)
+  (dolist (child (vui-instance-children instance))
+    (vui--detach-instance child)))
+
+(defun vui--unmount-root (instance)
+  "Run full lifecycle teardown for root INSTANCE and detach it.
+Calls on-unmount hooks, effect cleanups, on-mount cleanup functions,
+and async process cleanup for the whole tree, cancels any pending
+deferred render, and clears buffer references so stale re-render
+requests for this tree become no-ops."
+  (vui--call-unmount-recursive instance)
+  ;; Cancel after cleanups: an on-unmount hook calling `vui-set-state'
+  ;; would otherwise leave a fresh timer behind.
+  (vui--cancel-render-timer instance)
+  (vui--detach-instance instance))
+
 (defun vui--find-matching-child (parent type key index)
   "Find a child of PARENT matching TYPE and KEY or INDEX."
   (when parent
@@ -3081,6 +3109,33 @@ Use this together with `vui-rerender', `vui-update', and
   (when-let* ((buf (get-buffer (or buffer (current-buffer)))))
     (when (buffer-live-p buf)
       (buffer-local-value 'vui--root-instance buf))))
+
+(defun vui-unmount (&optional buffer)
+  "Unmount the VUI instance mounted in BUFFER (default: current buffer).
+BUFFER may be a buffer object or a buffer name.
+
+Runs the full teardown lifecycle for every component in the tree:
+on-unmount hooks, effect cleanup functions, cleanup functions
+returned from on-mount, and cancellation of pending async processes
+and deferred renders.  The buffer's content is erased, but the
+buffer itself is not killed.
+
+After unmounting, async callbacks created via
+`vui-with-async-context' or `vui-async-callback' that captured this
+tree become no-ops.
+
+Returns the unmounted instance, or nil if BUFFER does not exist or
+has no mounted instance."
+  (when-let* ((instance (vui-get-instance buffer)))
+    (let ((buf (vui-instance-buffer instance)))
+      (vui--unmount-root instance)
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (kill-local-variable 'vui--root-instance)
+          (let ((inhibit-read-only t))
+            (remove-overlays)
+            (erase-buffer)))))
+    instance))
 
 (provide 'vui)
 ;;; vui.el ends here

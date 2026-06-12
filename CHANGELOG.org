@@ -15,6 +15,8 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-unmount= - Explicitly unmount the instance mounted in a buffer. Runs the full teardown lifecycle for the whole tree (=:on-unmount= hooks, effect cleanups, =:on-mount= cleanup functions, async process and render timer cancellation) and erases the buffer. Previously there was no way to tear a mounted UI down, so timers and processes held by components leaked.
+- Async callbacks created via =vui-with-async-context= and =vui-async-callback= now also become no-ops when their component tree has been unmounted. Previously they only checked that the buffer was still alive, so a stale timer could re-render an unmounted tree into the buffer.
 - =vui-get-instance= - Return the root instance mounted in a buffer (defaults to the current buffer). Lets applications drive a mounted UI via =vui-rerender= / =vui-update= / =vui-update-props= without maintaining their own buffer-to-instance storage (#36).
 - *Instance update API*: New public functions for re-rendering mounted instances:
   - =vui-rerender= - Re-render an instance preserving component state and memos. Useful for forcing a redraw.

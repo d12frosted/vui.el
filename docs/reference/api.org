@@ -91,6 +91,30 @@ Mount a component as root and render to a buffer.
 (vui-mount (vui-component 'my-app :title "Hello") "*my-app*")
 #+end_src
 
+** vui-unmount
+
+#+begin_src elisp
+(vui-unmount &optional BUFFER) -> instance or nil
+#+end_src
+
+Unmount the VUI instance mounted in BUFFER (default: current buffer).
+
+Runs the full teardown lifecycle for every component in the tree:
+=:on-unmount= hooks, effect cleanup functions, cleanup functions returned
+from =:on-mount=, and cancellation of pending async processes and deferred
+renders. The buffer's content is erased, but the buffer itself is not
+killed.
+
+After unmounting, async callbacks created via =vui-with-async-context= or
+=vui-async-callback= that captured this tree become no-ops.
+
+- BUFFER :: Buffer object or buffer name (default: current buffer)
+- Returns :: The unmounted instance, or nil if nothing was mounted
+
+#+begin_src elisp
+(vui-unmount "*my-app*")
+#+end_src
+
 ** vui-get-instance
 
 #+begin_src elisp
