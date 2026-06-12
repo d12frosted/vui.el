@@ -330,7 +330,22 @@ Buttons are widget.el push-buttons, so we use widget-apply."
   (it "supports :spacing option"
     (with-temp-buffer
       (vui-render (vui-list '("a" "b") #'vui-text nil :spacing 1))
-      (expect (buffer-string) :to-equal "a\n\nb"))))
+      (expect (buffer-string) :to-equal "a\n\nb")))
+
+  (it "accepts keyword options without an explicit key-fn"
+    (with-temp-buffer
+      (vui-render (vui-list '("a" "b" "c") #'vui-text :indent 3))
+      (expect (buffer-string) :to-equal "   a\n   b\n   c")))
+
+  (it "accepts :vertical nil without an explicit key-fn"
+    (let ((node (vui-list '("x" "y") #'vui-text :vertical nil)))
+      (expect (vui-vnode-hstack-p node) :to-be-truthy)
+      ;; Items are still used as keys (key-fn defaults to identity)
+      (expect (vui-vnode-key (nth 0 (vui-vnode-hstack-children node)))
+              :to-equal "x")))
+
+  (it "rejects unknown keyword options"
+    (expect (vui-list '("a") #'vui-text :wat 1) :to-throw 'error)))
 
 (describe "vui-table"
   (it "creates a table vnode"

@@ -1135,27 +1135,53 @@ current."
   (when-let* ((root (vui--get-root-instance)))
     (vui--rerender-instance root)))
 
-(cl-defun vui-list (items render-fn &optional key-fn &key (vertical t) (indent 0) spacing)
+(defun vui-list (items render-fn &rest args)
   "Render a list of ITEMS using RENDER-FN.
 RENDER-FN is called with each item and should return a vnode.
-KEY-FN extracts a unique key from each item (default: item itself).
-VERTICAL if non-nil (default t), returns a vstack; otherwise returns an hstack.
-INDENT sets left indentation in spaces (default 0).
-SPACING sets blank lines between items for vertical lists (default 0),
-  or spaces between items for horizontal lists (default 1).
 
-This ensures proper reconciliation when items are added, removed, or reordered.
+ARGS may start with an optional positional KEY-FN, followed by
+keyword options.  KEY-FN extracts a unique key from each item
+\(default: the item itself); since a keyword is never a valid key
+function, a keyword in that position simply starts the options:
+
+  :vertical BOOL - if non-nil (default t), returns a vstack;
+                   otherwise returns an hstack
+  :indent N      - left indentation in spaces (default 0)
+  :spacing N     - blank lines between items for vertical lists
+                   (default 0), or spaces between items for
+                   horizontal lists (default 1)
+
+This ensures proper reconciliation when items are added, removed, or
+reordered.
 
 Usage:
   (vui-list items
             (lambda (item) (vui-text (plist-get item :name)))
             (lambda (item) (plist-get item :id)))
 
-  ;; With indentation:
+  ;; With indentation (key-fn may be omitted):
+  (vui-list items render-fn :indent 2)
   (vui-list items render-fn key-fn :indent 2)
 
   ;; Horizontal list:
-  (vui-list items render-fn key-fn :vertical nil)"
+  (vui-list items render-fn :vertical nil)"
+  (let ((key-fn nil))
+    ;; Optional positional KEY-FN; a keyword here starts the options
+    (when (and args (not (keywordp (car args))))
+      (setq key-fn (pop args)))
+    (cl-loop for (option _value) on args by #'cddr
+             unless (memq option '(:vertical :indent :spacing))
+             do (error "vui-list: unknown option %S" option))
+    (vui--list-1 items render-fn key-fn
+                 (if (plist-member args :vertical)
+                     (plist-get args :vertical)
+                   t)
+                 (or (plist-get args :indent) 0)
+                 (plist-get args :spacing))))
+
+(defun vui--list-1 (items render-fn key-fn vertical indent spacing)
+  "Build the vnode for `vui-list'.
+ITEMS, RENDER-FN, KEY-FN, VERTICAL, INDENT, SPACING as in `vui-list'."
   (let* ((key-fn (or key-fn #'identity))
          (children (let ((result nil))
                      (dolist (item items (nreverse result))
