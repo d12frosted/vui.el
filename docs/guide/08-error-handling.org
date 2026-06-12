@@ -22,12 +22,22 @@ If =possibly-broken= throws an error during render, the fallback is shown instea
 
 ** Properties
 
-| Property    | Description                            |
-|-------------+----------------------------------------|
-| =:id=       | Unique identifier for this boundary    |
-| =:fallback= | Function =(lambda (error) vnode)=      |
-| =:on-error= | Optional callback when error is caught |
-| =:children= | Protected content                      |
+| Property    | Description                                  |
+|-------------+----------------------------------------------|
+| =:id=       | Optional identifier for this boundary        |
+| =:fallback= | Function =(lambda (error) vnode)=            |
+| =:on-error= | Optional callback, called once per caught error |
+| =:children= | Protected content                            |
+
+=:id= may be omitted: the boundary's identity is then derived from its
+position in the rendered tree, which is stable across re-renders as long
+as the tree shape around it does not change. Provide an explicit =:id=
+when the boundary moves around the tree, or when you want to reset it by
+name with =vui-reset-error-boundary=.
+
+Error state is scoped to the mounted tree (or to the buffer for static
+=vui-render= trees): two apps using the same =:id= do not interfere, and
+a fresh =vui-mount= always starts with a clean slate.
 
 ** Displaying Error Details
 
@@ -75,6 +85,9 @@ Use =vui-reset-error-boundary= to retry after an error:
                               (vui-reset-error-boundary "recoverable")))))
    :children (vui-component 'may-fail)))
 #+end_src
+
+Calling =vui-reset-error-boundary= without an id resets every boundary
+in the current tree.
 
 ** Error Boundary Scope
 
