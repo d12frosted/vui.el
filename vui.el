@@ -691,6 +691,13 @@ fresh value on every render never settles; rather than looping
 forever, vui signals an error once this many queued re-renders have
 run back-to-back.")
 
+(defvar vui--measuring-p nil
+  "Non-nil while rendering into a temp buffer to measure content width.
+Layout containers (tables, boxes) render their content twice: once to
+measure, once for real.  During the measure pass, component lifecycle
+hooks are skipped, effect registrations are discarded, and async
+loaders are not started, so the measurement has no side effects.")
+
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
 Each entry is a vui-context-binding.")
@@ -1877,11 +1884,17 @@ Returns a plist with :status, :data, and :error."
     ;; Increment async counter for next vui-use-async call
     (cl-incf vui--async-index)
     ;; Check if key changed or first call
-    (if (and entry (equal prev-key key))
-        ;; Key unchanged - return cached result
-        (list :status (plist-get entry :status)
-              :data (plist-get entry :data)
-              :error (plist-get entry :error))
+    (cond
+     ((and entry (equal prev-key key))
+      ;; Key unchanged - return cached result
+      (list :status (plist-get entry :status)
+            :data (plist-get entry :data)
+            :error (plist-get entry :error)))
+     (vui--measuring-p
+      ;; Measure pass: report pending without starting the load.
+      ;; The real render starts (or reuses) the actual load.
+      (list :status 'pending :data nil :error nil))
+     (t
       ;; Key changed or first call - start new async load
       ;; Kill previous process if still running
       (when (and prev-process (process-live-p prev-process))
@@ -1927,7 +1940,7 @@ Returns a plist with :status, :data, and :error."
         ;; Return pending state (or current state if resolve was called synchronously)
         (list :status (plist-get new-entry :status)
               :data (plist-get new-entry :data)
-              :error (plist-get new-entry :error))))))
+              :error (plist-get new-entry :error)))))))
 
 (defun vui--cleanup-instance-asyncs (instance)
   "Cancel all pending async processes for INSTANCE."
@@ -2284,32 +2297,35 @@ INSTANCE is the component instance."
         (unless (memq old-child new-children)
           (vui--call-unmount-recursive old-child)))
       (setf (vui-instance-children instance) new-children))
-    ;; Lifecycle hooks (wrapped with error handling)
-    (if first-render-p
-        ;; First render: call on-mount
-        (progn
-          (setf (vui-instance-mounted-p instance) t)
-          (vui--debug-log 'mount "<%s> mounted" component-name)
+    ;; Lifecycle hooks (wrapped with error handling).
+    ;; Skipped during measure passes: those render throwaway instances
+    ;; into a temp buffer and must not produce side effects.
+    (unless vui--measuring-p
+      (if first-render-p
+          ;; First render: call on-mount
+          (progn
+            (setf (vui-instance-mounted-p instance) t)
+            (vui--debug-log 'mount "<%s> mounted" component-name)
+            (vui--timing-start)
+            (let ((result (vui--call-lifecycle-hook
+                           "on-mount"
+                           (vui-component-def-on-mount def)
+                           instance
+                           props state)))
+              ;; If on-mount returns a function, store it as cleanup
+              (when (functionp result)
+                (setf (vui-instance-mount-cleanup instance) result)))
+            (vui--timing-record 'mount component-name))
+        ;; Re-render: call on-update only if we actually rendered
+        (when should-render-p
+          (vui--debug-log 'update "<%s> updated" component-name)
           (vui--timing-start)
-          (let ((result (vui--call-lifecycle-hook
-                         "on-mount"
-                         (vui-component-def-on-mount def)
-                         instance
-                         props state)))
-            ;; If on-mount returns a function, store it as cleanup
-            (when (functionp result)
-              (setf (vui-instance-mount-cleanup instance) result)))
-          (vui--timing-record 'mount component-name))
-      ;; Re-render: call on-update only if we actually rendered
-      (when should-render-p
-        (vui--debug-log 'update "<%s> updated" component-name)
-        (vui--timing-start)
-        (vui--call-lifecycle-hook
-         "on-update"
-         (vui-component-def-on-update def)
-         instance
-         props state prev-props prev-state)
-        (vui--timing-record 'update component-name)))
+          (vui--call-lifecycle-hook
+           "on-update"
+           (vui-component-def-on-update def)
+           instance
+           props state prev-props prev-state)
+          (vui--timing-record 'update component-name))))
     ;; Store current props/state for next render's on-update
     ;; Use copy-tree to deep copy, since plist-put modifies in place
     (setf (vui-instance-prev-props instance) (copy-tree props))
@@ -2441,12 +2457,15 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
    ;; For any vnode: render to temp buffer and measure
    ;; This is the universal approach that works for any component
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
-   ;; orphaned instances from polluting the parent's children list
+   ;; orphaned instances from polluting the parent's children list, and
+   ;; isolate side effects via vui--measuring-p / vui--pending-effects
    (t (with-temp-buffer
         (let ((vui--current-instance nil)
               (vui--root-instance nil)
               (vui--new-children nil)
-              (vui--child-index 0))
+              (vui--child-index 0)
+              (vui--measuring-p t)
+              (vui--pending-effects nil))
           (vui--render-vnode cell))
         (string-width (buffer-string))))))
 
@@ -2458,12 +2477,15 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
    ((stringp cell) cell)
    ;; For vnodes, render to temp buffer and get string
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
-   ;; orphaned instances from polluting the parent's children list
+   ;; orphaned instances from polluting the parent's children list, and
+   ;; isolate side effects via vui--measuring-p / vui--pending-effects
    (t (with-temp-buffer
         (let ((vui--current-instance nil)
               (vui--root-instance nil)
               (vui--new-children nil)
-              (vui--child-index 0))
+              (vui--child-index 0)
+              (vui--measuring-p t)
+              (vui--pending-effects nil))
           (vui--render-vnode cell))
         (buffer-string)))))
 
@@ -2960,9 +2982,19 @@ Handles :truncate and overflow:
            (pad-right (or (vui-vnode-box-padding-right vnode) 0))
            (child (vui-vnode-box-child vnode))
            (pad-left-str (make-string pad-left ?\s))
-           ;; First render to temp buffer to measure width
+           ;; First render to temp buffer to measure width.
+           ;; Isolate the measure pass like table cells do: without the
+           ;; rebindings, a component inside the box would be reconciled
+           ;; twice per render (duplicate child entries, shifted indexes
+           ;; for keyless siblings) and would mount inside the temp buffer.
            (content-width (with-temp-buffer
-                            (vui--render-vnode child)
+                            (let ((vui--current-instance nil)
+                                  (vui--root-instance nil)
+                                  (vui--new-children nil)
+                                  (vui--child-index 0)
+                                  (vui--measuring-p t)
+                                  (vui--pending-effects nil))
+                              (vui--render-vnode child))
                             (string-width (buffer-string))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
