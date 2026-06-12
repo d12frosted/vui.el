@@ -404,6 +404,11 @@ Contributions welcome! Please:
 - [[https://github.com/d12frosted/vulpea-ui][d12frosted/vulpea-ui]] — Sidebar UI for vulpea notes
 - [[https://github.com/d12frosted/vulpea-journal][d12frosted/vulpea-journal]] — Journaling system with calendar widgets
 - [[https://github.com/d12frosted/brb][d12frosted/brb]] — Barberry Garden management system
+- [[https://github.com/ahyatt/ekg][ahyatt/ekg]] — The Emacs knowledge graph, app for notes and structured data
+- [[https://github.com/ahyatt/emacs-bluesky][ahyatt/emacs-bluesky]] — Bluesky client for Emacs
+- [[https://github.com/ChristianTietze/beads.el][ChristianTietze/beads.el]] — Emacs interface to the Beads issue tracking system
+- [[https://github.com/r0man/beads.el][r0man/beads.el]] — Emacs mode for the Beads issue tracker (independent client)
+- [[https://github.com/r0man/gastown.el][r0man/gastown.el]] — Emacs mode for the Gastown agent orchestrator
 - [[https://github.com/zonuexe/unicode-inspector.el][zonuexe/unicode-inspector.el]] — Interactive Unicode character inspector
 - [[https://github.com/zonuexe/eijiro-search.el][zonuexe/eijiro-search.el]] — Interactive English-Japanese dictionary viewer
 
