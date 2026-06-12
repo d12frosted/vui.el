@@ -39,6 +39,7 @@
 ;;; Forward Declarations
 
 (defvar vui--root-instance)
+(defvar vui--inline-instances)
 
 ;;; Custom Variables
 
@@ -322,41 +323,70 @@ Groups by component and shows total time per phase."
                              (vui--inspect-instance-recursive child (1+ depth))))))
     result))
 
+(defun vui--inspectable-instances (instance)
+  "Return the instances to inspect.
+When INSTANCE is non-nil, just that one; otherwise the current
+buffer's mounted instances: the `vui-mount' root followed by any
+inline instances."
+  (if instance
+      (list instance)
+    (delq nil (cons vui--root-instance
+                    (copy-sequence vui--inline-instances)))))
+
+(defun vui--inspect-instance-location (instance)
+  "Return a short location label for INSTANCE.
+Names the buffer, plus the managed region for inline instances."
+  (let ((start (vui-instance-region-start instance))
+        (end (vui-instance-region-end instance)))
+    (format "Buffer: %s%s"
+            (or (buffer-name (vui-instance-buffer instance)) "(no buffer)")
+            (if (and start (marker-position start))
+                (format " (inline at %d..%d)"
+                        (marker-position start) (marker-position end))
+              ""))))
+
 (defun vui-inspect (&optional instance)
-  "Display the component inspector for INSTANCE or the root instance.
-Shows the component tree with props and state for each component."
+  "Display the component inspector.
+Shows the component tree with props and state for each component of
+INSTANCE - or, when INSTANCE is nil, of every instance mounted in
+the current buffer: the `vui-mount' root and any instances mounted
+via `vui-mount-inline'."
   (interactive)
-  (let ((inst (or instance vui--root-instance)))
-    (if (not inst)
+  (let ((instances (vui--inspectable-instances instance)))
+    (if (null instances)
         (message "No VUI instance mounted. Use vui-mount to mount a component.")
       (with-current-buffer (get-buffer-create vui-inspector-buffer-name)
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "VUI Component Inspector\n")
-          (insert (make-string 60 ?=) "\n\n")
-          (insert (format "Buffer: %s\n\n"
-                          (or (buffer-name (vui-instance-buffer inst))
-                              "(no buffer)")))
-          (insert "Component Tree:\n")
-          (insert (make-string 60 ?-) "\n")
-          (insert (vui--inspect-instance-recursive inst 0)))
+          (insert (make-string 60 ?=) "\n")
+          (dolist (inst instances)
+            (insert "\n" (vui--inspect-instance-location inst) "\n\n")
+            (insert "Component Tree:\n")
+            (insert (make-string 60 ?-) "\n")
+            (insert (vui--inspect-instance-recursive inst 0))))
         (goto-char (point-min))
         (special-mode)
         (display-buffer (current-buffer))))))
 
 (defun vui-inspect-state (&optional instance)
-  "Display the state viewer for INSTANCE or the root instance.
-Shows a focused view of all component state in the tree."
+  "Display the state viewer.
+Shows a focused view of all component state in INSTANCE's tree - or,
+when INSTANCE is nil, in every instance mounted in the current
+buffer: the `vui-mount' root and any instances mounted via
+`vui-mount-inline'."
   (interactive)
-  (let ((inst (or instance vui--root-instance)))
-    (if (not inst)
+  (let ((instances (vui--inspectable-instances instance)))
+    (if (null instances)
         (message "No VUI instance mounted. Use vui-mount to mount a component.")
       (with-current-buffer (get-buffer-create "*vui-state*")
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "VUI State Viewer\n")
-          (insert (make-string 60 ?=) "\n\n")
-          (vui--collect-state-recursive inst 0))
+          (insert (make-string 60 ?=) "\n")
+          (dolist (inst instances)
+            (insert "\n" (vui--inspect-instance-location inst) "\n\n")
+            (vui--collect-state-recursive inst 0)))
         (goto-char (point-min))
         (special-mode)
         (display-buffer (current-buffer))))))

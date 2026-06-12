@@ -178,6 +178,65 @@
         (when (get-buffer "*vui-inspector*")
           (kill-buffer "*vui-inspector*")))))
 
+  (it "inspects inline instances in the current buffer"
+    (vui-defcomponent inspect-inline-test ()
+      :state ((note "inline-note"))
+      :render (vui-text "[form]"))
+    (with-current-buffer (get-buffer-create "*test-inspect-inline*")
+      (insert "HOST")
+      (goto-char (point-max))
+      (vui-mount-inline (vui-component 'inspect-inline-test)))
+    (unwind-protect
+        (progn
+          (with-current-buffer "*test-inspect-inline*"
+            (vui-inspect))
+          (with-current-buffer "*vui-inspector*"
+            (let ((content (buffer-string)))
+              (expect content :to-match "inspect-inline-test")
+              (expect content :to-match "inline at"))))
+      (kill-buffer "*test-inspect-inline*")
+      (when (get-buffer "*vui-inspector*")
+        (kill-buffer "*vui-inspector*"))))
+
+  (it "lists every inline instance in the buffer"
+    (vui-defcomponent inspect-inline-a ()
+      :render (vui-text "[a]"))
+    (vui-defcomponent inspect-inline-b ()
+      :render (vui-text "[b]"))
+    (with-current-buffer (get-buffer-create "*test-inspect-multi*")
+      (insert "HOST\n")
+      (vui-mount-inline (vui-component 'inspect-inline-a) 1)
+      (vui-mount-inline (vui-component 'inspect-inline-b) (point-max)))
+    (unwind-protect
+        (progn
+          (with-current-buffer "*test-inspect-multi*"
+            (vui-inspect))
+          (with-current-buffer "*vui-inspector*"
+            (let ((content (buffer-string)))
+              (expect content :to-match "inspect-inline-a")
+              (expect content :to-match "inspect-inline-b"))))
+      (kill-buffer "*test-inspect-multi*")
+      (when (get-buffer "*vui-inspector*")
+        (kill-buffer "*vui-inspector*"))))
+
+  (it "shows inline instance state in the state viewer"
+    (vui-defcomponent inspect-inline-state ()
+      :state ((note "inline-note"))
+      :render (vui-text "[form]"))
+    (with-current-buffer (get-buffer-create "*test-inspect-state-inline*")
+      (insert "HOST")
+      (goto-char (point-max))
+      (vui-mount-inline (vui-component 'inspect-inline-state)))
+    (unwind-protect
+        (progn
+          (with-current-buffer "*test-inspect-state-inline*"
+            (vui-inspect-state))
+          (with-current-buffer "*vui-state*"
+            (expect (buffer-string) :to-match "inline-note")))
+      (kill-buffer "*test-inspect-state-inline*")
+      (when (get-buffer "*vui-state*")
+        (kill-buffer "*vui-state*"))))
+
   (it "shows nested component tree"
     (vui-defcomponent inspect-child ()
       :state ((value "inner"))
