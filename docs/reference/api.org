@@ -540,6 +540,59 @@ Fixed-width container for CHILD.
 (vui-box (vui-text "Centered") :width 30 :align :center)
 #+end_src
 
+** vui-flex
+
+#+begin_src elisp
+(vui-flex [OPTIONS...] CHILDREN...) -> vnode
+(vui-flex-item [OPTIONS...] CHILD) -> vnode
+#+end_src
+
+Horizontal row that distributes a total width among its children.
+
+| Option     | Type            | Default       | Description                          |
+|------------+-----------------+---------------+--------------------------------------|
+| =:width=   | number/fn/symbol | =fill-column= | Total width; also accepts =window= or a function resolved at render time |
+| =:spacing= | integer         | 1             | Spaces between children              |
+| =:justify= | keyword         | :start        | :start, :center, :end, :space-between (when nothing grows) |
+| =:face=    | face            | nil           | Applied beneath children's faces     |
+| =:keymap=  | keymap          | nil           | Cascades beneath children's keymaps  |
+| =:key=     | any             | nil           | Reconciliation key                   |
+
+Children render at their natural width. Wrap a child in =vui-flex-item=
+to give it a proportional share of the leftover width instead:
+
+| Option  | Type | Default | Description                                 |
+|---------+------+---------+---------------------------------------------|
+| =:grow= | int  | 1       | Proportional weight among growing children  |
+
+A =vui-flex-item= child is either a vnode (rendered inside a box padded
+to the allotted width) or a function called with the allotted width -
+which is what lets fields actually fill remaining space:
+
+#+begin_src elisp
+(vui-flex :width 'fill-column
+  (vui-text "Name:")
+  (vui-flex-item :grow 1
+    (lambda (width) (vui-field :size width :key 'name)))
+  (vui-button "Save"))
+#+end_src
+
+Flex rows subtract inherited vstack indentation from their available
+width. When the children's natural widths already exceed the total,
+everything renders at natural width and growers get zero. Rows are
+single-line by design: multi-line children are measured by their widest
+line, but the layout does not account for their extra lines.
+
+For live resizing, pass a function as =:width= and re-render from a
+=window-size-change-functions= hook:
+
+#+begin_src elisp
+(add-hook 'window-size-change-functions
+          (lambda (_frame)
+            (when-let* ((instance (vui-get-instance "*my-app*")))
+              (vui-rerender instance))))
+#+end_src
+
 ** vui-region
 
 #+begin_src elisp

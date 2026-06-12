@@ -1222,6 +1222,126 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (buffer-string) :to-equal "")))
         (kill-buffer buf)))))
 
+(describe "vui-flex"
+  (it "renders children at natural width when nothing grows"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 20
+                    (vui-text "a")
+                    (vui-text "b")))
+      (expect (buffer-string) :to-equal "a b")))
+
+  (it "gives a function grower the remaining width"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10
+                    (vui-text "ab")
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-text (make-string width ?x))))))
+      (expect (buffer-string) :to-equal "ab xxxxxxx")))
+
+  (it "computes field sizes from the allotted width"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 20
+                    (vui-text "Name:")
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-field :size width :key 'flex-f)))))
+      (expect (widget-get (car widget-field-list) :size) :to-equal 14)))
+
+  (it "distributes leftover proportionally, remainder to the last grower"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 13
+                    (vui-text "a")
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-text (make-string width ?x))))
+                    (vui-flex-item :grow 3
+                      (lambda (width) (vui-text (make-string width ?y))))))
+      ;; naturals 1, separators 2 -> leftover 10 -> shares 2 and 7+1
+      (expect (buffer-string) :to-equal "a xx yyyyyyyy")))
+
+  (it "wraps plain vnode growers in a padded box"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10
+                    (vui-flex-item :grow 1 (vui-text "hi"))
+                    (vui-text "end")))
+      (expect (buffer-string) :to-equal "hi     end")))
+
+  (it "resolves :width from a function"
+    (with-temp-buffer
+      (vui-render (vui-flex :width (lambda () 8)
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-text (make-string width ?x))))))
+      (expect (buffer-string) :to-equal "xxxxxxxx")))
+
+  (it "resolves :width from fill-column by default"
+    (with-temp-buffer
+      (let ((fill-column 6))
+        (vui-render (vui-flex
+                     (vui-flex-item :grow 1
+                       (lambda (width) (vui-text (make-string width ?x)))))))
+      (expect (buffer-string) :to-equal "xxxxxx")))
+
+  (it "degrades gracefully when content overflows the width"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 3
+                    (vui-text "abcd")
+                    (vui-text "ef")
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-text (make-string width ?x))))))
+      ;; Naturals exceed the total: render naturally, grower gets 0
+      (expect (buffer-string) :to-equal "abcd ef")))
+
+  (it "supports :justify :end"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10 :justify :end
+                    (vui-text "ab")
+                    (vui-text "cd")))
+      (expect (buffer-string) :to-equal "     ab cd")))
+
+  (it "supports :justify :center"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10 :justify :center
+                    (vui-text "ab")
+                    (vui-text "cd")))
+      (expect (buffer-string) :to-equal "  ab cd")))
+
+  (it "supports :justify :space-between"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10 :justify :space-between
+                    (vui-text "ab")
+                    (vui-text "cd")))
+      (expect (buffer-string) :to-equal "ab      cd")))
+
+  (it "subtracts inherited vstack indent from the available width"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-flex :width 10
+                      (vui-text "a")
+                      (vui-flex-item :grow 1
+                        (lambda (width) (vui-text (make-string width ?x)))))))
+      (expect (buffer-string) :to-equal "  a xxxxxx")))
+
+  (it "measures multi-line children by their widest line"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 10
+                    (vui-vstack (vui-text "abc") (vui-text "de"))
+                    (vui-flex-item :grow 1
+                      (lambda (width) (vui-text (make-string width ?x))))))
+      ;; The vstack measures 3 (widest line), not 5 (sum of lines)
+      (expect (buffer-string) :to-equal "abc\nde xxxxxx")))
+
+  (it "renders a flex-item outside vui-flex at natural width"
+    (with-temp-buffer
+      (vui-render (vui-flex-item :grow 1 (vui-text "solo")))
+      (expect (buffer-string) :to-equal "solo")))
+
+  (it "applies :face over the whole row including distributed space"
+    (with-temp-buffer
+      (vui-render (vui-flex :width 8 :face 'shadow :justify :end
+                    (vui-text "ab")))
+      (expect (buffer-string) :to-equal "      ab")
+      ;; Leading justify padding gets the face too
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 7) :to-contain 'shadow))))
+
 (describe "table faces"
   (it "renders headers in vui-table-header by default"
     (with-temp-buffer
