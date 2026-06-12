@@ -25,6 +25,7 @@ The API is stable and used in [[#built-with-vui][real-world projects]].
 - *Hooks* — vui-use-effect, vui-use-ref, vui-use-memo, vui-use-callback
 - *Context* — Share data across component trees without prop drilling
 - *Layout Primitives* — hstack, vstack, box, table, list
+- *Inline Mounting* — Ephemeral forms inside existing buffers, without taking them over
 - *Error Boundaries* — Graceful error handling with fallback UI
 - *Developer Tools* — Component inspector, timing profiler, debug logging
 
@@ -150,6 +151,7 @@ Clone this repository and add to your load-path:
 | [[file:docs/guide/08-error-handling.org][Error Handling]]  | Error boundaries                 |
 | [[file:docs/guide/09-performance.org][Performance]]     | Optimization techniques          |
 | [[file:docs/guide/10-dev-tools.org][Developer Tools]] | Inspector, profiler, debugging   |
+| [[file:docs/guide/11-inline.org][Inline Mounting]] | Ephemeral forms in existing buffers |
 | [[file:docs/reference/api.org][API Reference]]   | Complete function reference      |
 
 * Deep Dives
@@ -185,6 +187,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/06-collapsible.el][Collapsible]] — Expandable/collapsible sections, FAQ style, nested sections
 - [[file:docs/examples/07-semantic-text.el][Semantic Text]] — Headings, emphasis, status messages with customizable faces
 - [[file:docs/examples/08-typed-fields.el][Typed Fields]] — Integer/float/symbol input with validation, shopping cart, forms
+- [[file:docs/examples/09-inline-form.el][Inline Forms]] — Ephemeral, validated forms expanding at point in existing buffers
 
 * Available Components
 

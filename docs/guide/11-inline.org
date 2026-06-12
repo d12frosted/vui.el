@@ -1,0 +1,123 @@
+#+TITLE: Inline Mounting
+#+AUTHOR: vui.el Documentation
+#+OPTIONS: toc:2 num:t
+
+=vui-mount= takes over a dedicated buffer. Inline mounting does the
+opposite: it renders a component *into* an existing buffer at point,
+leaving the buffer's major mode and surrounding content untouched. It is
+designed for ephemeral, disposable UIs - a parameter form that expands
+inside a document, collects validated input, and vanishes on submit.
+
+* Quick Example
+
+#+begin_src elisp
+(vui-defcomponent confirm-form (on-answer)
+  :render
+  (vui-fragment
+   (vui-text "Proceed? ")
+   (vui-button "Yes" :on-click (lambda () (funcall on-answer t)))
+   (vui-space)
+   (vui-button "No" :on-click (lambda () (funcall on-answer nil)))
+   (vui-newline)))
+
+(defun my-confirm-at-point (callback)
+  "Expand a confirm form at point; dismiss it once answered."
+  (let ((form nil))
+    (setq form
+          (vui-mount-inline
+           (vui-component 'confirm-form
+             :on-answer (lambda (answer)
+                          (vui-unmount form)
+                          (funcall callback answer)))))))
+#+end_src
+
+Calling =my-confirm-at-point= in any buffer - an org file, a log, a
+REPL - inserts the form at point. Clicking an answer removes the form
+and leaves the buffer exactly as it was.
+
+* How It Works
+
+=vui-mount-inline= creates a *managed region* delimited by markers at the
+mount position. Everything else works like a regular mount:
+
+- The component tree has state, hooks, context, and lifecycle exactly as
+  in dedicated buffers.
+- State updates re-render through the usual scheduling, but only the
+  managed region is rewritten. Host content and other inline instances
+  are never disturbed.
+- A buffer can host any number of inline instances; each re-renders
+  independently.
+
+#+begin_src elisp
+(vui-mount-inline COMPONENT-VNODE &optional POSITION) ; -> instance
+#+end_src
+
+POSITION defaults to point and must not fall strictly inside another
+inline instance's region.
+
+* Dismissing
+
+Pass the instance to =vui-unmount=:
+
+#+begin_src elisp
+(vui-unmount form-instance)
+#+end_src
+
+This removes the region from the buffer and runs the full teardown
+lifecycle: =:on-unmount= hooks, effect cleanups, =:on-mount= cleanup
+functions, and cancellation of pending async work. The same teardown
+runs automatically when the host buffer is killed, and when =vui-mount=
+takes over a buffer that hosts inline instances.
+
+To find the instance at point - say, for a "dismiss form" keybinding:
+
+#+begin_src elisp
+(defun my-dismiss-form-at-point ()
+  (interactive)
+  (if-let* ((form (vui-inline-instance-at)))
+      (vui-unmount form)
+    (message "No form at point")))
+#+end_src
+
+* The Ephemeral Form Pattern
+
+The flow from the motivating use case (interactive documents):
+
+1. A trigger - a button, link, or command - calls =vui-mount-inline= at
+   point, capturing the returned instance.
+2. The form collects input with full vui validation (=vui-typed-field=
+   et al.).
+3. The submit handler calls =vui-unmount= on the instance, then acts on
+   the collected values - inserting results into the document, running
+   a process, opening a buffer.
+
+See =docs/examples/09-inline-form.el= for a complete, runnable
+walkthrough of this pattern.
+
+* Caveats
+
+Inline regions are ephemeral UI chrome, not document content:
+
+- *Undo*: vui keeps region rewrites out of the undo history. You cannot
+  undo a form back into existence, and undoing host-buffer edits made
+  while a form is mounted may restore positions inaccurately if the
+  form changed size in between. Keep forms short-lived.
+- *Manual edits*: text you type inside the region (outside of input
+  fields) is overwritten by the next re-render. Text typed at the
+  region's boundaries stays outside it.
+- *Saving*: if the host buffer visits a file, a mounted form's text
+  would be saved like any other text. Dismiss forms before saving, or
+  mount them in non-file buffers.
+- *Keybindings*: the host buffer's major mode stays active, so =TAB= /
+  =RET= work on the widgets themselves (fields and buttons carry their
+  own keymaps), but vui-mode conveniences like =q= and =g= are not
+  installed.
+
+* API Summary
+
+| Function                  | Description                                |
+|---------------------------+--------------------------------------------|
+| =vui-mount-inline=        | Mount a component at point/position        |
+| =vui-unmount=             | Dismiss (also accepts inline instances)    |
+| =vui-inline-instance-at=  | Find the inline instance at a position     |
+| =vui-rerender= / =vui-update= / =vui-update-props= | Drive a mounted instance |
