@@ -245,6 +245,59 @@
           (kill-buffer "*test-flush-a*")
           (kill-buffer "*test-flush-b*"))))))
 
+(describe "re-entrant rendering"
+  (it "does not corrupt the buffer when on-update sets state with immediate rendering"
+    ;; vui-render-delay nil means vui-set-state renders immediately.
+    ;; Calling it from :on-update used to start a nested render in the
+    ;; middle of the outer render walk, erasing and re-rendering the
+    ;; buffer while the outer walk kept appending siblings.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent reentrant-inner (v)
+        :state ((raw nil))
+        :on-update (unless (equal raw v) (vui-set-state :raw v))
+        :render (vui-text (format "[inner %S]" raw)))
+      (vui-defcomponent reentrant-outer (v)
+        :render (vui-fragment
+                 (vui-component 'reentrant-inner :v v)
+                 (vui-text "TAIL")))
+      (let ((instance (vui-mount (vui-component 'reentrant-outer :v 1)
+                                 "*test-reentrant*")))
+        (unwind-protect
+            (progn
+              (vui-update-props instance '(:v 2))
+              (expect (with-current-buffer "*test-reentrant*" (buffer-string))
+                      :to-equal "[inner 2]TAIL"))
+          (kill-buffer "*test-reentrant*")))))
+
+  (it "applies state set from effects with immediate rendering"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent reentrant-effect ()
+        :state ((synced nil))
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-set-state :synced t)
+                    nil)
+                  (vui-text (format "synced=%s" synced))))
+      (vui-mount (vui-component 'reentrant-effect) "*test-reentrant-effect*")
+      (unwind-protect
+          (expect (with-current-buffer "*test-reentrant-effect*"
+                    (buffer-string))
+                  :to-equal "synced=t")
+        (kill-buffer "*test-reentrant-effect*"))))
+
+  (it "signals an error instead of looping when state updates never settle"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent reentrant-runaway (v)
+        :state ((n 0))
+        ;; Unconditionally sets a fresh value: never converges
+        :on-update (vui-set-state :n (1+ n))
+        :render (vui-text (format "%s-%s" v n)))
+      (let ((instance (vui-mount (vui-component 'reentrant-runaway :v 1)
+                                 "*test-reentrant-runaway*")))
+        (unwind-protect
+            (expect (vui-update-props instance '(:v 2)) :to-throw 'error)
+          (kill-buffer "*test-reentrant-runaway*"))))))
+
 (describe "should-update"
   (it "always renders on first render"
     (let ((vui-render-delay nil)

@@ -669,8 +669,27 @@ Used for stable cursor preservation across re-renders.")
   "Counter for auto-generating async IDs within a component render.")
 
 (defvar vui--rendering-p nil
-  "Non-nil when a render is in progress.
-Used to prevent nested re-renders from `vui-use-async' resolve callbacks.")
+  "Non-nil while a render is in progress (including commit and effects).
+While set, re-render requests are queued in `vui--queued-rerenders'
+instead of starting a nested render that would erase the buffer
+mid-walk.")
+
+(defvar vui--queued-rerenders nil
+  "Roots whose re-render was requested while a render was in progress.
+Drained by `vui--flush-queued-rerenders' after the in-progress render
+commits and runs its effects.")
+
+(defvar vui--flushing-rerenders-p nil
+  "Non-nil while `vui--flush-queued-rerenders' drains the queue.
+Prevents nested drains so the top-level loop can detect runaway
+state-update cycles.")
+
+(defvar vui--rerender-queue-limit 100
+  "Maximum consecutive queued re-renders before assuming a loop.
+A lifecycle hook that unconditionally calls `vui-set-state' with a
+fresh value on every render never settles; rather than looping
+forever, vui signals an error once this many queued re-renders have
+run back-to-back.")
 
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
@@ -1878,15 +1897,10 @@ Returns a plist with :status, :data, and :error."
                           (plist-put new-entry :data data)
                           (plist-put new-entry :process nil)
                           (puthash async-id new-entry cache)
-                          ;; Trigger re-render (defer if already rendering)
+                          ;; Trigger re-render (queued automatically when
+                          ;; a render is already in progress)
                           (when root
-                            (if vui--rendering-p
-                                ;; Defer re-render to avoid nested renders
-                                (run-with-timer 0 nil
-                                                (lambda ()
-                                                  (when (buffer-live-p buffer)
-                                                    (vui--rerender-instance root))))
-                              (vui--rerender-instance root))))))
+                            (vui--rerender-instance root)))))
              ;; Create reject callback
              (reject (lambda (error-msg)
                        (when (buffer-live-p buffer)
@@ -1894,15 +1908,10 @@ Returns a plist with :status, :data, and :error."
                          (plist-put new-entry :error error-msg)
                          (plist-put new-entry :process nil)
                          (puthash async-id new-entry cache)
-                         ;; Trigger re-render (defer if already rendering)
+                         ;; Trigger re-render (queued automatically when
+                         ;; a render is already in progress)
                          (when root
-                           (if vui--rendering-p
-                               ;; Defer re-render to avoid nested renders
-                               (run-with-timer 0 nil
-                                               (lambda ()
-                                                 (when (buffer-live-p buffer)
-                                                   (vui--rerender-instance root))))
-                             (vui--rerender-instance root)))))))
+                           (vui--rerender-instance root))))))
         ;; Store entry immediately (so it's available for caching)
         (puthash async-id new-entry cache)
         ;; Call loader with resolve/reject callbacks
@@ -1954,41 +1963,69 @@ WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
             (forward-line (1- line))
             (set-window-start window (point))))))))
 
+(defun vui--flush-queued-rerenders ()
+  "Re-render roots queued while a render was in progress.
+Only the top-level call drains the queue; renders started from here
+queue further requests instead of draining recursively, so a
+state-update cycle that never settles is detected and signalled
+instead of overflowing the stack."
+  (unless vui--flushing-rerenders-p
+    (let ((vui--flushing-rerenders-p t)
+          (iterations 0))
+      (while vui--queued-rerenders
+        (when (> (cl-incf iterations) vui--rerender-queue-limit)
+          (setq vui--queued-rerenders nil)
+          (error "VUI re-renders did not settle after %d iterations \
+(state-update loop in a lifecycle hook or effect?)"
+                 vui--rerender-queue-limit))
+        (vui--rerender-instance (pop vui--queued-rerenders))))))
+
 (defun vui--rerender-instance (instance)
-  "Re-render INSTANCE and update the buffer."
-  (let ((buffer (vui-instance-buffer instance)))
-    (when (and buffer (buffer-live-p buffer))
-      (with-current-buffer buffer
-        (let* ((inhibit-read-only t)
-               (inhibit-redisplay t)  ; Prevent flicker
-               (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
-               ;; Save widget-relative cursor position
-               (cursor-info (vui--save-cursor-position))
-               ;; Save viewport (window-start) for all windows showing this buffer
-               (window-info (vui--save-window-starts buffer))
-               (vui--root-instance instance)
-               ;; Initialize render path for cursor tracking
-               (vui--render-path nil)
-               ;; Clear pending effects before render
-               (vui--pending-effects nil))
-          ;; Clear widget tracking before re-render
-          (setq widget-field-list nil)
-          (setq widget-field-new nil)
-          ;; Remove only widget overlays, preserve others (like hl-line)
-          (vui--remove-widget-overlays)
-          (erase-buffer)
-          ;; Set rendering flag to prevent nested re-renders
-          (setq vui--rendering-p t)
-          (unwind-protect
-              (vui--render-instance instance)
-            (setq vui--rendering-p nil))
-          (widget-setup)
-          ;; Restore cursor position
-          (vui--restore-cursor-position cursor-info)
-          ;; Restore viewport for all windows
-          (vui--restore-window-starts window-info)
-          ;; Run effects after commit
-          (vui--run-pending-effects))))))
+  "Re-render INSTANCE and update the buffer.
+When called while another render is already in progress (for
+example, from `vui-set-state' in a lifecycle hook or effect with
+`vui-render-delay' set to nil), the request is queued and runs after
+the in-progress render commits, instead of erasing the buffer
+mid-render."
+  (if vui--rendering-p
+      (cl-pushnew instance vui--queued-rerenders :test #'eq)
+    (let ((buffer (vui-instance-buffer instance)))
+      (when (and buffer (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (let* ((inhibit-read-only t)
+                 (inhibit-redisplay t)  ; Prevent flicker
+                 (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
+                 ;; Save widget-relative cursor position
+                 (cursor-info (vui--save-cursor-position))
+                 ;; Save viewport (window-start) for all windows showing this buffer
+                 (window-info (vui--save-window-starts buffer))
+                 (vui--root-instance instance)
+                 ;; Initialize render path for cursor tracking
+                 (vui--render-path nil)
+                 ;; Clear pending effects before render
+                 (vui--pending-effects nil))
+            ;; Clear widget tracking before re-render
+            (setq widget-field-list nil)
+            (setq widget-field-new nil)
+            ;; Remove only widget overlays, preserve others (like hl-line)
+            (vui--remove-widget-overlays)
+            (erase-buffer)
+            ;; Queue re-render requests (vui-set-state with nil delay)
+            ;; until commit and effects are done
+            (setq vui--rendering-p t)
+            (unwind-protect
+                (progn
+                  (vui--render-instance instance)
+                  (widget-setup)
+                  ;; Restore cursor position
+                  (vui--restore-cursor-position cursor-info)
+                  ;; Restore viewport for all windows
+                  (vui--restore-window-starts window-info)
+                  ;; Run effects after commit
+                  (vui--run-pending-effects))
+              (setq vui--rendering-p nil))))
+        ;; Run any re-renders requested during render/effects
+        (vui--flush-queued-rerenders)))))
 
 (defun vui-rerender (instance)
   "Re-render INSTANCE, preserving component state.
@@ -3158,16 +3195,21 @@ Returns the root instance."
         ;; Release component resources when the buffer is killed
         (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
         (let ((vui--root-instance instance))
-          ;; Set rendering flag to prevent nested re-renders from sync resolve
+          ;; Queue re-render requests (sync resolve, vui-set-state with
+          ;; nil delay) until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
-              (vui--render-instance instance)
-            (setq vui--rendering-p nil)))
-        ;; widget-setup installs before-change-functions that prevent
-        ;; editing outside of editable fields - no need for buffer-read-only
-        (widget-setup)
-        ;; Run effects after initial render
-        (vui--run-pending-effects)
+              (progn
+                (vui--render-instance instance)
+                ;; widget-setup installs before-change-functions that
+                ;; prevent editing outside of editable fields - no need
+                ;; for buffer-read-only
+                (widget-setup)
+                ;; Run effects after initial render
+                (vui--run-pending-effects))
+            (setq vui--rendering-p nil))
+          ;; Run any re-renders requested during render/effects
+          (vui--flush-queued-rerenders))
         (goto-char (point-min))))
     (switch-to-buffer buf)
     instance))
