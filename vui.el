@@ -2175,10 +2175,12 @@ For editable fields, returns the actual text area, not widget decoration."
           (cons (if (markerp from) (marker-position from) from)
                 (if (markerp to) (marker-position to) to)))))))
 
-(defun vui--save-cursor-position ()
+(defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
 Returns plist with :path, :index, :offset for widgets,
-or :line, :column for non-widget positions."
+or :line, :column for non-widget positions.
+When START and END are given, widget indexing is scoped to that
+region (used by inline instances, which only manage a region)."
   (let ((widget (widget-at (point)))
         (pos (point)))
     (if widget
@@ -2186,14 +2188,15 @@ or :line, :column for non-widget positions."
                (widget-start (car bounds))
                (offset (if widget-start (- pos widget-start) 0))
                (path (widget-get widget :vui-path))
-               (index (vui--widget-index widget)))
+               (index (vui--widget-index widget start end)))
           (list :path path :index index :offset offset))
       ;; No widget at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
-(defun vui--widget-index (widget)
-  "Get index of WIDGET among all widgets in buffer."
-  (let ((widgets (vui--collect-widgets))
+(defun vui--widget-index (widget &optional start end)
+  "Get index of WIDGET among the widgets between START and END.
+Bounds default to the whole buffer."
+  (let ((widgets (vui--collect-widgets start end))
         (idx 0))
     (catch 'found
       (dolist (w widgets)
@@ -2202,58 +2205,67 @@ or :line, :column for non-widget positions."
         (setq idx (1+ idx)))
       nil)))
 
-(defun vui--collect-widgets ()
-  "Collect all widgets in buffer in order of appearance."
-  (let ((widgets nil))
+(defun vui--collect-widgets (&optional start end)
+  "Collect widgets between START and END in order of appearance.
+Bounds default to the whole buffer."
+  (let ((widgets nil)
+        (limit (or end (point-max))))
     (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
+      (goto-char (or start (point-min)))
+      (while (< (point) limit)
         (let ((w (widget-at (point))))
           (when (and w (not (memq w widgets)))
             (push w widgets)))
         (forward-char 1)))
     (nreverse widgets)))
 
-(defun vui--find-widget-by-path (path)
-  "Find widget with matching :vui-path, or nil if not found.
-PATH is a list representing the widget's location in the component tree."
+(defun vui--find-widget-by-path (path &optional start end)
+  "Find widget with matching :vui-path between START and END.
+PATH is a list representing the widget's location in the component
+tree.  Bounds default to the whole buffer.  Returns nil if not found."
   (when path
     (catch 'found
-      (dolist (w (vui--collect-widgets))
+      (dolist (w (vui--collect-widgets start end))
         (when (equal (widget-get w :vui-path) path)
           (throw 'found w)))
       nil)))
 
-(defun vui--restore-cursor-position (cursor-info)
-  "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'."
+(defun vui--restore-cursor-position (cursor-info &optional start end)
+  "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'.
+When START and END are given, widget lookups are scoped to that
+region and fallbacks move to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
          (index (plist-get cursor-info :index))
          (offset (plist-get cursor-info :offset))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
+         (home (or start (point-min)))
          ;; Single lookup for path-based matching
-         (path-widget (and path (vui--find-widget-by-path path))))
+         (path-widget (and path (vui--find-widget-by-path path start end))))
     (cond
      ;; Try path-based matching first (most robust)
      (path-widget
       (let* ((bounds (vui--widget-bounds path-widget))
-             (start (car bounds))
-             (end (cdr bounds)))
-        (when (and start end)
+             (widget-start (car bounds))
+             (widget-end (cdr bounds)))
+        (when (and widget-start widget-end)
           ;; Cap at (1- end) because bounds are exclusive on right
-          (goto-char (max start (min (+ start offset) (1- end)))))))
+          (goto-char (max widget-start
+                          (min (+ widget-start offset) (1- widget-end)))))))
      ;; Fall back to index-based matching
      (index
-      (let* ((widgets (vui--collect-widgets))
+      (let* ((widgets (vui--collect-widgets start end))
              (widget (nth index widgets)))
         (if widget
             (let* ((bounds (vui--widget-bounds widget))
-                   (start (car bounds))
-                   (end (cdr bounds)))
-              (when (and start end)
+                   (widget-start (car bounds))
+                   (widget-end (cdr bounds)))
+              (when (and widget-start widget-end)
                 ;; Cap at (1- end) because bounds are exclusive on right
-                (goto-char (max start (min (+ start offset) (1- end))))))
-          (goto-char (point-min)))))
+                (goto-char (max widget-start
+                                (min (+ widget-start offset)
+                                     (1- widget-end))))))
+          (goto-char home))))
      ;; Fall back to line/column for non-widget positions
      ((and line column)
       (goto-char (point-min))
@@ -2261,11 +2273,13 @@ PATH is a list representing the widget's location in the component tree."
       (move-to-column column))
      ;; Last resort
      (t
-      (goto-char (point-min))))))
+      (goto-char home)))))
 
-(defun vui--remove-widget-overlays ()
-  "Remove widget-related overlays, preserving others like hl-line."
-  (dolist (ov (overlays-in (point-min) (point-max)))
+(defun vui--remove-widget-overlays (&optional start end)
+  "Remove widget-related overlays between START and END.
+Bounds default to the whole buffer.  Preserves unrelated overlays
+like hl-line."
+  (dolist (ov (overlays-in (or start (point-min)) (or end (point-max))))
     (when (or (overlay-get ov 'button)
               (overlay-get ov 'widget)
               (overlay-get ov 'field)
@@ -2283,7 +2297,13 @@ is modified."
       (let ((start (widget-field-start widget))
             (end (widget-field-end widget))
             (size (widget-get widget :size)))
-        (when (and start end (> end start))
+        (when (and start end (> end start)
+                   ;; Idempotent: the field may already show its
+                   ;; placeholder (e.g. another region in the same
+                   ;; buffer re-rendered and re-ran the setup pass)
+                   (not (seq-find (lambda (ov)
+                                    (overlay-get ov 'vui-placeholder))
+                                  (overlays-in start end))))
           (let ((overlay (make-overlay start end))
                 (hide (lambda (ov &rest _) (delete-overlay ov))))
             (overlay-put overlay 'vui-placeholder t)

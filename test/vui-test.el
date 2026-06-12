@@ -262,7 +262,51 @@ Buttons are widget.el push-buttons, so we use widget-apply."
             (vui--rerender-instance instance)
             (with-current-buffer "*test-placeholder-rerender*"
               (expect (length (vui-test--placeholder-overlays)) :to-equal 1)))
-        (kill-buffer "*test-placeholder-rerender*")))))
+        (kill-buffer "*test-placeholder-rerender*"))))
+
+  (it "setting up placeholders twice does not duplicate overlays"
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :placeholder "Name..."))
+      (expect (length (vui-test--placeholder-overlays)) :to-equal 1)
+      ;; A second pass (e.g. after another region in the same buffer
+      ;; re-rendered) must not add a second overlay to this field
+      (vui--setup-field-placeholders)
+      (expect (length (vui-test--placeholder-overlays)) :to-equal 1))))
+
+(describe "region-scoped widget helpers"
+  (it "collects only widgets within the given bounds"
+    (with-temp-buffer
+      (vui-render (vui-fragment
+                   (vui-button "one" :on-click #'ignore)
+                   (vui-newline)
+                   (vui-button "two" :on-click #'ignore)))
+      (let* ((all (vui--collect-widgets))
+             (first-end (cdr (vui--widget-bounds (car all)))))
+        (expect (length all) :to-equal 2)
+        ;; Bounded to the first line: only the first button
+        (expect (length (vui--collect-widgets (point-min) first-end))
+                :to-equal 1)
+        ;; Bounded to the rest: only the second button
+        (expect (length (vui--collect-widgets first-end (point-max)))
+                :to-equal 1))))
+
+  (it "removes widget overlays only within the given bounds"
+    (with-temp-buffer
+      (vui-render (vui-fragment
+                   (vui-field :size 5 :key 'f1)
+                   (vui-newline)
+                   (vui-field :size 5 :key 'f2)))
+      (let* ((field-overlays
+              (lambda ()
+                (seq-filter (lambda (ov) (overlay-get ov 'field))
+                            (overlays-in (point-min) (point-max)))))
+             (before (funcall field-overlays))
+             (mid (save-excursion (goto-char (point-min))
+                                  (forward-line 1)
+                                  (point))))
+        (expect (length before) :to-equal 2)
+        (vui--remove-widget-overlays (point-min) mid)
+        (expect (length (funcall field-overlays)) :to-equal 1)))))
 
 (describe "vui-field-value"
   (it "retrieves field value by key"
