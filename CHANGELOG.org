@@ -7,6 +7,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Changed
+
+- Cursor preservation no longer walks the buffer character by character to enumerate widgets on every render; widgets are collected from button overlays and the field list instead. Collection time depends on the number of widgets rather than the buffer size (about 6x faster at 300 widgets / 15k characters, with the gap growing with buffer size).
+
 ** Fixed
 
 - =vui-use-async= no longer lets a superseded load clobber the current one. When the key changed, the killed process's sentinel (or a late async result) could write the old entry back over the new pending one, surfacing a stale error or stale data and re-triggering the load on the next render. Resolve/reject callbacks from superseded loads are now ignored.

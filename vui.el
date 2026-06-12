@@ -2568,17 +2568,27 @@ Bounds default to the whole buffer."
 
 (defun vui--collect-widgets (&optional start end)
   "Collect widgets between START and END in order of appearance.
-Bounds default to the whole buffer."
-  (let ((widgets nil)
-        (limit (or end (point-max))))
-    (save-excursion
-      (goto-char (or start (point-min)))
-      (while (< (point) limit)
-        (let ((w (widget-at (point))))
-          (when (and w (not (memq w widgets)))
-            (push w widgets)))
-        (forward-char 1)))
-    (nreverse widgets)))
+Bounds default to the whole buffer.  Buttons (and other
+overlay-based widgets) are collected from their overlays and
+editable fields from `widget-field-list', instead of inspecting
+every buffer position."
+  (let ((from (or start (point-min)))
+        (to (or end (point-max)))
+        (entries nil))
+    ;; Overlay-based widgets: buttons, checkboxes, selects
+    (dolist (overlay (overlays-in from to))
+      (when-let* ((widget (overlay-get overlay 'button)))
+        (push (cons (overlay-start overlay) widget) entries)))
+    ;; Editable fields
+    (dolist (widget widget-field-list)
+      (when-let* ((pos (widget-field-start widget)))
+        (when (and (>= pos from) (< pos to))
+          (push (cons pos widget) entries))))
+    (let ((widgets nil))
+      (dolist (entry (sort entries #'car-less-than-car))
+        (unless (memq (cdr entry) widgets)
+          (push (cdr entry) widgets)))
+      (nreverse widgets))))
 
 (defun vui--find-widget-by-path (path &optional start end)
   "Find widget with matching :vui-path between START and END.
