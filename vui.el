@@ -3067,5 +3067,20 @@ Returns the root instance."
     (switch-to-buffer buf)
     instance))
 
+(defun vui-get-instance (&optional buffer)
+  "Return the root component instance mounted in BUFFER.
+BUFFER defaults to the current buffer and may be a buffer object or
+a buffer name.  Returns nil if BUFFER does not exist or has no
+mounted VUI instance.
+
+Use this together with `vui-rerender', `vui-update', and
+`vui-update-props' to drive a mounted UI from outside:
+
+  (when-let* ((instance (vui-get-instance \"*sidebar*\")))
+    (vui-update instance (list :note note)))"
+  (when-let* ((buf (get-buffer (or buffer (current-buffer)))))
+    (when (buffer-live-p buf)
+      (buffer-local-value 'vui--root-instance buf))))
+
 (provide 'vui)
 ;;; vui.el ends here

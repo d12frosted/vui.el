@@ -397,6 +397,35 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (widget-apply widget :notify widget))
         (expect new-value :to-equal "changed")))))
 
+(describe "vui-get-instance"
+  (it "returns the root instance mounted in a buffer"
+    (vui-defcomponent get-instance-test ()
+      :render (vui-text "hi"))
+    (let ((instance (vui-mount (vui-component 'get-instance-test)
+                               "*test-get-instance*")))
+      (unwind-protect
+          (progn
+            ;; By buffer name
+            (expect (vui-get-instance "*test-get-instance*") :to-be instance)
+            ;; By buffer object
+            (expect (vui-get-instance (get-buffer "*test-get-instance*"))
+                    :to-be instance)
+            ;; Defaults to current buffer
+            (with-current-buffer "*test-get-instance*"
+              (expect (vui-get-instance) :to-be instance)))
+        (kill-buffer "*test-get-instance*"))))
+
+  (it "returns nil when buffer has no mounted instance"
+    (with-temp-buffer
+      (expect (vui-get-instance) :to-be nil))
+    (let ((buf (get-buffer-create "*test-no-instance*")))
+      (unwind-protect
+          (expect (vui-get-instance buf) :to-be nil)
+        (kill-buffer buf))))
+
+  (it "returns nil for a nonexistent buffer name"
+    (expect (vui-get-instance "*test-does-not-exist*") :to-be nil)))
+
 (describe "vui-mode keymap"
   (describe "keymap hierarchy"
     (it "inherits special-mode-map bindings"
