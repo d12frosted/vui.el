@@ -189,6 +189,62 @@
                       :to-equal "42"))
           (kill-buffer "*test-flush*"))))))
 
+(describe "deferred rendering across buffers"
+  (it "does not cancel pending renders in other buffers"
+    (let ((vui-render-delay 0.01))
+      (vui-defcomponent multi-buffer-tick (name)
+        :state ((n 0))
+        :render (vui-text (format "%s:%d" name n)))
+      (let ((instance-a (vui-mount (vui-component 'multi-buffer-tick :name "A")
+                                   "*test-defer-a*"))
+            (instance-b (vui-mount (vui-component 'multi-buffer-tick :name "B")
+                                   "*test-defer-b*")))
+        (unwind-protect
+            (progn
+              ;; Update both buffers within the same delay window
+              (with-current-buffer "*test-defer-a*"
+                (let ((vui--current-instance instance-a))
+                  (vui-set-state :n 1)))
+              (with-current-buffer "*test-defer-b*"
+                (let ((vui--current-instance instance-b))
+                  (vui-set-state :n 1)))
+              ;; Let both timers fire
+              (sleep-for 0.05)
+              (expect (with-current-buffer "*test-defer-a*" (buffer-string))
+                      :to-equal "A:1")
+              (expect (with-current-buffer "*test-defer-b*" (buffer-string))
+                      :to-equal "B:1"))
+          (kill-buffer "*test-defer-a*")
+          (kill-buffer "*test-defer-b*")))))
+
+  (it "flush-sync does not cancel pending renders in other buffers"
+    (let ((vui-render-delay 0.01))
+      (vui-defcomponent flush-other-tick (name)
+        :state ((n 0))
+        :render (vui-text (format "%s:%d" name n)))
+      (let ((instance-a (vui-mount (vui-component 'flush-other-tick :name "A")
+                                   "*test-flush-a*"))
+            (instance-b (vui-mount (vui-component 'flush-other-tick :name "B")
+                                   "*test-flush-b*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer "*test-flush-a*"
+                (let ((vui--current-instance instance-a))
+                  (vui-set-state :n 1)))
+              (with-current-buffer "*test-flush-b*"
+                (let ((vui--current-instance instance-b))
+                  (vui-set-state :n 1)))
+              ;; Flush A synchronously; B's pending render must survive
+              (with-current-buffer "*test-flush-a*"
+                (vui-flush-sync))
+              (expect (with-current-buffer "*test-flush-a*" (buffer-string))
+                      :to-equal "A:1")
+              (sleep-for 0.05)
+              (expect (with-current-buffer "*test-flush-b*" (buffer-string))
+                      :to-equal "B:1"))
+          (kill-buffer "*test-flush-a*")
+          (kill-buffer "*test-flush-b*"))))))
+
 (describe "should-update"
   (it "always renders on first render"
     (let ((vui-render-delay nil)
