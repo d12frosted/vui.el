@@ -2200,24 +2200,28 @@ Returns a plist with :status, :data, and :error."
       (let* ((root vui--root-instance)
              (buffer (vui-instance-buffer instance))
              (new-entry (list :key key :status 'pending :data nil :error nil :process nil))
-             ;; Create resolve callback
+             ;; Create resolve callback.  Both callbacks ignore loads
+             ;; that have been superseded by a key change: the killed
+             ;; process's sentinel (or a late async result) would
+             ;; otherwise write the old entry back over the new pending
+             ;; one and re-trigger its load on the next render.
              (resolve (lambda (data)
-                        (when (buffer-live-p buffer)
+                        (when (and (buffer-live-p buffer)
+                                   (eq (gethash async-id cache) new-entry))
                           (plist-put new-entry :status 'ready)
                           (plist-put new-entry :data data)
                           (plist-put new-entry :process nil)
-                          (puthash async-id new-entry cache)
                           ;; Trigger re-render (queued automatically when
                           ;; a render is already in progress)
                           (when root
                             (vui--rerender-instance root)))))
              ;; Create reject callback
              (reject (lambda (error-msg)
-                       (when (buffer-live-p buffer)
+                       (when (and (buffer-live-p buffer)
+                                  (eq (gethash async-id cache) new-entry))
                          (plist-put new-entry :status 'error)
                          (plist-put new-entry :error error-msg)
                          (plist-put new-entry :process nil)
-                         (puthash async-id new-entry cache)
                          ;; Trigger re-render (queued automatically when
                          ;; a render is already in progress)
                          (when root

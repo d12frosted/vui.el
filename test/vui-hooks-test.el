@@ -586,6 +586,42 @@
           (kill-buffer "*test-memo-up2*"))))))
 
 (describe "use-async"
+  (it "ignores resolve and reject from superseded loads"
+    (let ((vui-render-delay nil)
+          (loads nil)                   ; (KEY RESOLVE REJECT) per load
+          (rendered nil))
+      (vui-defcomponent async-supersede-test (k)
+        :render (progn
+                  (setq rendered (vui-use-async k
+                                   (lambda (resolve reject)
+                                     (push (list k resolve reject) loads))))
+                  (vui-text (format "%s" (plist-get rendered :status)))))
+      (let ((instance (vui-mount (vui-component 'async-supersede-test :k 'a)
+                                 "*test-async-supersede*")))
+        (unwind-protect
+            (progn
+              (expect (length loads) :to-equal 1)
+              ;; Key changes before the first load settles
+              (vui-update-props instance '(:k b))
+              (expect (length loads) :to-equal 2)
+              (expect (plist-get rendered :status) :to-be 'pending)
+              ;; The superseded load rejecting must not clobber the new
+              ;; entry, and must not start a churn of new loads
+              (funcall (nth 2 (assq 'a loads)) "boom")
+              (vui--rerender-instance instance)
+              (expect (length loads) :to-equal 2)
+              (expect (plist-get rendered :status) :to-be 'pending)
+              (expect (plist-get rendered :error) :to-be nil)
+              ;; A late resolve from the superseded load is ignored too
+              (funcall (nth 1 (assq 'a loads)) "stale-data")
+              (vui--rerender-instance instance)
+              (expect (plist-get rendered :status) :to-be 'pending)
+              ;; The current load still settles normally
+              (funcall (nth 1 (assq 'b loads)) "fresh")
+              (expect (plist-get rendered :status) :to-be 'ready)
+              (expect (plist-get rendered :data) :to-equal "fresh"))
+          (kill-buffer "*test-async-supersede*")))))
+
   (it "returns ready status when resolve called synchronously"
     (let ((result nil))
       (vui-defcomponent async-test-sync ()

@@ -7,6 +7,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Fixed
+
+- =vui-use-async= no longer lets a superseded load clobber the current one. When the key changed, the killed process's sentinel (or a late async result) could write the old entry back over the new pending one, surfacing a stale error or stale data and re-triggering the load on the next render. Resolve/reject callbacks from superseded loads are now ignored.
+
 ** Added
 
 - =vui-flex= - horizontal layout that distributes a total width among children (#3). Children render at natural width; wrap one in =vui-flex-item= to give it a proportional share of the leftover (=:grow= weights). A function child receives its allotted width, which lets fields actually fill remaining space: =(vui-flex-item :grow 1 (lambda (w) (vui-field :size w)))=. =:width= accepts a number, =fill-column= (default), =window=, or a function resolved at render time; =:justify= (=:start= / =:center= / =:end= / =:space-between=) places leftover width when nothing grows. Flex rows subtract inherited vstack indentation from their available width, accept =:face= / =:keymap= like other containers, and degrade to natural widths when content overflows the total. Single-row by design; multi-line children are measured by their widest line.
