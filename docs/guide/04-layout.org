@@ -441,6 +441,65 @@ Lists properly inherit indent from parent containers, or you can set it directly
                           (plist-get product :id)))))
 #+end_src
 
+* Flexible Width - =vui-flex=
+
+Sometimes a child should fill whatever space is left rather than have a
+fixed width - a field stretching between a label and a button, a footer
+with content pushed to both edges. =vui-flex= renders a row with a known
+total width and distributes the leftover:
+
+#+begin_src elisp
+(vui-flex :width 'fill-column
+  (vui-text "Name:")
+  (vui-flex-item :grow 1
+    (lambda (width) (vui-field :size width :key 'name)))
+  (vui-button "Save"))
+#+end_src
+
+Children render at their natural width. A child wrapped in
+=vui-flex-item= takes a share of the leftover, proportional to its
+=:grow= weight. When the wrapped child is a *function*, it receives its
+allotted width - that is what lets a field's =:size= be computed instead
+of guessed. A plain vnode child is padded inside a box instead, which is
+enough for text and backgrounds:
+
+#+begin_src elisp
+;; Two growers splitting leftover 1:2
+(vui-flex :width 40
+  (vui-flex-item :grow 1 (vui-text "left"))
+  (vui-flex-item :grow 2 (vui-text "right")))
+#+end_src
+
+=:width= accepts a number, =fill-column= (the default), =window=, or a
+function resolved at render time. Inside an indented =vui-vstack=, the
+inherited indent is subtracted automatically - no more
+=(- fill-column 20)= arithmetic.
+
+When nothing grows, =:justify= places the leftover:
+
+#+begin_src elisp
+(vui-flex :width 'fill-column :justify :space-between
+  (vui-text "v1.2.0")
+  (vui-text "47 items"))
+;; v1.2.0                                 47 items
+#+end_src
+
+Rows are single-line by design. If the children's natural widths already
+exceed the total, everything renders at natural width and growers get
+zero - the row degrades instead of erroring.
+
+For live resizing, use a function =:width= and re-render from a
+=window-size-change-functions= hook:
+
+#+begin_src elisp
+(vui-flex :width (lambda () (- (window-width) 2)) ...)
+
+(add-hook 'window-size-change-functions
+          (lambda (_frame)
+            (when-let* ((instance (vui-get-instance "*my-app*")))
+              (vui-rerender instance))))
+#+end_src
+
 * Nesting Layouts
 
 Layouts can be nested for complex structures:
@@ -515,6 +574,7 @@ available through the =vui-region= wrapper:
 |--------------+------------------------+-------------------------------------------|
 | =vui-hstack= | Horizontal arrangement | =:spacing=, =:face=, =:keymap=            |
 | =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=, =:face=, =:keymap= |
+| =vui-flex=   | Width distribution     | =:width=, =:justify=, =vui-flex-item= =:grow= |
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
 | =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=            |
 | =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |
