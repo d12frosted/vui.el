@@ -478,15 +478,22 @@ are their own label.
 
 Horizontal layout. ARGS can start with options, then children.
 
-| Option     | Type    | Default | Description                |
-|------------+---------+---------+----------------------------|
-| =:spacing= | integer | 1       | Spaces between children    |
-| =:key=     | any     | nil     | Reconciliation key         |
+| Option     | Type    | Default | Description                                 |
+|------------+---------+---------+---------------------------------------------|
+| =:spacing= | integer | 1       | Spaces between children                     |
+| =:face=    | face    | nil     | Applied beneath children's faces (see =vui-region=) |
+| =:keymap=  | keymap  | nil     | Cascades beneath children's keymaps (see =vui-region=) |
+| =:key=     | any     | nil     | Reconciliation key                          |
 
 #+begin_src elisp
 (vui-hstack :spacing 2
             (vui-text "Label:")
             (vui-field :size 10))
+
+;; Highlight a whole row, separators included
+(vui-hstack :face 'highlight
+            (vui-text "item")
+            (vui-button "open" :on-click #'my-open))
 #+end_src
 
 ** vui-vstack
@@ -497,11 +504,13 @@ Horizontal layout. ARGS can start with options, then children.
 
 Vertical layout. ARGS can start with options, then children.
 
-| Option     | Type    | Default | Description                    |
-|------------+---------+---------+--------------------------------|
-| =:spacing= | integer | 0       | Blank lines between children   |
-| =:indent=  | integer | 0       | Left indent in spaces          |
-| =:key=     | any     | nil     | Reconciliation key             |
+| Option     | Type    | Default | Description                                 |
+|------------+---------+---------+---------------------------------------------|
+| =:spacing= | integer | 0       | Blank lines between children                |
+| =:indent=  | integer | 0       | Left indent in spaces                       |
+| =:face=    | face    | nil     | Applied beneath children's faces (see =vui-region=) |
+| =:keymap=  | keymap  | nil     | Cascades beneath children's keymaps (see =vui-region=) |
+| =:key=     | any     | nil     | Reconciliation key                          |
 
 #+begin_src elisp
 (vui-vstack :spacing 1 :indent 2
@@ -517,13 +526,15 @@ Vertical layout. ARGS can start with options, then children.
 
 Fixed-width container for CHILD.
 
-| Property         | Type    | Default | Description             |
-|------------------+---------+---------+-------------------------|
-| =:width=         | integer | 20      | Width in characters     |
-| =:align=         | keyword | :left   | :left, :center, :right  |
-| =:padding-left=  | integer | 0       | Left padding            |
-| =:padding-right= | integer | 0       | Right padding           |
-| =:key=           | any     | nil     | Reconciliation key      |
+| Property         | Type    | Default | Description                                 |
+|------------------+---------+---------+---------------------------------------------|
+| =:width=         | integer | 20      | Width in characters                         |
+| =:align=         | keyword | :left   | :left, :center, :right                      |
+| =:padding-left=  | integer | 0       | Left padding                                |
+| =:padding-right= | integer | 0       | Right padding                               |
+| =:face=          | face    | nil     | Applied beneath child's faces (see =vui-region=) |
+| =:keymap=        | keymap  | nil     | Cascades beneath child's keymaps (see =vui-region=) |
+| =:key=           | any     | nil     | Reconciliation key                          |
 
 #+begin_src elisp
 (vui-box (vui-text "Centered") :width 30 :align :center)
@@ -678,6 +689,8 @@ Render a list of items with proper reconciliation.
 - =:vertical= :: If non-nil (default t), returns a =vstack=; otherwise returns an =hstack=
 - =:indent= :: Left indentation in spaces (default 0)
 - =:spacing= :: Blank lines between items for vertical (default 0), spaces for horizontal (default 1)
+- =:face= :: Applied beneath the items' own faces (see =vui-region=)
+- =:keymap= :: Cascades beneath the items' own keymaps (see =vui-region=)
 
 Returns a =vstack= for vertical lists, =hstack= for horizontal lists. This ensures
 proper indent propagation when nested inside other layout containers.

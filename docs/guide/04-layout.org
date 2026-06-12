@@ -467,15 +467,58 @@ Layouts can be nested for complex structures:
                          (vui-button "View Report"))))
 #+end_src
 
+* Styling Containers - =:face= and =:keymap=
+
+Stacks, boxes, and lists accept =:face= and =:keymap= options that apply
+to their whole rendered extent - including the whitespace the container
+itself inserts (separators, padding, indentation), which cannot be
+styled child-by-child.
+
+The face is layered *beneath* the children's own faces, so children
+keep their styling while everything else gets the container face. This
+makes selected-row highlighting one prop:
+
+#+begin_src elisp
+(vui-list items
+          (lambda (item)
+            (vui-hstack
+             :face (when (equal item selected) 'highlight)
+             (vui-text (item-name item))
+             (vui-button "open" :on-click (lambda () (open item)))))
+          #'item-id)
+#+end_src
+
+The keymap cascades innermost-first: a button's own keymap wins for
+keys it defines (default buttons keep =RET= / =TAB=), unbound keys fall
+through to the container's map, then to the buffer's usual keymaps.
+Input fields keep their own keymap.
+
+#+begin_src elisp
+(vui-vstack :keymap my-section-map
+            (vui-text "Section content")
+            (vui-button "Action" :keymap my-button-map))
+;; On the button: my-button-map > my-section-map > vui-mode-map
+;; On the text:   my-section-map > vui-mode-map
+#+end_src
+
+For arbitrary content that is not a container, the same styling is
+available through the =vui-region= wrapper:
+
+#+begin_src elisp
+(vui-region :face 'highlight :keymap my-map
+  (vui-fragment child1 child2))
+#+end_src
+
 * Summary
 
 | Primitive    | Purpose                | Key Props                                 |
 |--------------+------------------------+-------------------------------------------|
-| =vui-hstack= | Horizontal arrangement | =:spacing=                                |
-| =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=                     |
+| =vui-hstack= | Horizontal arrangement | =:spacing=, =:face=, =:keymap=            |
+| =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=, =:face=, =:keymap= |
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
 | =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=            |
 | =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |
+| =vui-region= | Styling wrapper        | =:face=, =:keymap=                        |
 
 * Try It Yourself
 

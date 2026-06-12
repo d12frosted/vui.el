@@ -362,6 +362,105 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (expect (lookup-key map (kbd "RET"))
                   :to-be 'widget-button-press))))))
 
+(describe "container :face and :keymap"
+  (it "vstack :face covers child text and its own indentation"
+    (with-temp-buffer
+      (vui-render (vui-vstack :face 'shadow :indent 2
+                    (vui-text "a")
+                    (vui-text "b")))
+      (expect (buffer-string) :to-equal "  a\n  b")
+      ;; Indentation inserted by the vstack itself
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      ;; Child text
+      (expect (vui-layout-test--faces-at 3) :to-contain 'shadow)))
+
+  (it "hstack :face covers separator spacing, child faces win"
+    (with-temp-buffer
+      (vui-render (vui-hstack :face 'shadow
+                    (vui-text "a")
+                    (vui-text "b" :face 'bold)))
+      (expect (buffer-string) :to-equal "a b")
+      ;; Separator space inserted by the hstack
+      (expect (vui-layout-test--faces-at 2) :to-contain 'shadow)
+      ;; Styled child keeps its face on top
+      (let ((faces (vui-layout-test--faces-at 3)))
+        (expect faces :to-contain 'bold)
+        (expect (< (cl-position 'bold faces) (cl-position 'shadow faces))
+                :to-be-truthy))))
+
+  (it "hstack :keymap applies to text and cascades under buttons"
+    (with-temp-buffer
+      (let ((row-km (make-sparse-keymap)))
+        (define-key row-km (kbd "o") #'forward-char)
+        (define-key row-km (kbd "RET") #'ignore)
+        (vui-render (vui-hstack :keymap row-km
+                      (vui-text "item")
+                      (vui-button "open" :on-click #'ignore)))
+        ;; Plain text gets the row keymap
+        (expect (get-text-property 1 'keymap) :to-be row-km)
+        ;; The button keeps RET, with the row map reachable underneath
+        (let ((map (get-char-property 7 'keymap)))
+          (expect (lookup-key map (kbd "RET")) :to-be 'widget-button-press)
+          (expect (lookup-key map (kbd "o")) :to-be 'forward-char)))))
+
+  (it "box :face covers alignment and box padding"
+    (with-temp-buffer
+      (vui-render (vui-box (vui-text "x")
+                    :width 5 :align :center :padding-left 1))
+      (expect (buffer-string) :to-equal "  x  ")
+      ;; Box's own left padding is unstyled without :face
+      (expect (vui-layout-test--faces-at 1) :to-equal nil)
+      (vui-render (vui-box (vui-text "x")
+                    :face 'shadow :width 5 :align :center :padding-left 1))
+      ;; Padding, content, and alignment fill all styled
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 3) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 5) :to-contain 'shadow)))
+
+  (it "preserves a nested vstack's face through indent propagation"
+    (with-temp-buffer
+      ;; The outer vstack recreates the inner vnode to accumulate
+      ;; indent; the inner :face must survive that copy
+      (vui-render (vui-vstack :indent 2
+                    (vui-vstack :face 'shadow
+                      (vui-text "a"))))
+      (expect (buffer-string) :to-equal "  a")
+      (expect (vui-layout-test--faces-at 3) :to-contain 'shadow)))
+
+  (it "preserves a nested hstack's face through indent propagation"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack :face 'shadow
+                      (vui-text "a")
+                      (vui-text "b"))))
+      (expect (buffer-string) :to-equal "  a b")
+      (expect (vui-layout-test--faces-at 4) :to-contain 'shadow)))
+
+  (it "preserves a vstack's face inside an hstack with indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack
+                     (vui-text "k:")
+                     (vui-vstack :face 'shadow
+                       (vui-text "v1")
+                       (vui-text "v2")))))
+      (expect (buffer-string) :to-equal "  k: v1\n  v2")
+      ;; Both lines of the inner vstack carry its face, including the
+      ;; continuation indent it inserts itself
+      (expect (vui-layout-test--faces-at 6) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 12) :to-contain 'shadow)))
+
+  (it "vui-list passes :face and :keymap to the stack it returns"
+    (with-temp-buffer
+      (let ((km (make-sparse-keymap)))
+        (vui-render (vui-list '("a" "b") #'vui-text
+                              :face 'shadow :keymap km))
+        (expect (buffer-string) :to-equal "a\nb")
+        (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+        ;; The newline separator belongs to the list too
+        (expect (vui-layout-test--faces-at 2) :to-contain 'shadow)
+        (expect (get-text-property 1 'keymap) :to-be km)))))
+
 (describe "vui-list"
   (it "renders items vertically by default"
     (with-temp-buffer

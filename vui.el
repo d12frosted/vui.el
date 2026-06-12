@@ -517,7 +517,9 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   "Horizontal layout container."
   children   ; List of child vnodes
   spacing    ; Spaces between children (default 1)
-  indent)    ; Inherited indent from parent (for multi-line children)
+  indent     ; Inherited indent from parent (for multi-line children)
+  face       ; Face applied beneath the children's own faces
+  keymap)    ; Keymap cascading beneath the children's own keymaps
 
 ;; Layout: vertical stack
 (cl-defstruct (vui-vnode-vstack (:include vui-vnode)
@@ -526,7 +528,9 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   children   ; List of child vnodes
   spacing    ; Blank lines between children (default 0)
   indent     ; Left indent for all children (default 0)
-  skip-first-indent)  ; When t, skip indent for first child (used inside hstack)
+  skip-first-indent  ; When t, skip indent for first child (used inside hstack)
+  face       ; Face applied beneath the children's own faces
+  keymap)    ; Keymap cascading beneath the children's own keymaps
 
 ;; Layout: fixed-width box
 (cl-defstruct (vui-vnode-box (:include vui-vnode)
@@ -536,7 +540,9 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   width      ; Width in characters
   align      ; :left, :center, :right
   padding-left
-  padding-right)
+  padding-right
+  face       ; Face applied beneath the child's own faces
+  keymap)    ; Keymap cascading beneath the child's own keymaps
 
 ;; Layout: table
 (cl-defstruct (vui-vnode-table (:include vui-vnode)
@@ -982,12 +988,18 @@ Usage: (vui-select :value \"apple\"
 ARGS can start with keyword options, followed by children.
 Options: :spacing N (spaces between children, default 1)
          :indent N (inherited indent, usually set by parent vstack)
+         :face FACE (applied beneath the children's own faces,
+                     covering separator spacing too)
+         :keymap MAP (cascades beneath the children's own keymaps,
+                      see `vui-region')
          :key KEY (for reconciliation)
 
 Usage: (vui-hstack child1 child2 child3)
        (vui-hstack :spacing 2 child1 child2)"
   (let ((spacing 1)
         (indent 0)
+        (face nil)
+        (keymap nil)
         (key nil)
         (children nil))
     ;; Parse keyword arguments
@@ -995,6 +1007,8 @@ Usage: (vui-hstack child1 child2 child3)
       (pcase (pop args)
         (:spacing (setq spacing (pop args)))
         (:indent (setq indent (pop args)))
+        (:face (setq face (pop args)))
+        (:keymap (setq keymap (pop args)))
         (:key (setq key (pop args)))))
     ;; Remaining args are children
     (setq children (remq nil (flatten-list args)))
@@ -1002,6 +1016,8 @@ Usage: (vui-hstack child1 child2 child3)
      :children children
      :spacing spacing
      :indent indent
+     :face face
+     :keymap keymap
      :key key)))
 
 (defun vui-vstack (&rest args)
@@ -1009,6 +1025,10 @@ Usage: (vui-hstack child1 child2 child3)
 ARGS can start with keyword options, followed by children.
 Options: :spacing N (blank lines between children, default 0)
          :indent N (left indent in spaces, default 0)
+         :face FACE (applied beneath the children's own faces,
+                     covering indentation and blank lines too)
+         :keymap MAP (cascades beneath the children's own keymaps,
+                      see `vui-region')
          :key KEY (for reconciliation)
 
 Usage: (vui-vstack child1 child2 child3)
@@ -1016,18 +1036,24 @@ Usage: (vui-vstack child1 child2 child3)
        (vui-vstack :indent 2 child1 child2)"
   (let ((spacing 0)
         (indent 0)
+        (face nil)
+        (keymap nil)
         (key nil)
         (children nil))
     (while (and args (keywordp (car args)))
       (pcase (pop args)
         (:spacing (setq spacing (pop args)))
         (:indent (setq indent (pop args)))
+        (:face (setq face (pop args)))
+        (:keymap (setq keymap (pop args)))
         (:key (setq key (pop args)))))
     (setq children (remq nil (flatten-list args)))
     (vui-vnode-vstack--create
      :children children
      :spacing spacing
      :indent indent
+     :face face
+     :keymap keymap
      :key key)))
 
 (defun vui-box (child &rest props)
@@ -1037,6 +1063,10 @@ PROPS is a plist accepting:
   :align ALIGN - :left, :center, or :right (default :left)
   :padding-left N - left padding (default 0)
   :padding-right N - right padding (default 0)
+  :face FACE - applied beneath the child's own faces, covering the
+               box's padding and alignment fill too
+  :keymap MAP - cascades beneath the child's own keymaps, see
+                `vui-region'
   :key KEY - for reconciliation
 
 Usage: (vui-box (vui-text \"hello\") :width 20 :align :center)"
@@ -1047,6 +1077,8 @@ Usage: (vui-box (vui-text \"hello\") :width 20 :align :center)"
    :align (or (plist-get props :align) :left)
    :padding-left (or (plist-get props :padding-left) 0)
    :padding-right (or (plist-get props :padding-right) 0)
+   :face (plist-get props :face)
+   :keymap (plist-get props :keymap)
    :key (plist-get props :key)))
 
 (defun vui-table (&rest args)
@@ -1212,6 +1244,10 @@ function, a keyword in that position simply starts the options:
   :spacing N     - blank lines between items for vertical lists
                    (default 0), or spaces between items for
                    horizontal lists (default 1)
+  :face FACE     - applied beneath the items' own faces, covering
+                   separators and indentation too
+  :keymap MAP    - cascades beneath the items' own keymaps, see
+                   `vui-region'
 
 This ensures proper reconciliation when items are added, removed, or
 reordered.
@@ -1232,18 +1268,21 @@ Usage:
     (when (and args (not (keywordp (car args))))
       (setq key-fn (pop args)))
     (cl-loop for (option _value) on args by #'cddr
-             unless (memq option '(:vertical :indent :spacing))
+             unless (memq option '(:vertical :indent :spacing :face :keymap))
              do (error "vui-list: unknown option %S" option))
     (vui--list-1 items render-fn key-fn
                  (if (plist-member args :vertical)
                      (plist-get args :vertical)
                    t)
                  (or (plist-get args :indent) 0)
-                 (plist-get args :spacing))))
+                 (plist-get args :spacing)
+                 (plist-get args :face)
+                 (plist-get args :keymap))))
 
-(defun vui--list-1 (items render-fn key-fn vertical indent spacing)
+(defun vui--list-1 (items render-fn key-fn vertical indent spacing face keymap)
   "Build the vnode for `vui-list'.
-ITEMS, RENDER-FN, KEY-FN, VERTICAL, INDENT, SPACING as in `vui-list'."
+ITEMS, RENDER-FN, KEY-FN, VERTICAL, INDENT, SPACING, FACE, KEYMAP as
+in `vui-list'."
   (let* ((key-fn (or key-fn #'identity))
          (children (let ((result nil))
                      (dolist (item items (nreverse result))
@@ -1259,11 +1298,15 @@ ITEMS, RENDER-FN, KEY-FN, VERTICAL, INDENT, SPACING as in `vui-list'."
         (vui-vnode-vstack--create
          :children children
          :indent indent
-         :spacing (or spacing 0))
+         :spacing (or spacing 0)
+         :face face
+         :keymap keymap)
       (vui-vnode-hstack--create
        :children children
        :indent indent
-       :spacing (or spacing 1)))))
+       :spacing (or spacing 1)
+       :face face
+       :keymap keymap))))
 
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.
@@ -3176,6 +3219,7 @@ Handles :truncate and overflow:
     (let ((spacing (or (vui-vnode-hstack-spacing vnode) 1))
           (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
+          (container-start (point))
           (space-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
@@ -3197,6 +3241,8 @@ Handles :truncate and overflow:
                 :spacing (vui-vnode-vstack-spacing child)
                 :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
                 :skip-first-indent t
+                :face (vui-vnode-vstack-face child)
+                :keymap (vui-vnode-vstack-keymap child)
                 :key (vui-vnode-vstack-key child)))
             (vui--render-vnode child))
           ;; Check if child actually rendered anything
@@ -3204,7 +3250,10 @@ Handles :truncate and overflow:
               (setq prev-rendered-p t)
             ;; Child rendered nothing - remove the separator we added
             (delete-region sep-start (point))))
-        (cl-incf child-idx))))
+        (cl-incf child-idx))
+      (vui--apply-region-props container-start (point)
+                               (vui-vnode-hstack-face vnode)
+                               (vui-vnode-hstack-keymap vnode))))
 
    ;; Vertical stack
    ;; Joins children with \n. newline children render as empty string,
@@ -3216,6 +3265,7 @@ Handles :truncate and overflow:
           (indent (or (vui-vnode-vstack-indent vnode) 0))
           (skip-first-indent (vui-vnode-vstack-skip-first-indent vnode))
           (children (vui-vnode-vstack-children vnode))
+          (container-start (point))
           (indent-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
@@ -3251,6 +3301,8 @@ Handles :truncate and overflow:
                   :spacing (vui-vnode-vstack-spacing child)
                   :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
                   :skip-first-indent skip-this-indent
+                  :face (vui-vnode-vstack-face child)
+                  :keymap (vui-vnode-vstack-keymap child)
                   :key (vui-vnode-vstack-key child))))
                ;; Propagate indent to hstacks (for multi-line children inside hstack)
                ((and (vui-vnode-hstack-p child) (> indent 0))
@@ -3263,6 +3315,8 @@ Handles :truncate and overflow:
                   :children (vui-vnode-hstack-children child)
                   :spacing (vui-vnode-hstack-spacing child)
                   :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
+                  :face (vui-vnode-hstack-face child)
+                  :keymap (vui-vnode-hstack-keymap child)
                   :key (vui-vnode-hstack-key child))))
                ;; Tables: render with indent, then add indent after internal newlines
                ((and (vui-vnode-table-p child) (> indent 0))
@@ -3287,7 +3341,10 @@ Handles :truncate and overflow:
                   (setq prev-rendered-p t)
                 ;; Child rendered nothing - remove separator and any indent we added
                 (delete-region sep-start (point))))))
-        (cl-incf child-idx))))
+        (cl-incf child-idx))
+      (vui--apply-region-props container-start (point)
+                               (vui-vnode-vstack-face vnode)
+                               (vui-vnode-vstack-keymap vnode))))
 
    ;; Fixed-width box
    ((vui-vnode-box-p vnode)
@@ -3296,6 +3353,7 @@ Handles :truncate and overflow:
            (pad-left (or (vui-vnode-box-padding-left vnode) 0))
            (pad-right (or (vui-vnode-box-padding-right vnode) 0))
            (child (vui-vnode-box-child vnode))
+           (box-start (point))
            (pad-left-str (make-string pad-left ?\s))
            ;; First render to temp buffer to measure width.
            ;; Isolate the measure pass like table cells do: without the
@@ -3338,7 +3396,10 @@ Handles :truncate and overflow:
             (while (search-forward "\n" nil t)
               (insert pad-left-str)))))
       ;; Insert right padding
-      (insert (make-string pad-right ?\s))))
+      (insert (make-string pad-right ?\s))
+      (vui--apply-region-props box-start (point)
+                               (vui-vnode-box-face vnode)
+                               (vui-vnode-box-keymap vnode))))
 
    ;; Table layout
    ((vui-vnode-table-p vnode)
