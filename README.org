@@ -24,7 +24,7 @@ The API is stable and used in [[#built-with-vui][real-world projects]].
 - *Reactive State* — Automatic re-rendering when state changes
 - *Hooks* — vui-use-effect, vui-use-ref, vui-use-memo, vui-use-callback
 - *Context* — Share data across component trees without prop drilling
-- *Layout Primitives* — hstack, vstack, box, table, list
+- *Layout Primitives* — hstack, vstack, flex, box, table, list
 - *Inline Mounting* — Ephemeral forms inside existing buffers, without taking them over
 - *Error Boundaries* — Graceful error handling with fallback UI
 - *Developer Tools* — Component inspector, timing profiler, debug logging
@@ -206,13 +206,14 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
 ** Layout
 
-| Component    | Description                            |
-|--------------+----------------------------------------|
-| =vui-hstack= | Horizontal layout with spacing         |
-| =vui-vstack= | Vertical layout with spacing/indent    |
-| =vui-box=    | Fixed-width container with alignment   |
-| =vui-table=  | Table with headers, borders, alignment |
-| =vui-list=   | Dynamic list with key-based reconcile  |
+| Component    | Description                             |
+|--------------+-----------------------------------------|
+| =vui-hstack= | Horizontal layout with spacing          |
+| =vui-vstack= | Vertical layout with spacing/indent     |
+| =vui-flex=   | Row distributing width among children   |
+| =vui-box=    | Fixed-width container with alignment    |
+| =vui-table=  | Table with headers, borders, alignment  |
+| =vui-list=   | Dynamic list with key-based reconcile   |
 
 ** Higher-Level Components (vui-components.el)
 
