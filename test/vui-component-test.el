@@ -72,7 +72,26 @@
 
   (it "accepts children"
     (let ((vnode (vui-component 'some-comp :children (list (vui-text "child")))))
-      (expect (vui-vnode-component-children vnode) :to-be-truthy))))
+      (expect (vui-vnode-component-children vnode) :to-be-truthy)))
+
+  (it "keeps props that appear after :children"
+    (let ((vnode (vui-component 'some-comp
+                                :children (list (vui-text "child"))
+                                :name "X")))
+      (expect (plist-get (vui-vnode-component-props vnode) :name)
+              :to-equal "X")
+      (expect (length (vui-vnode-component-children vnode)) :to-equal 1)))
+
+  (it "keeps props on both sides of :children"
+    (let ((vnode (vui-component 'some-comp
+                                :before 1
+                                :children (list (vui-text "child"))
+                                :after 2
+                                :key 'k)))
+      (expect (plist-get (vui-vnode-component-props vnode) :before) :to-equal 1)
+      (expect (plist-get (vui-vnode-component-props vnode) :after) :to-equal 2)
+      ;; :key is extracted from props wherever it appears
+      (expect (vui-vnode-key vnode) :to-equal 'k))))
 
 (describe "component rendering"
   (it "renders a simple component"

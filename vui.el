@@ -1180,7 +1180,8 @@ Usage:
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.
 TYPE is a symbol naming a defined component.
-PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
+PROPS-AND-CHILDREN is a plist of props; the :children entry holds the
+child vnodes and may appear anywhere in the plist."
   (declare (indent 1))
   (let ((props nil)
         (children nil)
@@ -1188,10 +1189,9 @@ PROPS-AND-CHILDREN is a plist of props, optionally ending with :children."
     ;; Parse props and children
     (while rest
       (if (eq (car rest) :children)
-          (setq children (cadr rest)
-                rest nil)
-        (setq props (append props (list (car rest) (cadr rest)))
-              rest (cddr rest))))
+          (setq children (cadr rest))
+        (setq props (append props (list (car rest) (cadr rest)))))
+      (setq rest (cddr rest)))
     (vui-vnode-component--create
      :type type
      :props props
