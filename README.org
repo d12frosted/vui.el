@@ -106,7 +106,7 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 
 (vui-defcomponent themed-button (label)
   :render
-  (let ((theme (vui-use-theme)))
+  (let ((theme (use-theme)))
     (vui-button label
                 :face (if (eq theme 'dark)
                           'custom-button-pressed
@@ -329,7 +329,7 @@ Define aliases in your init file:
 
 * Requirements
 
-- Emacs 27.1 or later
+- Emacs 29.1 or later
 - Lexical binding enabled in your Elisp files (=;;; -*- lexical-binding: t -*-=)
 - Built-in =widget.el= (included with Emacs)
 
