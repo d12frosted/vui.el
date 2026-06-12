@@ -83,6 +83,18 @@ ERROR is the error object, and CONTEXT is additional information.")
   "Face for placeholder text shown in empty fields."
   :group 'vui)
 
+(defface vui-table-header '((t :inherit bold))
+  "Face for table header cells.
+Override per table with the :header-face property of `vui-table'."
+  :group 'vui)
+
+(defface vui-table-border '((t nil))
+  "Face for table border and separator characters.
+Has no attributes by default; customize it to theme all table
+borders, or override per table with the :border-face property of
+`vui-table'."
+  :group 'vui)
+
 ;;; Timing Instrumentation
 
 (defcustom vui-timing-enabled nil
@@ -550,7 +562,9 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   "Table layout with rows and columns."
   columns     ; List of column specs (plists with :header :width :align :min-width)
   rows        ; List of rows, each row is list of cell content (strings or vnodes)
-  border)     ; nil, :ascii, :unicode
+  border      ; nil, :ascii, :unicode
+  header-face ; Face for header cells (default `vui-table-header')
+  border-face); Face for border characters (default `vui-table-border')
 
 ;; Styling wrapper: face/keymap over the children's extent
 (cl-defstruct (vui-vnode-region (:include vui-vnode)
@@ -1093,10 +1107,12 @@ Column spec properties (each column is a plist):
   :align ALIGN    - :left (default), :center, :right
 
 Table properties:
-  :columns LIST   - List of column specs
-  :rows LIST      - List of rows, each row is a list of cell contents
-  :border MODE    - nil (default), :ascii, :unicode
-  :key KEY        - for reconciliation
+  :columns LIST      - List of column specs
+  :rows LIST         - List of rows, each row is a list of cell contents
+  :border MODE       - nil (default), :ascii, :unicode
+  :header-face FACE  - face for header cells (default `vui-table-header')
+  :border-face FACE  - face for border characters (default `vui-table-border')
+  :key KEY           - for reconciliation
 
 Cell contents can be strings or vnodes.
 
@@ -1116,6 +1132,8 @@ Example:
      :columns columns
      :rows rows
      :border border
+     :header-face (plist-get args :header-face)
+     :border-face (plist-get args :border-face)
      :key key)))
 
 (defun vui-region (&rest args)
@@ -2898,12 +2916,13 @@ Width calculation:
                                          max-w)))))))
     (append widths nil)))
 
-(defun vui--render-table-border (col-widths border-style position &optional cell-padding)
+(defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face)
   "Render a table border line.
 COL-WIDTHS is list of column widths.
 BORDER-STYLE is :ascii or :unicode.
 POSITION is \\='top, \\='bottom, or \\='separator.
-CELL-PADDING is the padding added to each side of cell content."
+CELL-PADDING is the padding added to each side of cell content.
+BORDER-FACE overrides `vui-table-border' for the border characters."
   (let* ((chars (pcase border-style
                   (:ascii
                    (pcase position
@@ -2919,7 +2938,8 @@ CELL-PADDING is the padding added to each side of cell content."
          (fill (nth 1 chars))
          (mid (nth 2 chars))
          (right (or (nth 3 chars) (nth 0 chars)))
-         (padding (or cell-padding 0)))
+         (padding (or cell-padding 0))
+         (start (point)))
     (insert left)
     (cl-loop for width in col-widths
              for i from 0
@@ -2928,9 +2948,10 @@ CELL-PADDING is the padding added to each side of cell content."
                   (if (< i (1- (length col-widths)))
                       (insert mid)
                     (insert right))))
+    (put-text-property start (point) 'face (or border-face 'vui-table-border))
     (insert "\n")))
 
-(defun vui--render-table-row (cells col-widths columns border-style header-p &optional row-idx)
+(defun vui--render-table-row (cells col-widths columns border-style header-p &optional row-idx header-face border-face)
   "Render a table row.
 CELLS is list of cell contents.
 COL-WIDTHS is list of column widths.
@@ -2938,19 +2959,22 @@ COLUMNS is list of column specs.
 BORDER-STYLE is nil, :ascii, or :unicode.
 HEADER-P indicates if this is a header row.
 ROW-IDX is the row index for cursor tracking (nil for headers).
+HEADER-FACE overrides `vui-table-header' for header cells.
+BORDER-FACE overrides `vui-table-border' for column separators.
 
 Handles :truncate and overflow:
 - If content > width and :truncate t: truncate with ...
 - If content > width and no :truncate: show up to width, use ¦ separator"
-  (let ((sep (pcase border-style
-               (:ascii "|")
-               (:unicode "│")
-               (_ " ")))
-        (overflow-sep (pcase border-style
-                        (:ascii "¦")
-                        (:unicode "¦")
-                        (_ " ")))
-        (cell-padding (if border-style 1 0)))
+  (let* ((sep-face (or border-face 'vui-table-border))
+         (sep (pcase border-style
+                (:ascii (propertize "|" 'face sep-face))
+                (:unicode (propertize "│" 'face sep-face))
+                (_ " ")))
+         (overflow-sep (pcase border-style
+                         (:ascii (propertize "¦" 'face sep-face))
+                         (:unicode (propertize "¦" 'face sep-face))
+                         (_ " ")))
+         (cell-padding (if border-style 1 0)))
     (when border-style
       (insert sep))
     (cl-loop for cell in cells
@@ -2961,7 +2985,7 @@ Handles :truncate and overflow:
                        (truncate-p (plist-get col :truncate))
                        (grow (plist-get col :grow))
                        (declared-width (plist-get col :width))
-                       (face (when header-p 'bold))
+                       (face (when header-p (or header-face 'vui-table-header)))
                        ;; Get content as string (works for both vnodes and strings)
                        (content (vui--cell-to-string cell))
                        (content-width (string-width content))
@@ -3406,6 +3430,8 @@ Handles :truncate and overflow:
     (let* ((columns (vui-vnode-table-columns vnode))
            (rows (vui-vnode-table-rows vnode))
            (border (vui-vnode-table-border vnode))
+           (header-face (vui-vnode-table-header-face vnode))
+           (border-face (vui-vnode-table-border-face vnode))
            ;; Calculate column widths
            (col-widths (vui--calculate-table-widths columns rows)))
       ;; Cell padding when borders are enabled
@@ -3414,26 +3440,32 @@ Handles :truncate and overflow:
         ;; Render header if any column has one
         (when (cl-some (lambda (c) (plist-get c :header)) columns)
           (when border
-            (vui--render-table-border col-widths border 'top cell-padding))
+            (vui--render-table-border col-widths border 'top cell-padding
+                                      border-face))
           (vui--render-table-row
            (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
-           col-widths columns border 'header nil)
+           col-widths columns border 'header nil header-face border-face)
           (when border
-            (vui--render-table-border col-widths border 'separator cell-padding)))
+            (vui--render-table-border col-widths border 'separator cell-padding
+                                      border-face)))
         ;; Render data rows
         (let ((first-row (not (cl-some (lambda (c) (plist-get c :header)) columns))))
           (when (and border first-row)
-            (vui--render-table-border col-widths border 'top cell-padding))
+            (vui--render-table-border col-widths border 'top cell-padding
+                                      border-face))
           (dolist (row rows)
             (if (eq row :separator)
                 ;; Render separator line
                 (when border
-                  (vui--render-table-border col-widths border 'separator cell-padding))
+                  (vui--render-table-border col-widths border 'separator
+                                            cell-padding border-face))
               ;; Render data row with row index for path tracking
-              (vui--render-table-row row col-widths columns border nil row-idx)
+              (vui--render-table-row row col-widths columns border nil row-idx
+                                     nil border-face)
               (cl-incf row-idx)))
           (when border
-            (vui--render-table-border col-widths border 'bottom cell-padding))))
+            (vui--render-table-border col-widths border 'bottom cell-padding
+                                      border-face))))
       ;; Remove trailing newline - tables emit content only, no trailing newline
       (when (eq (char-before) ?\n)
         (delete-char -1))))

@@ -582,12 +582,19 @@ default =RET= / =TAB= behavior, and input fields keep their own keymap.
 Create a table layout. Cell contents can be strings or vnodes (including
 interactive widgets like buttons, fields, and components).
 
-| Property   | Type   | Description                               |
-|------------+--------+-------------------------------------------|
-| =:columns= | list   | List of column specs (see below)          |
-| =:rows=    | list   | List of rows, each a list of cells        |
-| =:border=  | symbol | nil, :ascii, or :unicode                  |
-| =:key=     | any    | Reconciliation key                        |
+| Property       | Type   | Description                                    |
+|----------------+--------+------------------------------------------------|
+| =:columns=     | list   | List of column specs (see below)               |
+| =:rows=        | list   | List of rows, each a list of cells             |
+| =:border=      | symbol | nil, :ascii, or :unicode                       |
+| =:header-face= | face   | Face for header cells (default =vui-table-header=) |
+| =:border-face= | face   | Face for border characters (default =vui-table-border=) |
+| =:key=         | any    | Reconciliation key                             |
+
+Headers render in the =vui-table-header= face (inherits =bold=) and
+border characters in =vui-table-border= (no attributes by default), so
+both can be themed globally via =M-x customize-face= or overridden per
+table with the properties above.
 
 When =:border= is set, cells are automatically padded with 1 space on each
 side for readability (e.g., =| value |= instead of =|value|=).

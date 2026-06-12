@@ -1222,6 +1222,51 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (buffer-string) :to-equal "")))
         (kill-buffer buf)))))
 
+(describe "table faces"
+  (it "renders headers in vui-table-header by default"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "H"))
+                             :rows '(("x"))))
+      (expect (buffer-string) :to-equal "H\nx")
+      (expect (vui-layout-test--faces-at 1) :to-contain 'vui-table-header)
+      ;; Data cells are not affected
+      (expect (vui-layout-test--faces-at 3) :to-equal nil)))
+
+  (it "accepts a custom :header-face"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "H"))
+                             :rows '(("x"))
+                             :header-face 'shadow))
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 1) :not :to-contain
+              'vui-table-header)))
+
+  (it "renders border characters in vui-table-border by default"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "H"))
+                             :rows '(("x"))
+                             :border :ascii))
+      ;; Top border corner
+      (expect (vui-layout-test--faces-at 1) :to-contain 'vui-table-border)
+      ;; Column separator on the header row: "| H |"
+      (goto-char (point-min))
+      (forward-line 1)
+      (expect (vui-layout-test--faces-at (point))
+              :to-contain 'vui-table-border)
+      ;; Header content keeps the header face, not the border face
+      (expect (vui-layout-test--faces-at (+ (point) 2))
+              :to-contain 'vui-table-header)))
+
+  (it "accepts a custom :border-face"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "H"))
+                             :rows '(("x"))
+                             :border :unicode
+                             :border-face 'shadow))
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 1) :not :to-contain
+              'vui-table-border))))
+
 (describe "measurement side effects"
   (it "mounts a component in a table cell exactly once"
     (let ((mounts 0)
