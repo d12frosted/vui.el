@@ -363,6 +363,48 @@
           (kill-buffer "*test-update-props*"))))))
 
 (describe "reconciliation"
+  (it "warns when siblings share a reconciliation key"
+    (let ((warnings nil))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (type message &rest _)
+                   (when (eq type 'vui)
+                     (push message warnings)))))
+        (vui-defcomponent dup-key-child ()
+          :render (vui-text "c"))
+        (vui-defcomponent dup-key-parent ()
+          :render (vui-fragment
+                   (vui-component 'dup-key-child :key 'same)
+                   (vui-component 'dup-key-child :key 'same)))
+        (let ((instance (vui-mount (vui-component 'dup-key-parent)
+                                   "*test-dup-key*")))
+          (unwind-protect
+              (progn
+                ;; Duplicates reconcile to one instance on re-render
+                (vui--rerender-instance instance)
+                (expect warnings :not :to-equal nil)
+                (expect (car warnings) :to-match "same"))
+            (kill-buffer "*test-dup-key*"))))))
+
+  (it "does not warn for distinct keys"
+    (let ((warnings nil))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (type message &rest _)
+                   (when (eq type 'vui)
+                     (push message warnings)))))
+        (vui-defcomponent distinct-key-child ()
+          :render (vui-text "c"))
+        (vui-defcomponent distinct-key-parent ()
+          :render (vui-fragment
+                   (vui-component 'distinct-key-child :key 'a)
+                   (vui-component 'distinct-key-child :key 'b)))
+        (let ((instance (vui-mount (vui-component 'distinct-key-parent)
+                                   "*test-distinct-key*")))
+          (unwind-protect
+              (progn
+                (vui--rerender-instance instance)
+                (expect warnings :to-equal nil))
+            (kill-buffer "*test-distinct-key*"))))))
+
   (it "preserves child component state across parent re-render"
     ;; Define a child component with state
     (vui-defcomponent stateful-child ()
