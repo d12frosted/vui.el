@@ -9,6 +9,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-field= =:placeholder= is now actually rendered: while the field is empty, the placeholder is shown in the new =vui-field-placeholder= face (inherits =shadow=), padded or truncated to the field's =:size=, and disappears the moment the field is modified. The prop was previously accepted and documented but never displayed.
 - =vui-list= no longer requires an explicit nil key-fn before keyword options: =(vui-list items render-fn :indent 2)= now works. Previously the keyword was consumed as the key function and the call failed with a confusing "Keyword argument 2 not one of ..." error. Positional key-fn calls are unchanged, and unknown options still signal an error.
 - =vui-component= no longer drops props that appear after =:children= in the argument plist. Previously parsing stopped at =:children=, silently discarding everything after it.
 - Layout measurement no longer has side effects. Tables and =vui-box= render their content twice (a measure pass, then the real pass); the measure pass used to instantiate real component instances, so =:on-mount= fired up to three times per table cell per render, effects registered by cell components re-ran on every render, =vui-use-async= loaders started once per measure pass, and a component inside =vui-box= was reconciled twice per render (duplicating child entries and shifting indexes for keyless siblings). Measure passes now skip lifecycle hooks, discard effect registrations, and do not start async loaders.

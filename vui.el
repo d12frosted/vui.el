@@ -77,6 +77,12 @@ Same options as `vui-lifecycle-error-handler'."
 Stored as (TYPE ERROR CONTEXT) where TYPE is `lifecycle' or `event',
 ERROR is the error object, and CONTEXT is additional information.")
 
+;;; Faces
+
+(defface vui-field-placeholder '((t :inherit shadow))
+  "Face for placeholder text shown in empty fields."
+  :group 'vui)
+
 ;;; Timing Instrumentation
 
 (defcustom vui-timing-enabled nil
@@ -880,7 +886,8 @@ When :keymap is set, this keymap is active when point is on the button."
 All arguments are keyword-based:
   :VALUE       - initial field content (defaults to empty string)
   :SIZE        - field width in characters
-  :PLACEHOLDER - hint text shown when field is empty (not yet rendered)
+  :PLACEHOLDER - hint text shown in `vui-field-placeholder' face
+                 while the field is empty
   :ON-CHANGE   - called with value on each change (triggers re-render)
   :ON-SUBMIT   - called with value when user presses RET (no re-render)
   :KEY         - identifier for `vui-field-value' lookup
@@ -2056,6 +2063,7 @@ mid-render."
                 (progn
                   (vui--render-instance instance)
                   (widget-setup)
+                  (vui--setup-field-placeholders)
                   ;; Restore cursor position
                   (vui--restore-cursor-position cursor-info)
                   ;; Restore viewport for all windows
@@ -2225,8 +2233,42 @@ PATH is a list representing the widget's location in the component tree."
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (or (overlay-get ov 'button)
               (overlay-get ov 'widget)
-              (overlay-get ov 'field))
+              (overlay-get ov 'field)
+              (overlay-get ov 'vui-placeholder))
       (delete-overlay ov))))
+
+(defun vui--field-add-placeholder (widget)
+  "Show WIDGET's placeholder while its field is empty.
+The placeholder (stored as :vui-placeholder on WIDGET) is displayed
+over the empty field with the `vui-field-placeholder' face, padded or
+truncated to the field's :size.  It disappears as soon as the field
+is modified."
+  (when-let* ((placeholder (widget-get widget :vui-placeholder)))
+    (when (string-empty-p (widget-value widget))
+      (let ((start (widget-field-start widget))
+            (end (widget-field-end widget))
+            (size (widget-get widget :size)))
+        (when (and start end (> end start))
+          (let ((overlay (make-overlay start end))
+                (hide (lambda (ov &rest _) (delete-overlay ov))))
+            (overlay-put overlay 'vui-placeholder t)
+            (overlay-put overlay 'display
+                         (propertize
+                          (truncate-string-to-width
+                           placeholder (or size (string-width placeholder))
+                           nil ?\s)
+                          'face 'vui-field-placeholder))
+            ;; Hide the placeholder the moment the field is modified;
+            ;; the next re-render decides whether to show it again
+            (overlay-put overlay 'modification-hooks (list hide))
+            (overlay-put overlay 'insert-in-front-hooks (list hide))
+            (overlay-put overlay 'insert-behind-hooks (list hide))))))))
+
+(defun vui--setup-field-placeholders ()
+  "Add placeholder overlays to empty fields that declare one.
+Must run after `widget-setup', which finalizes field boundaries."
+  (dolist (widget widget-field-list)
+    (vui--field-add-placeholder widget)))
 
 (defun vui--handle-error (type hook-name err instance)
   "Handle an error ERR caught in HOOK-NAME.
@@ -3126,7 +3168,8 @@ Handles :truncate and overflow:
         ;; Store key on widget for vui-field-value lookup
         (when field-key
           (widget-put w :vui-key field-key))
-        ;; Store placeholder on widget for potential future use
+        ;; Store placeholder on widget; rendered after widget-setup
+        ;; by `vui--setup-field-placeholders'
         (when placeholder
           (widget-put w :vui-placeholder placeholder)))))
 
@@ -3213,6 +3256,7 @@ Clears the buffer before rendering."
       (vui--render-vnode vnode)
       ;; Setup widgets for keyboard navigation
       (widget-setup)
+      (vui--setup-field-placeholders)
       (goto-char (point-min)))))
 
 (defun vui-render-to-buffer (buffer-name vnode)
@@ -3263,6 +3307,7 @@ Returns the root instance."
                 ;; prevent editing outside of editable fields - no need
                 ;; for buffer-read-only
                 (widget-setup)
+                (vui--setup-field-placeholders)
                 ;; Run effects after initial render
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil))

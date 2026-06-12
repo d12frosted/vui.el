@@ -321,7 +321,7 @@ fields with parsing and validation, use =vui-typed-field= from =vui-components.e
 |----------------+----------+---------------------------------|
 | =:value=       | string   | Initial content (default "")    |
 | =:size=        | integer  | Width in characters             |
-| =:placeholder= | string   | Hint text (not yet rendered)    |
+| =:placeholder= | string   | Hint text shown while empty     |
 | =:on-change=   | function | Called with value on change     |
 | =:on-submit=   | function | Called with value on RET        |
 | =:key=         | any      | Reconciliation key / lookup key |

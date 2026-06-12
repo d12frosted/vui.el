@@ -210,6 +210,60 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect submitted-value :to-equal "initial"))
           (kill-buffer "*test-submit*"))))))
 
+(defun vui-test--placeholder-overlays ()
+  "Return all placeholder overlays in the current buffer."
+  (seq-filter (lambda (ov) (overlay-get ov 'vui-placeholder))
+              (overlays-in (point-min) (point-max))))
+
+(describe "vui-field placeholder"
+  (it "shows placeholder while the field is empty"
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :placeholder "Name..."))
+      (let ((overlays (vui-test--placeholder-overlays)))
+        (expect (length overlays) :to-equal 1)
+        (let ((display (overlay-get (car overlays) 'display)))
+          (expect display :to-match "Name\\.\\.\\.")
+          (expect (get-text-property 0 'face display)
+                  :to-equal 'vui-field-placeholder)))))
+
+  (it "does not show placeholder when the field has a value"
+    (with-temp-buffer
+      (vui-render (vui-field :value "Boris" :size 10 :placeholder "Name..."))
+      (expect (vui-test--placeholder-overlays) :to-equal nil)))
+
+  (it "hides placeholder as soon as the user types"
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :placeholder "Name..."))
+      (expect (length (vui-test--placeholder-overlays)) :to-equal 1)
+      (let ((widget (car widget-field-list)))
+        (widget-value-set widget "B"))
+      (expect (vui-test--placeholder-overlays) :to-equal nil)))
+
+  (it "pads and truncates the placeholder to the field size"
+    (with-temp-buffer
+      (vui-render (vui-field :size 4 :placeholder "Very long placeholder"))
+      (let ((display (overlay-get (car (vui-test--placeholder-overlays))
+                                  'display)))
+        (expect (length display) :to-equal 4)))
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :placeholder "ab"))
+      (let ((display (overlay-get (car (vui-test--placeholder-overlays))
+                                  'display)))
+        (expect (length display) :to-equal 10))))
+
+  (it "does not accumulate overlays across re-renders"
+    (vui-defcomponent placeholder-rerender-test ()
+      :render (vui-field :size 10 :placeholder "Type here"))
+    (let ((instance (vui-mount (vui-component 'placeholder-rerender-test)
+                               "*test-placeholder-rerender*")))
+      (unwind-protect
+          (progn
+            (vui--rerender-instance instance)
+            (vui--rerender-instance instance)
+            (with-current-buffer "*test-placeholder-rerender*"
+              (expect (length (vui-test--placeholder-overlays)) :to-equal 1)))
+        (kill-buffer "*test-placeholder-rerender*")))))
+
 (describe "vui-field-value"
   (it "retrieves field value by key"
     (vui-defcomponent field-value-test ()
