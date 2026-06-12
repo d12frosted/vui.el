@@ -192,5 +192,48 @@
                     :to-equal "NEW"))
         (kill-buffer "*test-remount-stale*")))))
 
+(describe "buffer kill teardown"
+  (it "runs lifecycle cleanups when the buffer is killed"
+    (let ((cleanups nil))
+      (vui-defcomponent kill-cleanup-test ()
+        :on-mount (lambda () (push 'mount-cleanup cleanups))
+        :on-unmount (push 'unmounted cleanups)
+        :render (progn
+                  (vui-use-effect ()
+                    (lambda () (push 'effect-cleanup cleanups)))
+                  (vui-text "x")))
+      (vui-mount (vui-component 'kill-cleanup-test) "*test-kill-cleanup*")
+      (expect cleanups :to-equal nil)
+      (kill-buffer "*test-kill-cleanup*")
+      (expect cleanups :to-have-same-items-as
+              '(mount-cleanup effect-cleanup unmounted))))
+
+  (it "cancels timers held by components when the buffer is killed"
+    ;; The README's timer pattern: on-mount starts a timer, returns a
+    ;; cleanup that cancels it. Killing the buffer must cancel the timer.
+    (let ((timer-cancelled nil))
+      (vui-defcomponent kill-timer-test ()
+        :on-mount
+        (let ((timer (run-with-timer 100 nil #'ignore)))
+          (lambda ()
+            (cancel-timer timer)
+            (setq timer-cancelled t)))
+        :render (vui-text "x"))
+      (vui-mount (vui-component 'kill-timer-test) "*test-kill-timer*")
+      (expect timer-cancelled :to-be nil)
+      (kill-buffer "*test-kill-timer*")
+      (expect timer-cancelled :to-be t)))
+
+  (it "does not run cleanups twice when unmounted before kill"
+    (let ((unmount-count 0))
+      (vui-defcomponent kill-once-test ()
+        :on-unmount (cl-incf unmount-count)
+        :render (vui-text "x"))
+      (vui-mount (vui-component 'kill-once-test) "*test-kill-once*")
+      (vui-unmount "*test-kill-once*")
+      (expect unmount-count :to-equal 1)
+      (kill-buffer "*test-kill-once*")
+      (expect unmount-count :to-equal 1))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

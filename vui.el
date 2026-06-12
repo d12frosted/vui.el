@@ -3086,6 +3086,8 @@ Returns the root instance."
         (erase-buffer)
         ;; Store root instance for state updates
         (setq-local vui--root-instance instance)
+        ;; Release component resources when the buffer is killed
+        (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
         (let ((vui--root-instance instance))
           ;; Set rendering flag to prevent nested re-renders from sync resolve
           (setq vui--rendering-p t)
@@ -3115,6 +3117,15 @@ Use this together with `vui-rerender', `vui-update', and
   (when-let* ((buf (get-buffer (or buffer (current-buffer)))))
     (when (buffer-live-p buf)
       (buffer-local-value 'vui--root-instance buf))))
+
+(defun vui--teardown-on-kill ()
+  "Run the unmount lifecycle for the current buffer's root instance.
+Installed buffer-locally on `kill-buffer-hook' by `vui-mount' so
+components release their resources (timers, processes, subscriptions)
+when the buffer is killed."
+  (when vui--root-instance
+    (vui--unmount-root vui--root-instance)
+    (kill-local-variable 'vui--root-instance)))
 
 (defun vui-unmount (&optional buffer)
   "Unmount the VUI instance mounted in BUFFER (default: current buffer).
