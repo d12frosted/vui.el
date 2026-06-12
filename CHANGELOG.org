@@ -5,23 +5,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]], and this project adheres to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
-* Unreleased
-
-** Fixed
-
-- =vui-select= now shows option labels: for =(value . label)= options, the button text and the completion candidates display the labels, and =:on-change= receives the corresponding value (any Lisp object, e.g. a symbol or number). Previously the raw alist went to =completing-read=, so users completed on the values, labels were never shown, and =:on-change= received whatever string completion returned.
-- =vui-field= =:placeholder= is now actually rendered: while the field is empty, the placeholder is shown in the new =vui-field-placeholder= face (inherits =shadow=), padded or truncated to the field's =:size=, and disappears the moment the field is modified. The prop was previously accepted and documented but never displayed.
-- =vui-list= no longer requires an explicit nil key-fn before keyword options: =(vui-list items render-fn :indent 2)= now works. Previously the keyword was consumed as the key function and the call failed with a confusing "Keyword argument 2 not one of ..." error. Positional key-fn calls are unchanged, and unknown options still signal an error.
-- =vui-component= no longer drops props that appear after =:children= in the argument plist. Previously parsing stopped at =:children=, silently discarding everything after it.
-- Layout measurement no longer has side effects. Tables and =vui-box= render their content twice (a measure pass, then the real pass); the measure pass used to instantiate real component instances, so =:on-mount= fired up to three times per table cell per render, effects registered by cell components re-ran on every render, =vui-use-async= loaders started once per measure pass, and a component inside =vui-box= was reconciled twice per render (duplicating child entries and shifting indexes for keyless siblings). Measure passes now skip lifecycle hooks, discard effect registrations, and do not start async loaders.
-- Re-render requests that arrive while a render is in progress (e.g. =vui-set-state= from =:on-update= or an effect with =vui-render-delay= set to nil) are now queued and run after the in-progress render commits. Previously they started a nested render that erased the buffer mid-walk, leaving duplicated content. State-update cycles that never settle now signal a clear error instead of overflowing the stack.
-- Error boundary state is now scoped to the mounted tree (or to the buffer for static =vui-render= trees) instead of a single global table, and boundaries without an explicit =:id= derive a stable identity from their position in the tree. This fixes three problems: auto-generated boundary IDs changed on every render, leaking one error entry per render and re-firing =:on-error= on each one; error state for a given =:id= survived buffer kills, so a fresh mount could render the fallback even though its children were healthy; and two apps using the same =:id= shared error state. =vui-reset-error-boundary='s ID argument is now optional - calling it without arguments resets all boundaries in the current tree.
-- =vui-use-callback*= and =vui-use-memo*= were unusable as documented: plain =defmacro= does not support =&key=, so the documented =:compare eq= syntax signalled =void-variable=, and omitting =:compare= failed to macro-expand with wrong-number-of-arguments. Only the accidental =:compare 'eq= form worked. Both macros now parse =:compare= from the body; bare =eq= / =equal=, quoted symbols, and comparison functions all work, and =:compare= may be omitted.
-- Killing a VUI buffer now runs the full unmount lifecycle for the mounted tree. Previously =:on-unmount= hooks, effect cleanups, and =:on-mount= cleanup functions never ran on buffer kill, so timers and processes held by components leaked.
-- =vui-mount= now unmounts a previously mounted tree before mounting into the same buffer. Previously the old tree stayed live without any teardown: its cleanups never ran and a timer created by it could re-render the old UI over the new mount.
-- Deferred re-renders now use a per-instance timer instead of a single global one. Previously, state updates in two VUI buffers within the same =vui-render-delay= window cancelled each other's pending render, silently leaving the first buffer stale. =vui-flush-sync= likewise no longer cancels pending renders that belong to other buffers.
-- Disabled buttons now use =widget-inactive= face instead of the regular button face.
-- Button =:tab-order= and =:keymap= properties are now preserved when buttons are truncated in table cells.
+* v1.1.0 - 2026-06-12
 
 ** Added
 
@@ -48,6 +32,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   - =vui-integer-field=, =vui-natnum-field=, =vui-float-field=, =vui-number-field= for numeric input
   - =vui-file-field=, =vui-directory-field= for path input
   - =vui-symbol-field=, =vui-sexp-field= for Lisp input
+- =vui-quit= command bound to =q=: Quits window when outside widget fields, self-inserts when inside (so you can type "q" in text inputs).
+- =vui-refresh= command bound to =g=: Re-renders the UI with current state when outside widget fields, self-inserts when inside. Applications needing custom refresh logic (e.g., re-fetching data) can override in their derived mode.
+- =vui-button= now accepts =:tab-order= and =:keymap= props. Use =:tab-order -1= to make a button non-tabbable, and =:keymap= to define custom key bindings active when point is on the button.
+- =vui-field= now accepts =:face= and =:placeholder= props. Use =:face= to style the field text, and =:placeholder= for placeholder text when the field is empty.
 
 ** Changed
 
@@ -61,15 +49,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-select= now shows option labels: for =(value . label)= options, the button text and the completion candidates display the labels, and =:on-change= receives the corresponding value (any Lisp object, e.g. a symbol or number). Previously the raw alist went to =completing-read=, so users completed on the values, labels were never shown, and =:on-change= received whatever string completion returned.
+- =vui-field= =:placeholder= is now actually rendered: while the field is empty, the placeholder is shown in the new =vui-field-placeholder= face (inherits =shadow=), padded or truncated to the field's =:size=, and disappears the moment the field is modified. The prop was previously accepted and documented but never displayed.
+- =vui-list= no longer requires an explicit nil key-fn before keyword options: =(vui-list items render-fn :indent 2)= now works. Previously the keyword was consumed as the key function and the call failed with a confusing "Keyword argument 2 not one of ..." error. Positional key-fn calls are unchanged, and unknown options still signal an error.
+- =vui-component= no longer drops props that appear after =:children= in the argument plist. Previously parsing stopped at =:children=, silently discarding everything after it.
+- Layout measurement no longer has side effects. Tables and =vui-box= render their content twice (a measure pass, then the real pass); the measure pass used to instantiate real component instances, so =:on-mount= fired up to three times per table cell per render, effects registered by cell components re-ran on every render, =vui-use-async= loaders started once per measure pass, and a component inside =vui-box= was reconciled twice per render (duplicating child entries and shifting indexes for keyless siblings). Measure passes now skip lifecycle hooks, discard effect registrations, and do not start async loaders.
+- Re-render requests that arrive while a render is in progress (e.g. =vui-set-state= from =:on-update= or an effect with =vui-render-delay= set to nil) are now queued and run after the in-progress render commits. Previously they started a nested render that erased the buffer mid-walk, leaving duplicated content. State-update cycles that never settle now signal a clear error instead of overflowing the stack.
+- Error boundary state is now scoped to the mounted tree (or to the buffer for static =vui-render= trees) instead of a single global table, and boundaries without an explicit =:id= derive a stable identity from their position in the tree. This fixes three problems: auto-generated boundary IDs changed on every render, leaking one error entry per render and re-firing =:on-error= on each one; error state for a given =:id= survived buffer kills, so a fresh mount could render the fallback even though its children were healthy; and two apps using the same =:id= shared error state. =vui-reset-error-boundary='s ID argument is now optional - calling it without arguments resets all boundaries in the current tree.
+- =vui-use-callback*= and =vui-use-memo*= were unusable as documented: plain =defmacro= does not support =&key=, so the documented =:compare eq= syntax signalled =void-variable=, and omitting =:compare= failed to macro-expand with wrong-number-of-arguments. Only the accidental =:compare 'eq= form worked. Both macros now parse =:compare= from the body; bare =eq= / =equal=, quoted symbols, and comparison functions all work, and =:compare= may be omitted.
+- Killing a VUI buffer now runs the full unmount lifecycle for the mounted tree. Previously =:on-unmount= hooks, effect cleanups, and =:on-mount= cleanup functions never ran on buffer kill, so timers and processes held by components leaked.
+- =vui-mount= now unmounts a previously mounted tree before mounting into the same buffer. Previously the old tree stayed live without any teardown: its cleanups never ran and a timer created by it could re-render the old UI over the new mount.
+- Deferred re-renders now use a per-instance timer instead of a single global one. Previously, state updates in two VUI buffers within the same =vui-render-delay= window cancelled each other's pending render, silently leaving the first buffer stale. =vui-flush-sync= likewise no longer cancels pending renders that belong to other buffers.
+- Disabled buttons now use =widget-inactive= face instead of the regular button face.
+- Button =:tab-order= and =:keymap= properties are now preserved when buttons are truncated in table cells.
 - *Keymap hierarchy*: =special-mode-map= bindings (like =h= for help) were inaccessible because =set-keymap-parent= overwrote the parent set by =define-derived-mode=. Now uses =make-composed-keymap= to include both =widget-keymap= and =special-mode-map=.
 - *Table cursor preservation*: Widgets inside table cells now have unique paths based on row and column indices. Previously, all widgets in a table shared the same render path, causing cursor restoration to potentially jump to the wrong widget (e.g., from row 2's field to row 1's field) after re-render.
-
-** Added
-
-- =vui-quit= command bound to =q=: Quits window when outside widget fields, self-inserts when inside (so you can type "q" in text inputs).
-- =vui-refresh= command bound to =g=: Re-renders the UI with current state when outside widget fields, self-inserts when inside. Applications needing custom refresh logic (e.g., re-fetching data) can override in their derived mode.
-- =vui-button= now accepts =:tab-order= and =:keymap= props. Use =:tab-order -1= to make a button non-tabbable, and =:keymap= to define custom key bindings active when point is on the button.
-- =vui-field= now accepts =:face= and =:placeholder= props. Use =:face= to style the field text, and =:placeholder= for placeholder text when the field is empty.
 
 * v1.0.0 - 2025-12-28
 
