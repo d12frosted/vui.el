@@ -2457,6 +2457,40 @@ Returns INSTANCE for chaining."
   (vui--rerender-instance instance)
   instance)
 
+(defun vui--on-window-size-change (_window-or-frame)
+  "Re-render this buffer's mounted VUI instances.
+Installed buffer-locally on `window-size-change-functions' by
+`vui-rerender-on-resize'."
+  (dolist (instance (delq nil (cons vui--root-instance
+                                    (copy-sequence vui--inline-instances))))
+    (if vui-render-delay
+        (vui--schedule-deferred-render-for instance)
+      (vui--rerender-instance instance))))
+
+(defun vui-rerender-on-resize (&optional buffer)
+  "Re-render BUFFER's VUI instances whenever its window size changes.
+BUFFER defaults to the current buffer.  Covers both the instance
+mounted with `vui-mount' and any inline instances.
+
+Useful together with `vui-flex' rows whose :width depends on the
+window, e.g. the symbol `window' or a function.  Re-renders go
+through the normal deferred scheduling, so a burst of resize events
+coalesces into one re-render per instance.
+
+The hook is buffer-local and dies with the buffer.  Use
+`vui-cancel-rerender-on-resize' to remove it earlier."
+  (with-current-buffer (or buffer (current-buffer))
+    (add-hook 'window-size-change-functions
+              #'vui--on-window-size-change nil t)))
+
+(defun vui-cancel-rerender-on-resize (&optional buffer)
+  "Stop re-rendering BUFFER's VUI instances on window size changes.
+BUFFER defaults to the current buffer.  Undoes
+`vui-rerender-on-resize'."
+  (with-current-buffer (or buffer (current-buffer))
+    (remove-hook 'window-size-change-functions
+                 #'vui--on-window-size-change t)))
+
 (defun vui--widget-bounds (widget)
   "Get (START . END) bounds for WIDGET's editable area.
 For editable fields, returns the actual text area, not widget decoration."

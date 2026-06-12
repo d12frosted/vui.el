@@ -488,16 +488,14 @@ Rows are single-line by design. If the children's natural widths already
 exceed the total, everything renders at natural width and growers get
 zero - the row degrades instead of erroring.
 
-For live resizing, use a function =:width= and re-render from a
-=window-size-change-functions= hook:
+For live resizing, use =window= or a function as =:width= and enable
+=vui-rerender-on-resize= in the buffer:
 
 #+begin_src elisp
 (vui-flex :width (lambda () (- (window-width) 2)) ...)
 
-(add-hook 'window-size-change-functions
-          (lambda (_frame)
-            (when-let* ((instance (vui-get-instance "*my-app*")))
-              (vui-rerender instance))))
+(with-current-buffer "*my-app*"
+  (vui-rerender-on-resize))
 #+end_src
 
 * Nesting Layouts

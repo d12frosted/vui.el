@@ -583,15 +583,27 @@ everything renders at natural width and growers get zero. Rows are
 single-line by design: multi-line children are measured by their widest
 line, but the layout does not account for their extra lines.
 
-For live resizing, pass a function as =:width= and re-render from a
-=window-size-change-functions= hook:
+For live resizing, pass =window= or a function as =:width= and enable
+=vui-rerender-on-resize= in the buffer:
 
 #+begin_src elisp
-(add-hook 'window-size-change-functions
-          (lambda (_frame)
-            (when-let* ((instance (vui-get-instance "*my-app*")))
-              (vui-rerender instance))))
+(with-current-buffer "*my-app*"
+  (vui-rerender-on-resize))
 #+end_src
+
+** vui-rerender-on-resize
+
+#+begin_src elisp
+(vui-rerender-on-resize &optional BUFFER)
+(vui-cancel-rerender-on-resize &optional BUFFER)
+#+end_src
+
+Re-render BUFFER's VUI instances (the =vui-mount= root and any inline
+instances) whenever its window size changes. BUFFER defaults to the
+current buffer. Re-renders go through the normal deferred scheduling,
+so a burst of resize events coalesces into one re-render per instance.
+The hook is buffer-local and dies with the buffer;
+=vui-cancel-rerender-on-resize= removes it earlier.
 
 ** vui-region
 

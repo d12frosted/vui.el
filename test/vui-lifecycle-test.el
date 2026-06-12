@@ -235,5 +235,71 @@
       (kill-buffer "*test-kill-once*")
       (expect unmount-count :to-equal 1))))
 
+(describe "vui-rerender-on-resize"
+  (it "installs a buffer-local window-size-change hook"
+    (vui-defcomponent resize-hook-test ()
+      :render (vui-text "x"))
+    (vui-mount (vui-component 'resize-hook-test) "*test-resize-hook*")
+    (unwind-protect
+        (with-current-buffer "*test-resize-hook*"
+          (vui-rerender-on-resize)
+          (expect (local-variable-p 'window-size-change-functions)
+                  :to-be-truthy)
+          (expect (memq #'vui--on-window-size-change
+                        window-size-change-functions)
+                  :to-be-truthy))
+      (kill-buffer "*test-resize-hook*")))
+
+  (it "re-renders the buffer's root instance when triggered"
+    (let ((vui-render-delay nil)
+          (render-count 0))
+      (vui-defcomponent resize-root-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (vui-mount (vui-component 'resize-root-test) "*test-resize-root*")
+      (unwind-protect
+          (with-current-buffer "*test-resize-root*"
+            (vui-rerender-on-resize)
+            (expect render-count :to-equal 1)
+            (vui--on-window-size-change nil)
+            (expect render-count :to-equal 2))
+        (kill-buffer "*test-resize-root*"))))
+
+  (it "re-renders inline instances when triggered"
+    (let ((vui-render-delay nil)
+          (render-count 0))
+      (vui-defcomponent resize-inline-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "[form]")))
+      (with-current-buffer (get-buffer-create "*test-resize-inline*")
+        (insert "HOST")
+        (goto-char (point-max))
+        (vui-mount-inline (vui-component 'resize-inline-test))
+        (vui-rerender-on-resize)
+        (expect render-count :to-equal 1)
+        (vui--on-window-size-change nil)
+        (expect render-count :to-equal 2))
+      (kill-buffer "*test-resize-inline*")))
+
+  (it "can be cancelled"
+    (let ((vui-render-delay nil)
+          (render-count 0))
+      (vui-defcomponent resize-cancel-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (vui-mount (vui-component 'resize-cancel-test) "*test-resize-cancel*")
+      (unwind-protect
+          (with-current-buffer "*test-resize-cancel*"
+            (vui-rerender-on-resize)
+            (vui-cancel-rerender-on-resize)
+            (expect (memq #'vui--on-window-size-change
+                          window-size-change-functions)
+                    :to-be nil)
+            (expect render-count :to-equal 1))
+        (kill-buffer "*test-resize-cancel*")))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here
