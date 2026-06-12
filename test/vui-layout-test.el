@@ -1017,4 +1017,72 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (buffer-string) :to-equal "")))
         (kill-buffer buf)))))
 
+(describe "measurement side effects"
+  (it "mounts a component in a table cell exactly once"
+    (let ((mounts 0)
+          (effect-runs 0))
+      (vui-defcomponent measure-cell ()
+        :on-mount (cl-incf mounts)
+        :render (progn
+                  (vui-use-effect ()
+                    (cl-incf effect-runs)
+                    nil)
+                  (vui-text "cell")))
+      (vui-defcomponent measure-table-app ()
+        :render (vui-table :columns '((:header "C"))
+                           :rows (list (list (vui-component 'measure-cell)))))
+      (let ((instance (vui-mount (vui-component 'measure-table-app)
+                                 "*test-measure-table*")))
+        (unwind-protect
+            (progn
+              (expect mounts :to-equal 1)
+              (expect effect-runs :to-equal 1)
+              (vui--rerender-instance instance)
+              ;; Reconciled instance: no new mount, deps unchanged
+              (expect mounts :to-equal 1)
+              (expect effect-runs :to-equal 1))
+          (kill-buffer "*test-measure-table*")))))
+
+  (it "mounts a component inside vui-box exactly once and reconciles cleanly"
+    (let ((mounts 0))
+      (vui-defcomponent measure-box-child ()
+        :on-mount (cl-incf mounts)
+        :render (vui-text "boxed"))
+      (vui-defcomponent measure-box-app ()
+        :render (vui-fragment
+                 (vui-box (vui-component 'measure-box-child) :width 10)
+                 (vui-text "after")))
+      (let ((instance (vui-mount (vui-component 'measure-box-app)
+                                 "*test-measure-box*")))
+        (unwind-protect
+            (progn
+              (expect mounts :to-equal 1)
+              ;; The measure pass must not register a duplicate child
+              (expect (length (vui-instance-children instance)) :to-equal 1)
+              (vui--rerender-instance instance)
+              (expect mounts :to-equal 1)
+              (expect (length (vui-instance-children instance)) :to-equal 1))
+          (kill-buffer "*test-measure-box*")))))
+
+  (it "does not start async loaders during table measurement"
+    (let ((loads 0))
+      (vui-defcomponent measure-async-cell ()
+        :render (let ((result (vui-use-async 'measure-async-key
+                                (lambda (resolve _reject)
+                                  (cl-incf loads)
+                                  (funcall resolve "data")))))
+                  (vui-text (format "%s" (plist-get result :status)))))
+      (vui-defcomponent measure-async-app ()
+        :render (vui-table :columns '((:header "C"))
+                           :rows (list (list (vui-component 'measure-async-cell)))))
+      (let ((instance (vui-mount (vui-component 'measure-async-app)
+                                 "*test-measure-async*")))
+        (unwind-protect
+            (progn
+              ;; Loader runs once for the real instance, not per measure pass
+              (expect loads :to-equal 1)
+              (vui--rerender-instance instance)
+              (expect loads :to-equal 1))
+          (kill-buffer "*test-measure-async*"))))))
+
 ;;; vui-layout-test.el ends here
