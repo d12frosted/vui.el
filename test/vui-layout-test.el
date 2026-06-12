@@ -271,6 +271,97 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect clicked :to-be-truthy))
           (kill-buffer "*test-box-btn*"))))))
 
+(defun vui-layout-test--faces-at (pos)
+  "Return the face property at POS as a list."
+  (let ((face (get-text-property pos 'face)))
+    (if (listp face) face (list face))))
+
+(describe "vui-region"
+  (it "applies face to plain content"
+    (with-temp-buffer
+      (vui-render (vui-region :face 'shadow
+                    (vui-text "ab")))
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 2) :to-contain 'shadow)))
+
+  (it "applies face beneath children's own faces"
+    (with-temp-buffer
+      (vui-render (vui-region :face 'shadow
+                    (vui-text "p")
+                    (vui-text "b" :face 'bold)))
+      ;; Plain child gets only the region face
+      (expect (vui-layout-test--faces-at 1) :to-contain 'shadow)
+      ;; Styled child keeps its face with higher priority
+      (let ((faces (vui-layout-test--faces-at 2)))
+        (expect faces :to-contain 'bold)
+        (expect faces :to-contain 'shadow)
+        (expect (< (cl-position 'bold faces) (cl-position 'shadow faces))
+                :to-be-truthy))))
+
+  (it "covers whitespace inserted by nested layout containers"
+    (with-temp-buffer
+      (vui-render (vui-region :face 'shadow
+                    (vui-hstack (vui-text "a") (vui-text "b"))))
+      ;; Position 2 is the separator space inserted by the hstack
+      (expect (buffer-string) :to-equal "a b")
+      (expect (vui-layout-test--faces-at 2) :to-contain 'shadow)))
+
+  (it "renders nothing for empty children"
+    (with-temp-buffer
+      (vui-render (vui-region :face 'shadow))
+      (expect (buffer-string) :to-equal "")))
+
+  (it "applies keymap to plain text"
+    (with-temp-buffer
+      (let ((km (make-sparse-keymap)))
+        (vui-render (vui-region :keymap km
+                      (vui-text "ab")))
+        (expect (get-text-property 1 'keymap) :to-be km))))
+
+  (it "cascades nested region keymaps innermost-first"
+    (with-temp-buffer
+      (let ((outer (make-sparse-keymap))
+            (inner (make-sparse-keymap)))
+        (define-key outer (kbd "a") #'forward-char)
+        (define-key outer (kbd "b") #'backward-char)
+        (define-key inner (kbd "a") #'ignore)
+        (vui-render (vui-region :keymap outer
+                      (vui-region :keymap inner
+                        (vui-text "x"))))
+        (let ((map (get-text-property 1 'keymap)))
+          ;; Inner binding wins for "a"
+          (expect (lookup-key map (kbd "a")) :to-be 'ignore)
+          ;; Unbound keys fall through to the outer map
+          (expect (lookup-key map (kbd "b")) :to-be 'backward-char)))))
+
+  (it "composes with a button's keymap, button bindings winning"
+    (with-temp-buffer
+      (let ((container-km (make-sparse-keymap))
+            (button-km (make-sparse-keymap)))
+        (define-key container-km (kbd "x") #'forward-char)
+        (define-key container-km (kbd "y") #'backward-char)
+        (define-key button-km (kbd "y") #'ignore)
+        (vui-render (vui-region :keymap container-km
+                      (vui-button "B" :keymap button-km :on-click #'ignore)))
+        ;; Inside the rendered [B]
+        (let ((map (get-char-property 2 'keymap)))
+          ;; Button's own binding wins
+          (expect (lookup-key map (kbd "y")) :to-be 'ignore)
+          ;; Container bindings reachable for keys the button leaves unbound
+          (expect (lookup-key map (kbd "x")) :to-be 'forward-char)))))
+
+  (it "keeps default widget keys on buttons without a custom keymap"
+    (with-temp-buffer
+      (let ((container-km (make-sparse-keymap)))
+        (define-key container-km (kbd "RET") #'ignore)
+        (vui-render (vui-region :keymap container-km
+                      (vui-button "B" :on-click #'ignore)))
+        ;; RET on the button must still activate it, not run the
+        ;; container binding
+        (let ((map (get-char-property 2 'keymap)))
+          (expect (lookup-key map (kbd "RET"))
+                  :to-be 'widget-button-press))))))
+
 (describe "vui-list"
   (it "renders items vertically by default"
     (with-temp-buffer
