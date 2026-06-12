@@ -18,6 +18,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- Development-time warnings for two silent footguns: =vui-set-state= with a key that no component in scope declares (typos used to silently create new state), and sibling vnodes sharing a reconciliation key (they silently reconcile to one instance and share state). Both warn under the =vui= warning type, so they can be suppressed via =warning-suppress-types=.
 - The component inspector (=vui-inspect=) and state viewer (=vui-inspect-state=) now cover instances mounted via =vui-mount-inline=: with no explicit instance they list the buffer's root and every inline instance, labelled with its region.
 - =vui-rerender-on-resize= - opt-in, buffer-local hook that re-renders a buffer's VUI instances (root and inline) when its window size changes, coalescing resize bursts through the normal deferred scheduling. Pairs with =vui-flex= widths that depend on the window. =vui-cancel-rerender-on-resize= undoes it.
 - =vui-typed-field= (and the typed shortcuts like =vui-integer-field=) accept =:placeholder=, passed through to the underlying field and shown while it is empty.

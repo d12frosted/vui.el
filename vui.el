@@ -1562,6 +1562,15 @@ sort.  In-place mutation is invisible to change detection
          (new-value (if (functionp value)
                         (funcall value current-value)
                       value)))
+    ;; No component in the chain declares KEY: almost certainly a typo.
+    ;; The set still happens (on the current component), but silently
+    ;; creating state is how typos go unnoticed.
+    (unless (plist-member current-state key)
+      (display-warning
+       'vui
+       (format "vui-set-state: %s is not a state key of any component in scope; setting it on <%s>"
+               key (vui-component-def-name (vui-instance-def target)))
+       :warning))
     (vui--debug-log 'state-change "<%s> state %s = %S"
                     (vui-component-def-name (vui-instance-def target))
                     key new-value)
@@ -2848,6 +2857,19 @@ INSTANCE is the component instance."
       (vui--timing-record 'commit component-name))
     ;; Update children list for next reconciliation
     (let ((new-children (nreverse vui--new-children)))
+      ;; Two sibling vnodes with the same key reconcile to the same
+      ;; instance, silently sharing state - warn, it is always a bug
+      (unless vui--measuring-p
+        (let ((seen (make-hash-table :test 'eq)))
+          (dolist (child new-children)
+            (if (gethash child seen)
+                (display-warning
+                 'vui
+                 (format "Duplicate reconciliation key %S under <%s>; siblings share one component instance"
+                         (vui-vnode-key (vui-instance-vnode child))
+                         component-name)
+                 :warning)
+              (puthash child t seen)))))
       ;; Call on-unmount for children that were removed
       (dolist (old-child old-children)
         (unless (memq old-child new-children)

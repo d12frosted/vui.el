@@ -245,6 +245,51 @@
           (kill-buffer "*test-flush-a*")
           (kill-buffer "*test-flush-b*"))))))
 
+(describe "state key warnings"
+  (it "warns when setting a state key no component declares"
+    (let ((vui-render-delay nil)
+          (warnings nil))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (type message &rest _)
+                   (when (eq type 'vui)
+                     (push message warnings)))))
+        (vui-defcomponent typo-state-test ()
+          :state ((count 0))
+          :render (vui-button "inc"
+                    ;; Typo: :cout instead of :count
+                    :on-click (lambda () (vui-set-state :cout (1+ count)))))
+        (vui-mount (vui-component 'typo-state-test) "*test-typo-state*")
+        (unwind-protect
+            (with-current-buffer "*test-typo-state*"
+              (vui-test--click-button-at (point-min))
+              (expect (length warnings) :to-equal 1)
+              (expect (car warnings) :to-match ":cout"))
+          (kill-buffer "*test-typo-state*")))))
+
+  (it "does not warn for declared keys, including inherited ones"
+    (let ((vui-render-delay nil)
+          (warnings nil))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (type message &rest _)
+                   (when (eq type 'vui)
+                     (push message warnings)))))
+        (vui-defcomponent owned-state-child ()
+          :render (vui-button "inc"
+                    ;; :count lives on the parent
+                    :on-click (lambda () (vui-set-state :count #'1+))))
+        (vui-defcomponent owned-state-parent ()
+          :state ((count 0))
+          :render (vui-component 'owned-state-child))
+        (let ((instance (vui-mount (vui-component 'owned-state-parent)
+                                   "*test-owned-state*")))
+          (unwind-protect
+              (with-current-buffer "*test-owned-state*"
+                (vui-test--click-button-at (point-min))
+                (expect (plist-get (vui-instance-state instance) :count)
+                        :to-equal 1)
+                (expect warnings :to-equal nil))
+            (kill-buffer "*test-owned-state*")))))))
+
 (describe "re-entrant rendering"
   (it "does not corrupt the buffer when on-update sets state with immediate rendering"
     ;; vui-render-delay nil means vui-set-state renders immediately.
