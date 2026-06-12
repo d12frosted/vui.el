@@ -213,7 +213,7 @@ INITIALLY-EXPANDED sets initial state for uncontrolled mode."
          (indicator (if is-expanded exp-ind col-ind))
          ;; Indentation: own indent + accumulated from parent
          (own-indent (or indent 2))
-         (parent-indent (use-vui-collapsible-indent))
+         (parent-indent (vui-use-context vui-collapsible-indent-context))
          (total-indent (+ parent-indent own-indent)))
     (vui-fragment
      ;; Header - plain clickable text (no indent - inherits from parent)

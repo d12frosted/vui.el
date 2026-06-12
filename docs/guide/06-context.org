@@ -62,7 +62,7 @@ Wrap your component tree with the provider:
 
 Everything inside the provider can access the context.
 
-* Consuming Context - =use-NAME=
+* Consuming Context - =vui-use-context= / =use-NAME=
 
 Use the auto-generated hook to access context:
 
@@ -75,6 +75,19 @@ Use the auto-generated hook to access context:
 #+end_src
 
 No more prop drilling! The component gets the user directly from context.
+
+The generated =use-NAME= function is convenient in applications and
+personal configs, but its =use-= prefix pollutes the namespace from a
+package's point of view. Packages should call =vui-use-context= on the
+context object instead - it is equivalent:
+
+#+begin_src elisp
+(vui-defcomponent user-info ()
+  :render
+  (let ((user (vui-use-context user-context)))
+    (vui-text (format "Logged in as: %s"
+                      (plist-get user :name)))))
+#+end_src
 
 * Complete Example
 

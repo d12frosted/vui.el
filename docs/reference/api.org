@@ -893,7 +893,7 @@ Define a context.
 Creates:
 - =NAME-context= - The context object
 - =NAME-provider= - Function to provide value
-- =use-NAME= - Hook to consume value
+- =use-NAME= - Convenience hook to consume value
 
 #+begin_src elisp
 (vui-defcontext theme 'light "Current UI theme.")
@@ -903,9 +903,28 @@ Creates:
   (vui-component 'my-app))
 
 ;; Consume (in component render)
+(let ((theme (vui-use-context theme-context)))
+  (vui-text (format "Theme: %s" theme)))
+
+;; Equivalent, via the generated hook
 (let ((theme (use-theme)))
   (vui-text (format "Theme: %s" theme)))
 #+end_src
+
+The =NAME=-derived symbols follow whatever prefix NAME carries, so
+packages should use a prefixed NAME (e.g. =my-pkg-theme=) and prefer
+=vui-use-context= over the unprefixed =use-NAME= hook.
+
+** vui-use-context
+
+#+begin_src elisp
+(vui-use-context CONTEXT) -> value
+#+end_src
+
+Return the current value of CONTEXT (a =NAME-context= object created by
+=vui-defcontext=). Searches the providers in scope at the current render
+position; returns the context's default value when no provider is found.
+Must be called during render.
 
 * Error Handling
 

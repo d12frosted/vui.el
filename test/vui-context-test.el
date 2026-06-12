@@ -19,6 +19,51 @@
     (expect (fboundp 'use-test-ctx) :to-be-truthy)
     (expect (vui-context-default-value test-ctx-context) :to-equal 'default-value))
 
+  (it "consumes context via vui-use-context"
+    (vui-defcontext uc-theme 'light)
+    (let ((inside nil)
+          (outside nil))
+      (vui-defcomponent uc-consumer ()
+        :render (progn
+                  (setq inside (vui-use-context uc-theme-context))
+                  (vui-text "x")))
+      (vui-defcomponent uc-app ()
+        :render (uc-theme-provider 'dark
+                  (vui-component 'uc-consumer)))
+      (vui-defcomponent uc-bare ()
+        :render (progn
+                  (setq outside (vui-use-context uc-theme-context))
+                  (vui-text "y")))
+      (vui-mount (vui-component 'uc-app) "*test-uc1*")
+      (vui-mount (vui-component 'uc-bare) "*test-uc2*")
+      (unwind-protect
+          (progn
+            ;; Provided value inside a provider
+            (expect inside :to-equal 'dark)
+            ;; Default value without a provider
+            (expect outside :to-equal 'light))
+        (kill-buffer "*test-uc1*")
+        (kill-buffer "*test-uc2*"))))
+
+  (it "vui-use-context matches the generated use-NAME consumer"
+    (vui-defcontext uc-pair 'fallback)
+    (let ((via-generic nil)
+          (via-generated nil))
+      (vui-defcomponent uc-pair-consumer ()
+        :render (progn
+                  (setq via-generic (vui-use-context uc-pair-context))
+                  (setq via-generated (use-uc-pair))
+                  (vui-text "z")))
+      (vui-defcomponent uc-pair-app ()
+        :render (uc-pair-provider 42
+                  (vui-component 'uc-pair-consumer)))
+      (vui-mount (vui-component 'uc-pair-app) "*test-uc3*")
+      (unwind-protect
+          (progn
+            (expect via-generic :to-equal 42)
+            (expect via-generated :to-equal 42))
+        (kill-buffer "*test-uc3*"))))
+
   (it "returns default value when no provider"
     (vui-defcontext theme 'light)
     (let ((captured-theme nil))
