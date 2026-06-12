@@ -364,7 +364,51 @@ Buttons are widget.el push-buttons, so we use widget-apply."
   (it "renders placeholder when no value"
     (with-temp-buffer
       (vui-render (vui-select :value nil :options '("a" "b")))
-      (expect (buffer-string) :to-match "Select..."))))
+      (expect (buffer-string) :to-match "Select...")))
+
+  (it "shows the label of the current value on the button"
+    (with-temp-buffer
+      (vui-render (vui-select :value "a"
+                              :options '(("a" . "Apple") ("b" . "Banana"))))
+      (expect (buffer-string) :to-match "Apple")))
+
+  (it "completes on labels and passes the value to on-change"
+    (let ((received 'unset)
+          (candidates nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt collection &rest _)
+                   (setq candidates collection)
+                   "Banana")))
+        (with-temp-buffer
+          (vui-render (vui-select :value "a"
+                                  :options '(("a" . "Apple") ("b" . "Banana"))
+                                  :on-change (lambda (v) (setq received v))))
+          (widget-apply (widget-at (point-min)) :notify)))
+      (expect candidates :to-equal '("Apple" "Banana"))
+      (expect received :to-equal "b")))
+
+  (it "supports non-string values with labels"
+    (let ((received 'unset))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "Two")))
+        (with-temp-buffer
+          (vui-render (vui-select :value 1
+                                  :options '((1 . "One") (2 . "Two"))
+                                  :on-change (lambda (v) (setq received v))))
+          (expect (buffer-string) :to-match "One")
+          (widget-apply (widget-at (point-min)) :notify)))
+      (expect received :to-equal 2)))
+
+  (it "passes plain string options through unchanged"
+    (let ((received 'unset))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "banana")))
+        (with-temp-buffer
+          (vui-render (vui-select :value "apple"
+                                  :options '("apple" "banana")
+                                  :on-change (lambda (v) (setq received v))))
+          (widget-apply (widget-at (point-min)) :notify)))
+      (expect received :to-equal "banana"))))
 (describe "vui-render"
   (it "renders text to buffer"
     (with-temp-buffer

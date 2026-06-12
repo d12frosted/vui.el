@@ -947,9 +947,15 @@ Usage: (vui-checkbox :checked t :on-change (lambda (v) ...))"
 ARGS is a plist accepting:
   :value VALUE - current selection (or nil)
   :options OPTIONS - list of (value . label) cons cells or strings
-  :on-change FN - called with selected value
+  :on-change FN - called with the VALUE of the selected option
   :prompt STRING - minibuffer prompt (default \"Select: \")
   :key KEY - for reconciliation
+
+For (value . label) options, completion candidates and the button
+text show the LABELs, while :on-change receives the corresponding
+VALUE (which may be any Lisp object, e.g. a symbol or number).
+Labels should be unique; when they are not, the first matching
+option wins.  Plain options are their own label.
 
 Usage: (vui-select :value \"apple\"
                    :options \\='((\"apple\" . \"Apple\") (\"banana\" . \"Banana\"))
@@ -2905,6 +2911,18 @@ Handles :truncate and overflow:
            (options (vui-vnode-select-options vnode))
            (on-change (vui-vnode-select-on-change vnode))
            (prompt (vui-vnode-select-prompt vnode))
+           ;; Normalize options to (LABEL . VALUE); plain options serve
+           ;; as their own label
+           (normalized (mapcar (lambda (option)
+                                 (if (consp option)
+                                     (cons (cdr option) (car option))
+                                   (cons (if (stringp option)
+                                             option
+                                           (format "%s" option))
+                                         option)))
+                               options))
+           (current-label (or (car (rassoc value normalized))
+                              (and value (format "%s" value))))
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
            ;; Capture current path for cursor tracking (reverse stack to get root-first order)
@@ -2915,10 +2933,15 @@ Handles :truncate and overflow:
                               :notify (lambda (&rest _)
                                         (let* ((vui--current-instance captured-instance)
                                                (vui--root-instance captured-root)
-                                               (choice (completing-read prompt options nil t nil nil value)))
-                                          (when wrapped-change
-                                            (funcall wrapped-change choice))))
-                              (format "%s" (or value "Select...")))))
+                                               (choice (completing-read prompt
+                                                                        (mapcar #'car normalized)
+                                                                        nil t nil nil
+                                                                        current-label))
+                                               (chosen (assoc choice normalized)))
+                                          (when (and wrapped-change chosen)
+                                            ;; Pass the option's VALUE, not its label
+                                            (funcall wrapped-change (cdr chosen)))))
+                              (format "%s" (or current-label "Select...")))))
         ;; Store path for cursor tracking
         (widget-put w :vui-path captured-path))))
 

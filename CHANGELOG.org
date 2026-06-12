@@ -9,6 +9,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-select= now shows option labels: for =(value . label)= options, the button text and the completion candidates display the labels, and =:on-change= receives the corresponding value (any Lisp object, e.g. a symbol or number). Previously the raw alist went to =completing-read=, so users completed on the values, labels were never shown, and =:on-change= received whatever string completion returned.
 - =vui-field= =:placeholder= is now actually rendered: while the field is empty, the placeholder is shown in the new =vui-field-placeholder= face (inherits =shadow=), padded or truncated to the field's =:size=, and disappears the moment the field is modified. The prop was previously accepted and documented but never displayed.
 - =vui-list= no longer requires an explicit nil key-fn before keyword options: =(vui-list items render-fn :indent 2)= now works. Previously the keyword was consumed as the key function and the call failed with a confusing "Keyword argument 2 not one of ..." error. Positional key-fn calls are unchanged, and unknown options still signal an error.
 - =vui-component= no longer drops props that appear after =:children= in the argument plist. Previously parsing stopped at =:children=, silently discarding everything after it.

@@ -384,13 +384,19 @@ Create a checkbox.
 
 Create a selection button (minibuffer-based selection).
 
-| Property     | Type      | Description                        |
-|--------------+-----------+------------------------------------|
-| =:value=     | string    | Current selection                  |
-| =:options=   | list      | List of options (strings or alist) |
-| =:on-change= | function  | Called with selected value         |
-| =:prompt=    | string    | Minibuffer prompt (default "Select: ") |
-| =:key=       | any       | Reconciliation key                 |
+| Property     | Type      | Description                              |
+|--------------+-----------+------------------------------------------|
+| =:value=     | any       | Current selection (an option's value)    |
+| =:options=   | list      | Strings, or =(value . label)= cons cells |
+| =:on-change= | function  | Called with the selected option's value  |
+| =:prompt=    | string    | Minibuffer prompt (default "Select: ")   |
+| =:key=       | any       | Reconciliation key                       |
+
+For =(value . label)= options, the button text and completion candidates
+show the labels, while =:on-change= receives the corresponding value -
+which may be any Lisp object (symbol, number, string). Labels should be
+unique; otherwise the first matching option wins. Plain string options
+are their own label.
 
 #+begin_src elisp
 ;; Simple list
@@ -398,11 +404,11 @@ Create a selection button (minibuffer-based selection).
             :options '("light" "dark" "system")
             :on-change (lambda (v) (vui-set-state :theme v)))
 
-;; Alist with display values
+;; Values with display labels - on-change receives 'active etc.
 (vui-select :value status
-            :options '(("active" . "Active")
-                       ("pending" . "Pending")
-                       ("closed" . "Closed"))
+            :options '((active . "Active")
+                       (pending . "Pending")
+                       (closed . "Closed"))
             :on-change (lambda (v) (vui-set-state :status v)))
 #+end_src
 
