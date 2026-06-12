@@ -15,6 +15,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-get-instance= - Return the root instance mounted in a buffer (defaults to the current buffer). Lets applications drive a mounted UI via =vui-rerender= / =vui-update= / =vui-update-props= without maintaining their own buffer-to-instance storage (#36).
 - *Instance update API*: New public functions for re-rendering mounted instances:
   - =vui-rerender= - Re-render an instance preserving component state and memos. Useful for forcing a redraw.
   - =vui-update= - Update instance props, invalidate all memos, and re-render. Useful when new data arrives and computed values need to refresh while preserving UI state (like collapsed sections).

@@ -91,6 +91,26 @@ Mount a component as root and render to a buffer.
 (vui-mount (vui-component 'my-app :title "Hello") "*my-app*")
 #+end_src
 
+** vui-get-instance
+
+#+begin_src elisp
+(vui-get-instance &optional BUFFER) -> instance or nil
+#+end_src
+
+Return the root component instance mounted in BUFFER.
+
+- BUFFER :: Buffer object or buffer name (default: current buffer)
+- Returns :: The root instance, or nil if BUFFER does not exist or has no
+  mounted VUI instance
+
+Use this together with =vui-rerender=, =vui-update=, and =vui-update-props=
+to drive a mounted UI from outside, without storing the instance yourself:
+
+#+begin_src elisp
+(when-let* ((instance (vui-get-instance "*sidebar*")))
+  (vui-update instance (list :note note)))
+#+end_src
+
 ** vui-rerender
 
 #+begin_src elisp
