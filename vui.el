@@ -574,6 +574,25 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   face       ; Face applied beneath the children's own faces
   keymap)    ; Keymap cascading beneath the children's own keymaps
 
+;; Layout: flexible-width horizontal row
+(cl-defstruct (vui-vnode-flex (:include vui-vnode)
+                              (:constructor vui-vnode-flex--create))
+  "Horizontal layout that distributes a total width among children."
+  children   ; List of child vnodes and vui-vnode-flex-item wrappers
+  spacing    ; Spaces between children (default 1)
+  width      ; Total width: number, function, `fill-column', `window'
+  justify    ; :start (default), :center, :end, :space-between
+  indent     ; Inherited indent from parent (subtracted from width)
+  face       ; Face applied beneath the children's own faces
+  keymap)    ; Keymap cascading beneath the children's own keymaps
+
+;; Wrapper marking a flex child that takes a share of leftover width
+(cl-defstruct (vui-vnode-flex-item (:include vui-vnode)
+                                   (:constructor vui-vnode-flex-item--create))
+  "Wrapper marking a `vui-flex' child that grows into leftover width."
+  child      ; Vnode, or function called with the allotted width
+  grow)      ; Proportional weight (default 1)
+
 ;; Component reference in vtree
 (cl-defstruct (vui-vnode-component (:include vui-vnode)
                                    (:constructor vui-vnode-component--create))
@@ -1173,6 +1192,101 @@ Usage:
      :children children
      :face face
      :keymap keymap
+     :key key)))
+
+(defun vui-flex (&rest args)
+  "Create a horizontal row that distributes a total width among children.
+ARGS can start with keyword options, followed by children.
+
+Options:
+  :width W     - the total width to distribute.  A number, a function
+                 called at render time, or one of the symbols
+                 `fill-column' (the default) and `window' (the
+                 selected window's width).
+  :spacing N   - spaces between children (default 1)
+  :justify J   - what to do with leftover width when no child grows:
+                 :start (default), :center, :end, or :space-between
+  :indent N    - inherited indent, set by a parent vstack; subtracted
+                 from the total width
+  :face FACE   - applied beneath the children's own faces
+  :keymap MAP  - cascades beneath the children's own keymaps, see
+                 `vui-region'
+  :key KEY     - for reconciliation
+
+Children render at their natural width.  Wrap a child in
+`vui-flex-item' to give it a proportional share of the leftover
+width instead.  When the children's natural widths already exceed
+the total, everything renders at natural width and growers get zero.
+
+Children are assumed to render on a single line; multi-line children
+are measured by their widest line, but the row layout does not
+account for their extra lines.
+
+Usage:
+  (vui-flex :width \\='fill-column
+    (vui-text \"Name:\")
+    (vui-flex-item :grow 1
+      (lambda (width) (vui-field :size width)))
+    (vui-button \"Save\"))"
+  (let ((width 'fill-column)
+        (spacing 1)
+        (justify :start)
+        (indent 0)
+        (face nil)
+        (keymap nil)
+        (key nil)
+        (children nil))
+    ;; Parse keyword arguments
+    (while (and args (keywordp (car args)))
+      (pcase (pop args)
+        (:width (setq width (pop args)))
+        (:spacing (setq spacing (pop args)))
+        (:justify (setq justify (pop args)))
+        (:indent (setq indent (pop args)))
+        (:face (setq face (pop args)))
+        (:keymap (setq keymap (pop args)))
+        (:key (setq key (pop args)))))
+    ;; Remaining args are children
+    (setq children (remq nil (flatten-list args)))
+    (vui-vnode-flex--create
+     :children children
+     :spacing spacing
+     :width width
+     :justify justify
+     :indent indent
+     :face face
+     :keymap keymap
+     :key key)))
+
+(defun vui-flex-item (&rest args)
+  "Wrap a child of `vui-flex' so it grows into leftover width.
+ARGS can start with keyword options, followed by the child.
+
+Options:
+  :grow N  - proportional weight for distributing leftover width
+             among growing children (default 1)
+  :key KEY - for reconciliation
+
+The child is either a vnode - rendered inside a box padded to the
+allotted width - or a function called with the allotted width that
+returns a vnode, which is what lets fields and other sized content
+actually fill the space:
+
+  (vui-flex-item :grow 1
+    (lambda (width) (vui-field :size width)))
+
+Outside of `vui-flex', the child renders at its natural width."
+  (let ((grow 1)
+        (key nil)
+        (child nil))
+    (while (and args (keywordp (car args)))
+      (pcase (pop args)
+        (:grow (setq grow (pop args)))
+        (:key (setq key (pop args)))))
+    (setq child (car args))
+    (vui-vnode-flex-item--create
+     :child child
+     :grow grow
      :key key)))
 
 (cl-defun vui-error-boundary (&key fallback on-error id children)
@@ -2828,6 +2942,31 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
           (vui--render-vnode cell))
         (string-width (buffer-string))))))
 
+(defun vui--measure-vnode-width (vnode)
+  "Measure VNODE's rendered width as the width of its widest line.
+Renders into a temp buffer with the same side-effect isolation as
+`vui--cell-visual-width', but multi-line content measures by its
+widest line rather than the sum of all lines."
+  (cond
+   ((null vnode) 0)
+   ((stringp vnode)
+    (apply #'max (mapcar #'string-width (split-string vnode "\n"))))
+   (t (with-temp-buffer
+        (let ((vui--current-instance nil)
+              (vui--root-instance nil)
+              (vui--new-children nil)
+              (vui--child-index 0)
+              (vui--measuring-p t)
+              (vui--pending-effects nil))
+          (vui--render-vnode vnode))
+        (let ((max-width 0))
+          (goto-char (point-min))
+          (while (not (eobp))
+            (end-of-line)
+            (setq max-width (max max-width (current-column)))
+            (forward-line 1))
+          max-width)))))
+
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
 For strings, returns as-is. For vnodes, renders to temp buffer."
@@ -3086,6 +3225,111 @@ Handles :truncate and overflow:
                       (insert " "))))))
     (insert "\n")))
 
+(defun vui--flex-resolve-width (width)
+  "Resolve a `vui-flex' WIDTH spec to a number at render time.
+WIDTH is a number, a function, or one of the symbols `fill-column'
+and `window'."
+  (cond
+   ((numberp width) width)
+   ((eq width 'fill-column) fill-column)
+   ((eq width 'window) (window-width))
+   ((functionp width) (funcall width))
+   (t fill-column)))
+
+(defun vui--render-flex (vnode)
+  "Render a `vui-flex' VNODE: distribute its width among children."
+  (let* ((children (vui-vnode-flex-children vnode))
+         (spacing (or (vui-vnode-flex-spacing vnode) 1))
+         (indent (or (vui-vnode-flex-indent vnode) 0))
+         (justify (or (vui-vnode-flex-justify vnode) :start))
+         (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
+                          indent)))
+         (flex-start (point))
+         ;; Classify children: growers carry a weight, the rest are
+         ;; measured at natural width
+         (specs (mapcar (lambda (child)
+                          (if (vui-vnode-flex-item-p child)
+                              (list :child (vui-vnode-flex-item-child child)
+                                    :grow (or (vui-vnode-flex-item-grow child) 1))
+                            (list :child child
+                                  :natural (vui--measure-vnode-width child))))
+                        children))
+         (grow-total (cl-reduce #'+ (mapcar (lambda (s) (or (plist-get s :grow) 0))
+                                            specs)
+                                :initial-value 0))
+         (naturals (cl-reduce #'+ (mapcar (lambda (s) (or (plist-get s :natural) 0))
+                                          specs)
+                              :initial-value 0))
+         (sep-count (max 0 (1- (length specs))))
+         (leftover (max 0 (- total naturals (* spacing sep-count)))))
+    ;; Distribute leftover among growers, remainder to the last one
+    (when (> grow-total 0)
+      (let ((growers (cl-remove-if-not (lambda (s) (plist-get s :grow)) specs))
+            (assigned 0))
+        (dolist (spec growers)
+          (let ((share (/ (* leftover (plist-get spec :grow)) grow-total)))
+            (plist-put spec :share share)
+            (cl-incf assigned share)))
+        (let ((last-grower (car (last growers))))
+          (plist-put last-grower :share (+ (plist-get last-grower :share)
+                                           (- leftover assigned))))))
+    ;; Without growers, leftover goes to justify padding
+    (let* ((extra (if (> grow-total 0) 0 leftover))
+           (lead (pcase justify
+                   (:end extra)
+                   (:center (/ extra 2))
+                   (_ 0)))
+           (gap-base (if (and (eq justify :space-between) (> sep-count 0))
+                         (/ extra sep-count)
+                       0))
+           (gap-remainder (if (and (eq justify :space-between) (> sep-count 0))
+                              (% extra sep-count)
+                            0))
+           (gap-index 0)
+           (prev-rendered-p nil)
+           (child-idx 0))
+      (when (> lead 0)
+        (insert (make-string lead ?\s)))
+      (dolist (spec specs)
+        (let ((sep-start (point))
+              (content-start nil)
+              (vui--render-path (cons child-idx vui--render-path)))
+          ;; Separator (plus space-between padding) if previous child rendered
+          (when prev-rendered-p
+            (insert (make-string spacing ?\s))
+            (when (> gap-base 0)
+              (insert (make-string gap-base ?\s)))
+            (when (< gap-index gap-remainder)
+              (insert " "))
+            (cl-incf gap-index))
+          (setq content-start (point))
+          (let ((child (plist-get spec :child))
+                (share (plist-get spec :share)))
+            (cond
+             ;; Grower with a width-receiving function
+             ((and share (functionp child))
+              (vui--render-vnode (funcall child share)))
+             ;; Grower with a plain vnode: pad it to its share
+             (share
+              (vui--render-vnode
+               (vui-vnode-box--create :child child
+                                      :width share
+                                      :align :left
+                                      :padding-left 0
+                                      :padding-right 0)))
+             ;; Natural-width child
+             (t
+              (vui--render-vnode child))))
+          ;; Check if child actually rendered anything
+          (if (> (point) content-start)
+              (setq prev-rendered-p t)
+            ;; Child rendered nothing - remove the separator we added
+            (delete-region sep-start (point))))
+        (cl-incf child-idx)))
+    (vui--apply-region-props flex-start (point)
+                             (vui-vnode-flex-face vnode)
+                             (vui-vnode-flex-keymap vnode))))
+
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
   (cond
@@ -3342,6 +3586,22 @@ Handles :truncate and overflow:
                   :face (vui-vnode-hstack-face child)
                   :keymap (vui-vnode-hstack-keymap child)
                   :key (vui-vnode-hstack-key child))))
+               ;; Propagate indent to flex rows so they subtract it
+               ;; from their available width
+               ((and (vui-vnode-flex-p child) (> indent 0))
+                (unless skip-this-indent
+                  (insert indent-str))
+                (setq content-start (point))
+                (vui--render-vnode
+                 (vui-vnode-flex--create
+                  :children (vui-vnode-flex-children child)
+                  :spacing (vui-vnode-flex-spacing child)
+                  :width (vui-vnode-flex-width child)
+                  :justify (vui-vnode-flex-justify child)
+                  :indent (+ indent (or (vui-vnode-flex-indent child) 0))
+                  :face (vui-vnode-flex-face child)
+                  :keymap (vui-vnode-flex-keymap child)
+                  :key (vui-vnode-flex-key child))))
                ;; Tables: render with indent, then add indent after internal newlines
                ((and (vui-vnode-table-p child) (> indent 0))
                 (unless skip-this-indent
@@ -3512,6 +3772,15 @@ Handles :truncate and overflow:
         ;; by `vui--setup-field-placeholders'
         (when placeholder
           (widget-put w :vui-placeholder placeholder)))))
+
+   ;; Flexible-width row
+   ((vui-vnode-flex-p vnode)
+    (vui--render-flex vnode))
+
+   ;; Flex item outside vui-flex: render the child at natural width
+   ((vui-vnode-flex-item-p vnode)
+    (let ((child (vui-vnode-flex-item-child vnode)))
+      (vui--render-vnode (if (functionp child) (funcall child 0) child))))
 
    ;; Styled region - render children, then apply face/keymap on top
    ((vui-vnode-region-p vnode)
