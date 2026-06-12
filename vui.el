@@ -579,9 +579,13 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   on-error          ; Optional (lambda (error)) callback when error caught
   id)               ; Unique identifier for this boundary (for state tracking)
 
-;; Error boundary state (keyed by boundary id)
-(defvar vui--error-boundary-errors (make-hash-table :test 'equal)
-  "Hash table mapping error boundary IDs to caught errors.")
+;; Error boundary state lives on the root instance of a mounted tree
+;; (see `vui-instance-boundary-errors').  This buffer-local table is
+;; the fallback for static `vui-render' trees, which have no instance.
+(defvar-local vui--error-boundary-errors nil
+  "Buffer-local error boundary table for static `vui-render' trees.
+Maps boundary keys to caught errors.  Lazily initialized by
+`vui--error-boundary-table'.")
 
 
 ;;; Component System
@@ -620,7 +624,8 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   asyncs      ; Hash table of async-id -> (key status data error timer) for vui-use-async
   prev-props  ; Props from previous render (for on-update)
   prev-state  ; State from previous render (for on-update)
-  render-timer) ; Pending deferred-render timer (only used on root instances)
+  render-timer ; Pending deferred-render timer (only used on root instances)
+  boundary-errors) ; Hash of error-boundary key -> caught error (root instances)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -1032,9 +1037,6 @@ Example:
      :border border
      :key key)))
 
-(defvar vui--error-boundary-counter 0
-  "Counter for generating unique error boundary IDs.")
-
 (cl-defun vui-error-boundary (&key fallback on-error id children)
   "Create an error boundary that catches errors in CHILDREN.
 
@@ -1042,12 +1044,20 @@ FALLBACK is a function (lambda (error) vnode) called to render when
 an error is caught. It receives the error object and should return
 a vnode to display.
 
-ON-ERROR is an optional callback (lambda (error)) called when an
-error is caught, useful for logging.
+ON-ERROR is an optional callback (lambda (error)) called once when
+an error is first caught, useful for logging.
 
-ID is a unique identifier for this boundary. If not provided, one
-is generated automatically. The ID is used to track error state
-across re-renders.
+ID is an optional identifier for this boundary, used to track error
+state across re-renders and to target it with
+`vui-reset-error-boundary'.  When omitted, the boundary's identity
+is derived from its position in the rendered tree, which is stable
+across re-renders as long as the tree shape around it does not
+change.  Provide an explicit ID when the boundary moves around the
+tree or when you need to reset it by name.
+
+Error state is scoped to the mounted tree (or to the buffer for
+static `vui-render' trees), so two apps using the same ID do not
+interfere, and a fresh mount starts with a clean slate.
 
 CHILDREN are the vnodes to render normally when no error.
 
@@ -1063,21 +1073,41 @@ Example:
                                 (vui-reset-error-boundary \\='my-boundary)))))
     :id \\='my-boundary
     :children (list (my-component)))"
-  (let ((boundary-id (or id (cl-incf vui--error-boundary-counter))))
-    (vui-vnode-error-boundary--create
-     :children children
-     :fallback fallback
-     :on-error on-error
-     :id boundary-id)))
+  (vui-vnode-error-boundary--create
+   :children children
+   :fallback fallback
+   :on-error on-error
+   :id id))
 
-(defun vui-reset-error-boundary (id)
+(defun vui--error-boundary-table ()
+  "Return the error boundary table for the current render context.
+Uses the root instance's table when a mounted tree is in scope, or
+a buffer-local table for static `vui-render' trees.  The table is
+created lazily."
+  (if-let* ((root (vui--get-root-instance)))
+      (or (vui-instance-boundary-errors root)
+          (setf (vui-instance-boundary-errors root)
+                (make-hash-table :test 'equal)))
+    (or vui--error-boundary-errors
+        (setq-local vui--error-boundary-errors
+                    (make-hash-table :test 'equal)))))
+
+(defun vui-reset-error-boundary (&optional id)
   "Reset the error state for error boundary with ID.
 This clears the caught error, allowing the boundary to re-render
-its children on the next render cycle."
-  (remhash id vui--error-boundary-errors)
+its children on the next render cycle.  When ID is nil, the error
+state of all boundaries in the current tree is cleared.
+
+Must be called with the relevant tree in scope: from a component
+callback (e.g. a button's on-click handler) or with the VUI buffer
+current."
+  (let ((table (vui--error-boundary-table)))
+    (if id
+        (remhash id table)
+      (clrhash table)))
   ;; Trigger re-render if we have a root instance
-  (when vui--root-instance
-    (vui--rerender-instance vui--root-instance)))
+  (when-let* ((root (vui--get-root-instance)))
+    (vui--rerender-instance root)))
 
 (cl-defun vui-list (items render-fn &optional key-fn &key (vertical t) (indent 0) spacing)
   "Render a list of ITEMS using RENDER-FN.
@@ -3029,12 +3059,16 @@ Handles :truncate and overflow:
 
    ;; Error boundary - catch errors from children
    ((vui-vnode-error-boundary-p vnode)
-    (let* ((boundary-id (vui-vnode-error-boundary-id vnode))
+    (let* ((boundary-key (or (vui-vnode-error-boundary-id vnode)
+                             ;; No explicit id: derive a stable identity
+                             ;; from the boundary's position in the tree
+                             (cons :vui-path (reverse vui--render-path))))
            (fallback (vui-vnode-error-boundary-fallback vnode))
            (on-error (vui-vnode-error-boundary-on-error vnode))
            (children (vui-vnode-error-boundary-children vnode))
+           (table (vui--error-boundary-table))
            ;; Check if we already have a caught error for this boundary
-           (existing-error (gethash boundary-id vui--error-boundary-errors)))
+           (existing-error (gethash boundary-key table)))
       (if existing-error
           ;; Already have an error - render fallback
           (when fallback
@@ -3046,7 +3080,7 @@ Handles :truncate and overflow:
               (vui--render-vnode child))
           (error
            ;; Store the error for this boundary
-           (puthash boundary-id err vui--error-boundary-errors)
+           (puthash boundary-key err table)
            ;; Call on-error callback if provided
            (when on-error
              (funcall on-error err))

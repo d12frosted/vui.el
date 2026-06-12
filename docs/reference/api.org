@@ -909,28 +909,36 @@ Creates:
 
 Catch render errors in CHILDREN and display FALLBACK.
 
-| Property   | Type     | Description                        |
-|------------+----------+------------------------------------|
-| =:fallback= | vnode   | Displayed when error occurs        |
-| =:on-error= | function | Called with error when caught     |
-| =:id=       | any     | Unique identifier (auto-generated) |
-| =:children= | vnode   | Protected content                  |
+| Property   | Type     | Description                                |
+|------------+----------+--------------------------------------------|
+| =:fallback= | function | =(lambda (error) vnode)= rendered on error |
+| =:on-error= | function | Called once with error when first caught   |
+| =:id=       | any      | Optional identifier (default: tree position) |
+| =:children= | list     | Protected content                          |
+
+When =:id= is omitted, the boundary's identity is derived from its
+position in the rendered tree (stable across re-renders as long as the
+tree shape around it does not change). Error state is scoped to the
+mounted tree, so boundaries in different buffers never interfere and a
+fresh mount starts clean.
 
 #+begin_src elisp
 (vui-error-boundary
  :id 'main-boundary
- :fallback (vui-text "Something went wrong!" :face 'error)
+ :fallback (lambda (_err) (vui-text "Something went wrong!" :face 'error))
  :on-error (lambda (err) (log-error err))
- :children (vui-component 'risky-component))
+ :children (list (vui-component 'risky-component)))
 #+end_src
 
 ** vui-reset-error-boundary
 
 #+begin_src elisp
-(vui-reset-error-boundary ID)
+(vui-reset-error-boundary &optional ID)
 #+end_src
 
-Reset error state for boundary ID, allowing retry.
+Reset error state for boundary ID, allowing retry. When ID is nil,
+resets every boundary in the current tree. Call it from a component
+callback or with the VUI buffer current.
 
 * Configuration Variables
 

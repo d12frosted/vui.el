@@ -29,7 +29,6 @@
 
   (it "renders children when no error"
     (with-temp-buffer
-      (clrhash vui--error-boundary-errors)
       (vui-render (vui-error-boundary
                    :id 'test-no-error
                    :fallback (lambda (_) (vui-text "Error occurred"))
@@ -38,7 +37,6 @@
 
   (it "catches errors and renders fallback"
     (with-temp-buffer
-      (clrhash vui--error-boundary-errors)
       (vui-defcomponent error-component ()
         :render (error "Test error"))
       (vui-render (vui-error-boundary
@@ -51,7 +49,6 @@
   (it "calls on-error callback when error is caught"
     (let ((error-log nil))
       (with-temp-buffer
-        (clrhash vui--error-boundary-errors)
         (vui-defcomponent error-component2 ()
           :render (error "Logged error"))
         (vui-render (vui-error-boundary
@@ -63,39 +60,143 @@
         (expect error-log :to-be-truthy)
         (expect (cadr error-log) :to-equal "Logged error"))))
 
-  (it "persists error state across re-renders"
-    (clrhash vui--error-boundary-errors)
-    (vui-defcomponent error-counter ()
-      :state ((count 0))
-      :render (progn
-                (when (> count 0)
-                  (error "Count is positive"))
-                (vui-text (number-to-string count))))
-    (let ((instance (vui-mount
-                     (vui-component 'error-counter)
-                     "*test-persist-error*")))
-      (unwind-protect
-          (progn
-            ;; Initially no error
-            (expect (with-current-buffer "*test-persist-error*"
-                      (buffer-string))
-                    :to-equal "0")
-            ;; Wrap in error boundary and trigger error
-            (clrhash vui--error-boundary-errors)
-            (setf (vui-instance-state instance)
-                  (plist-put (vui-instance-state instance) :count 1)))
-        (kill-buffer "*test-persist-error*"))))
+  (it "persists error state across re-renders and fires on-error once"
+    (let ((on-error-count 0))
+      (vui-defcomponent persist-bad-child ()
+        :render (error "boom"))
+      (vui-defcomponent persist-error-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-persist
+         :fallback (lambda (_) (vui-text "fallback"))
+         :on-error (lambda (_) (cl-incf on-error-count))
+         :children (list (vui-component 'persist-bad-child))))
+      (let ((instance (vui-mount (vui-component 'persist-error-app)
+                                 "*test-persist-error*")))
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*test-persist-error*"
+                        (buffer-string))
+                      :to-equal "fallback")
+              (vui--rerender-instance instance)
+              (vui--rerender-instance instance)
+              ;; Fallback persists; the error is caught once, not per render
+              (expect (with-current-buffer "*test-persist-error*"
+                        (buffer-string))
+                      :to-equal "fallback")
+              (expect on-error-count :to-equal 1))
+          (kill-buffer "*test-persist-error*")))))
+
+  (it "keeps stable identity for boundaries without :id"
+    (let ((on-error-count 0))
+      (vui-defcomponent auto-id-bad-child ()
+        :render (error "boom"))
+      (vui-defcomponent auto-id-app ()
+        :render
+        (vui-error-boundary
+         :fallback (lambda (_) (vui-text "fallback"))
+         :on-error (lambda (_) (cl-incf on-error-count))
+         :children (list (vui-component 'auto-id-bad-child))))
+      (let ((instance (vui-mount (vui-component 'auto-id-app)
+                                 "*test-auto-id*")))
+        (unwind-protect
+            (progn
+              (vui--rerender-instance instance)
+              (vui--rerender-instance instance)
+              (expect (with-current-buffer "*test-auto-id*" (buffer-string))
+                      :to-equal "fallback")
+              ;; Identity is stable: one caught error, no growth per render
+              (expect on-error-count :to-equal 1)
+              (expect (hash-table-count
+                       (vui-instance-boundary-errors instance))
+                      :to-equal 1))
+          (kill-buffer "*test-auto-id*")))))
 
   (it "resets error with vui-reset-error-boundary"
-    (with-temp-buffer
-      (clrhash vui--error-boundary-errors)
-      ;; Store a fake error
-      (puthash 'reset-test '(error "Fake error") vui--error-boundary-errors)
-      (expect (gethash 'reset-test vui--error-boundary-errors) :to-be-truthy)
-      ;; Reset it
-      (let ((vui--root-instance nil)) ; Prevent re-render
-        (vui-reset-error-boundary 'reset-test))
-      (expect (gethash 'reset-test vui--error-boundary-errors) :to-be nil))))
+    (let ((should-error t))
+      (vui-defcomponent reset-bad-child ()
+        :render (if should-error (error "boom") (vui-text "healthy")))
+      (vui-defcomponent reset-error-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-reset
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'reset-bad-child))))
+      (vui-mount (vui-component 'reset-error-app) "*test-reset-eb*")
+      (unwind-protect
+          (progn
+            (expect (with-current-buffer "*test-reset-eb*" (buffer-string))
+                    :to-equal "fallback")
+            ;; Fix the child, then reset the boundary
+            (setq should-error nil)
+            (with-current-buffer "*test-reset-eb*"
+              (vui-reset-error-boundary 'test-reset))
+            (expect (with-current-buffer "*test-reset-eb*" (buffer-string))
+                    :to-equal "healthy"))
+        (kill-buffer "*test-reset-eb*"))))
+
+  (it "resets all boundaries when vui-reset-error-boundary gets no id"
+    (let ((should-error t))
+      (vui-defcomponent reset-all-child ()
+        :render (if should-error (error "boom") (vui-text "healthy")))
+      (vui-defcomponent reset-all-app ()
+        :render
+        (vui-error-boundary
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'reset-all-child))))
+      (vui-mount (vui-component 'reset-all-app) "*test-reset-all*")
+      (unwind-protect
+          (progn
+            (expect (with-current-buffer "*test-reset-all*" (buffer-string))
+                    :to-equal "fallback")
+            (setq should-error nil)
+            (with-current-buffer "*test-reset-all*"
+              (vui-reset-error-boundary))
+            (expect (with-current-buffer "*test-reset-all*" (buffer-string))
+                    :to-equal "healthy"))
+        (kill-buffer "*test-reset-all*")))))
+
+(describe "error boundary state isolation"
+  (it "does not leak error state across mounts"
+    (let ((should-error t))
+      (vui-defcomponent leak-test-child ()
+        :render (if should-error (error "boom") (vui-text "healthy")))
+      (vui-defcomponent leak-test-app ()
+        :render
+        (vui-error-boundary
+         :id 'leak-test-stable-id
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'leak-test-child))))
+      ;; First app instance errors
+      (vui-mount (vui-component 'leak-test-app) "*test-eb-leak*")
+      (kill-buffer "*test-eb-leak*")
+      ;; Fresh mount with a healthy child must not show stale fallback
+      (setq should-error nil)
+      (vui-mount (vui-component 'leak-test-app) "*test-eb-leak*")
+      (unwind-protect
+          (expect (with-current-buffer "*test-eb-leak*" (buffer-string))
+                  :to-equal "healthy")
+        (kill-buffer "*test-eb-leak*"))))
+
+  (it "does not share error state between buffers using the same id"
+    (vui-defcomponent shared-id-child (broken)
+      :render (if broken (error "boom") (vui-text "healthy")))
+    (vui-defcomponent shared-id-app (broken)
+      :render
+      (vui-error-boundary
+       :id 'shared-id
+       :fallback (lambda (_) (vui-text "fallback"))
+       :children (list (vui-component 'shared-id-child :broken broken))))
+    (vui-mount (vui-component 'shared-id-app :broken t) "*test-eb-a*")
+    (vui-mount (vui-component 'shared-id-app :broken nil) "*test-eb-b*")
+    (unwind-protect
+        (progn
+          (expect (with-current-buffer "*test-eb-a*" (buffer-string))
+                  :to-equal "fallback")
+          (expect (with-current-buffer "*test-eb-b*" (buffer-string))
+                  :to-equal "healthy"))
+      (kill-buffer "*test-eb-a*")
+      (kill-buffer "*test-eb-b*"))))
 
 (describe "lifecycle error handling"
   (it "catches on-mount errors and stores them"
