@@ -1612,7 +1612,15 @@ Called from within a component's render function."
 Creates:
 - `NAME-context': The context object
 - `NAME-provider': Function to create a provider vnode
-- `use-NAME': Function to consume the context value
+- `use-NAME': Convenience function to consume the context value
+
+The symbols derived from NAME alone (`NAME-context', `NAME-provider')
+follow whatever prefix NAME carries, so packages should use a
+prefixed NAME (e.g. `my-pkg-theme').  The generated `use-NAME'
+consumer is convenient in applications and personal configs, but its
+`use-' prefix pollutes the namespace from a package's point of view;
+packages should prefer calling `vui-use-context' on `NAME-context'
+instead.
 
 Example:
   (vui-defcontext theme \\='light \"The current UI theme.\")
@@ -1621,7 +1629,9 @@ Example:
   (theme-provider \\='dark
     (vui-component \\='my-button))
 
-  ;; In my-button:
+  ;; In my-button - either of:
+  (let ((theme (vui-use-context theme-context)))
+    (vui-text (format \"Theme: %s\" theme)))
   (let ((theme (use-theme)))
     (vui-text (format \"Theme: %s\" theme)))
 
@@ -1662,6 +1672,25 @@ Returns `default-value' if no provider found."
                when (eq (vui-context-binding-context binding) context)
                return (vui-context-binding-value binding))
       (vui-context-default-value context)))
+
+(defun vui-use-context (context)
+  "Return the current value of CONTEXT.
+CONTEXT is a context object, i.e. the NAME-context variable defined
+by `vui-defcontext'.  Searches the providers in scope at the current
+render position; returns the context's default value when no
+provider is found.
+
+This is the namespace-clean way to consume a context - equivalent to
+the generated `use-NAME' function:
+
+  (vui-defcontext my-pkg-theme \\='light)
+
+  ;; In a component render:
+  (vui-use-context my-pkg-theme-context)
+
+Must be called during render (inside a component's :render form or a
+provider's children)."
+  (vui--consume-context context))
 
 ;;; Memoized Callbacks
 

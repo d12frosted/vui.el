@@ -106,7 +106,7 @@ Result: A buffer with text "Count: 0" and a clickable button. Each click updates
 
 (vui-defcomponent themed-button (label)
   :render
-  (let ((theme (use-theme)))
+  (let ((theme (vui-use-context theme-context)))  ; or (use-theme)
     (vui-button label
                 :face (if (eq theme 'dark)
                           'custom-button-pressed
