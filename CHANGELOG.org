@@ -9,6 +9,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-use-callback*= and =vui-use-memo*= were unusable as documented: plain =defmacro= does not support =&key=, so the documented =:compare eq= syntax signalled =void-variable=, and omitting =:compare= failed to macro-expand with wrong-number-of-arguments. Only the accidental =:compare 'eq= form worked. Both macros now parse =:compare= from the body; bare =eq= / =equal=, quoted symbols, and comparison functions all work, and =:compare= may be omitted.
 - Killing a VUI buffer now runs the full unmount lifecycle for the mounted tree. Previously =:on-unmount= hooks, effect cleanups, and =:on-mount= cleanup functions never ran on buffer kill, so timers and processes held by components leaked.
 - =vui-mount= now unmounts a previously mounted tree before mounting into the same buffer. Previously the old tree stayed live without any teardown: its cleanups never ran and a timer created by it could re-render the old UI over the new mount.
 - Deferred re-renders now use a per-instance timer instead of a single global one. Previously, state updates in two VUI buffers within the same =vui-render-delay= window cancelled each other's pending render, silently leaving the first buffer stale. =vui-flush-sync= likewise no longer cancels pending renders that belong to other buffers.

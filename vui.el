@@ -1593,27 +1593,45 @@ not a function returning a callback."
     (list ,@deps)
     (lambda () ,@body)))
 
-(defmacro vui-use-callback* (deps &key compare &rest body)
+(defmacro vui-use-callback* (deps &rest body)
   "Like `vui-use-callback' but with configurable comparison mode.
 
 DEPS is a list of variables to watch.
-COMPARE specifies comparison mode:
+BODY may start with `:compare MODE' to select how deps are compared:
   `eq'     - identity comparison (fastest, for symbols/numbers)
   `equal'  - structural comparison (default)
-  function - custom (lambda (old-deps new-deps) bool)
+  form     - any other form is evaluated and must yield a function
+             (lambda (old-deps new-deps) bool)
 
-Example:
+The bare symbols `eq' and `equal' and the quoted forms \\='eq and
+\\='equal are interchangeable.
+
+Examples:
   ;; Use eq for fast symbol comparison
   (vui-use-callback* (action-type)
     :compare eq
     (dispatch action-type))
 
-BODY is the callback expression itself, not a function returning a callback."
+  ;; Custom comparison function
+  (vui-use-callback* (items)
+    :compare (lambda (old new) (equal (car old) (car new)))
+    (process items))
+
+The rest of BODY is the callback expression itself, not a function
+returning a callback."
   (declare (indent 1))
-  `(vui--get-or-update-callback
-    (list ,@deps)
-    (lambda () ,@body)
-    ,compare))
+  (let ((compare nil))
+    (when (eq (car body) :compare)
+      (setq compare (cadr body)
+            body (cddr body)))
+    ;; Bare `eq' / `equal' name the built-in comparison modes; any
+    ;; other form is evaluated (a quoted symbol, lambda, #'fn, ...).
+    (when (memq compare '(eq equal))
+      (setq compare (list 'quote compare)))
+    `(vui--get-or-update-callback
+      (list ,@deps)
+      (lambda () ,@body)
+      ,compare)))
 
 (defun vui--deps-equal-p (old-deps new-deps compare)
   "Compare OLD-DEPS and NEW-DEPS using COMPARE mode.
@@ -1679,27 +1697,44 @@ Example:
     (list ,@deps)
     (lambda () ,@body)))
 
-(defmacro vui-use-memo* (deps &key compare &rest body)
+(defmacro vui-use-memo* (deps &rest body)
   "Like `vui-use-memo' but with configurable comparison mode.
 
 DEPS is a list of variables to watch.
-COMPARE specifies comparison mode:
+BODY may start with `:compare MODE' to select how deps are compared:
   `eq'     - identity comparison (fastest, for symbols/numbers)
   `equal'  - structural comparison (default)
-  function - custom (lambda (old-deps new-deps) bool)
+  form     - any other form is evaluated and must yield a function
+             (lambda (old-deps new-deps) bool)
 
-Example:
+The bare symbols `eq' and `equal' and the quoted forms \\='eq and
+\\='equal are interchangeable.
+
+Examples:
   ;; Use eq for fast symbol comparison
   (vui-use-memo* (mode)
     :compare eq
     (expensive-lookup mode))
 
-BODY is the expression to compute and cache."
+  ;; Custom comparison function
+  (vui-use-memo* (items)
+    :compare (lambda (old new) (equal (car old) (car new)))
+    (process-items items))
+
+The rest of BODY is the expression to compute and cache."
   (declare (indent 1))
-  `(vui--get-or-update-memo
-    (list ,@deps)
-    (lambda () ,@body)
-    ,compare))
+  (let ((compare nil))
+    (when (eq (car body) :compare)
+      (setq compare (cadr body)
+            body (cddr body)))
+    ;; Bare `eq' / `equal' name the built-in comparison modes; any
+    ;; other form is evaluated (a quoted symbol, lambda, #'fn, ...).
+    (when (memq compare '(eq equal))
+      (setq compare (list 'quote compare)))
+    `(vui--get-or-update-memo
+      (list ,@deps)
+      (lambda () ,@body)
+      ,compare)))
 
 (defun vui--get-or-update-memo (deps compute-fn &optional compare)
   "Return cached value or recompute if DEPS changed.

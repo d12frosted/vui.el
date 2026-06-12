@@ -376,6 +376,107 @@
             (expect result :to-equal 42)
           (kill-buffer "*test-cb3*"))))))
 
+(describe "use-callback* and use-memo* comparison modes"
+  (it "vui-use-callback* accepts bare eq as documented"
+    ;; The documented syntax: :compare eq (unquoted)
+    (let ((captured-fns nil))
+      (vui-defcomponent callback-star-bare ()
+        :state ((mode 'view))
+        :render (let ((cb (vui-use-callback* (mode)
+                            :compare eq
+                            (ignore mode))))
+                  (push cb captured-fns)
+                  (vui-text "x")))
+      (let ((instance (vui-mount (vui-component 'callback-star-bare)
+                                 "*test-cbs1*")))
+        (unwind-protect
+            (progn
+              (vui--rerender-instance instance)
+              (expect (length captured-fns) :to-equal 2)
+              (expect (nth 0 captured-fns) :to-be (nth 1 captured-fns)))
+          (kill-buffer "*test-cbs1*")))))
+
+  (it "vui-use-callback* works without :compare"
+    (let ((captured-fns nil))
+      (vui-defcomponent callback-star-default ()
+        :state ((n 0))
+        :render (let ((cb (vui-use-callback* (n)
+                            (ignore n))))
+                  (push cb captured-fns)
+                  (vui-text "x")))
+      (let ((instance (vui-mount (vui-component 'callback-star-default)
+                                 "*test-cbs2*")))
+        (unwind-protect
+            (progn
+              (vui--rerender-instance instance)
+              (expect (length captured-fns) :to-equal 2)
+              (expect (nth 0 captured-fns) :to-be (nth 1 captured-fns)))
+          (kill-buffer "*test-cbs2*")))))
+
+  (it "vui-use-memo* accepts bare eq as documented"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-star-bare ()
+        :state ((mode 'view))
+        :render (let ((result (vui-use-memo* (mode)
+                                :compare eq
+                                (cl-incf compute-count)
+                                (symbol-name mode))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-star-bare)
+                                 "*test-memo-bare*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; Same symbol - cached
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1)
+              ;; Different symbol - recompute
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :mode 'edit))
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 2))
+          (kill-buffer "*test-memo-bare*")))))
+
+  (it "vui-use-memo* works without :compare"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-star-default ()
+        :state ((n 0))
+        :render (let ((result (vui-use-memo* (n)
+                                (cl-incf compute-count)
+                                (number-to-string n))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-star-default)
+                                 "*test-memo-default*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1))
+          (kill-buffer "*test-memo-default*")))))
+
+  (it "vui-use-memo* accepts a custom comparison function"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-star-custom ()
+        :state ((n 0))
+        :render (let ((result (vui-use-memo* (n)
+                                ;; Treat all deps as equal: never recompute
+                                :compare (lambda (_old _new) t)
+                                (cl-incf compute-count)
+                                (number-to-string n))))
+                  (ignore result)
+                  (vui-text (number-to-string n))))
+      (let ((instance (vui-mount (vui-component 'memo-star-custom)
+                                 "*test-memo-custom*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; Change deps; custom comparator says equal, so cached
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :n 1))
+              (vui--rerender-instance instance)
+              (expect compute-count :to-equal 1))
+          (kill-buffer "*test-memo-custom*"))))))
+
 (describe "use-memo"
   (it "caches computed value across re-renders"
     (let ((compute-count 0))
