@@ -434,7 +434,7 @@ PROPS is a plist accepting :level (1-8, default 1) and :key."
 
 (vui-defcomponent vui-typed-field--internal
     (type value min max validate on-change on-submit on-error show-error
-     size secret key required must-exist extensions)
+     size secret key required must-exist extensions placeholder)
   "Internal component for typed input fields.
 
 TYPE is the field type (integer, natnum, float, number, file, directory, symbol, sexp).
@@ -450,7 +450,8 @@ SECRET enables password mode.
 KEY is for field lookup.
 REQUIRED means empty is invalid.
 MUST-EXIST means file/directory must exist (for file/directory types).
-EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"org\"))."
+EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"org\")).
+PLACEHOLDER is hint text shown while the field is empty."
 
   :state ((raw-value (vui--field-value-to-string value type))
           (error-msg nil)
@@ -521,6 +522,7 @@ EXTENSIONS is a list of allowed extensions (for file type, e.g., \\='(\"el\" \"o
       :size size
       :secret secret
       :key key
+      :placeholder placeholder
       :on-change (lambda (s) (funcall handle-input s on-change))
       :on-submit (lambda (s) (funcall handle-input s on-submit)))
      ;; Error display
@@ -551,6 +553,7 @@ PROPS is a plist accepting:
   :secret     - Password mode
   :key        - Field key
   :required   - Non-nil means empty is invalid
+  :placeholder - Hint text shown while the field is empty
 
 Examples:
   (vui-typed-field :type \\='integer :value 42 :min 0 :max 100
@@ -571,7 +574,8 @@ Examples:
     :size (plist-get props :size)
     :secret (plist-get props :secret)
     :key (plist-get props :key)
-    :required (plist-get props :required)))
+    :required (plist-get props :required)
+    :placeholder (plist-get props :placeholder)))
 
 ;;; Typed Field Shortcuts
 
