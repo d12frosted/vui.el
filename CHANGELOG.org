@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]], and this project adheres to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+** Added
+
+- *Inline mounting* (#8): =vui-mount-inline= renders a component into a managed region at point (or a given position) inside an existing buffer, without taking the buffer over - the major mode and surrounding content are untouched, and a buffer can host any number of inline instances. State updates rewrite only the instance's region; region mutations are kept out of the undo history. =vui-unmount= now also accepts an instance and removes an inline instance's region while running the full teardown lifecycle (which also runs on buffer kill, and when =vui-mount= takes over a buffer that hosts inline instances). =vui-inline-instance-at= returns the inline instance at a position. Intended for ephemeral, disposable forms in interactive documents.
+
 * v1.1.0 - 2026-06-12
 
 ** Added

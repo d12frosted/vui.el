@@ -631,7 +631,9 @@ Maps boundary keys to caught errors.  Lazily initialized by
   prev-props  ; Props from previous render (for on-update)
   prev-state  ; State from previous render (for on-update)
   render-timer ; Pending deferred-render timer (only used on root instances)
-  boundary-errors) ; Hash of error-boundary key -> caught error (root instances)
+  boundary-errors ; Hash of error-boundary key -> caught error (root instances)
+  region-start ; Marker: start of managed region (inline instances only)
+  region-end)  ; Marker: end of managed region (inline instances only)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -1241,6 +1243,11 @@ child vnodes and may appear anywhere in the plist."
 
 (defvar vui--root-instance nil
   "The root component instance for the current buffer.")
+
+(defvar-local vui--inline-instances nil
+  "Inline instances mounted in this buffer via `vui-mount-inline'.
+Unlike `vui--root-instance', a buffer can host any number of inline
+instances, each owning a region delimited by its markers.")
 
 (defvar vui--batch-depth 0
   "Current nesting depth of `vui-batch' calls.")
@@ -2063,49 +2070,113 @@ instead of overflowing the stack."
 
 (defun vui--rerender-instance (instance)
   "Re-render INSTANCE and update the buffer.
+For instances mounted via `vui-mount-inline', only the region they
+manage is rewritten; otherwise the whole buffer is re-rendered.
+
 When called while another render is already in progress (for
 example, from `vui-set-state' in a lifecycle hook or effect with
 `vui-render-delay' set to nil), the request is queued and runs after
 the in-progress render commits, instead of erasing the buffer
 mid-render."
-  (if vui--rendering-p
-      (cl-pushnew instance vui--queued-rerenders :test #'eq)
-    (let ((buffer (vui-instance-buffer instance)))
-      (when (and buffer (buffer-live-p buffer))
-        (with-current-buffer buffer
-          (let* ((inhibit-read-only t)
-                 (inhibit-redisplay t)  ; Prevent flicker
-                 (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
-                 ;; Save widget-relative cursor position
-                 (cursor-info (vui--save-cursor-position))
-                 ;; Save viewport (window-start) for all windows showing this buffer
-                 (window-info (vui--save-window-starts buffer))
-                 (vui--root-instance instance)
-                 ;; Initialize render path for cursor tracking
-                 (vui--render-path nil)
-                 ;; Clear pending effects before render
-                 (vui--pending-effects nil))
-            ;; Clear widget tracking before re-render
-            (setq widget-field-list nil)
-            (setq widget-field-new nil)
-            ;; Remove only widget overlays, preserve others (like hl-line)
-            (vui--remove-widget-overlays)
-            (erase-buffer)
-            ;; Queue re-render requests (vui-set-state with nil delay)
-            ;; until commit and effects are done
-            (setq vui--rendering-p t)
-            (unwind-protect
-                (progn
+  (cond
+   (vui--rendering-p
+    (cl-pushnew instance vui--queued-rerenders :test #'eq))
+   ((vui--inline-p instance)
+    (vui--rerender-inline instance))
+   (t
+    (vui--rerender-buffer instance))))
+
+(defun vui--rerender-inline (instance)
+  "Re-render inline INSTANCE inside the region it manages.
+The host buffer outside the region is left untouched.  Region
+mutations are kept out of the undo history: the rendered UI is
+ephemeral chrome, not document content."
+  (let ((buffer (vui-instance-buffer instance))
+        (start (vui-instance-region-start instance))
+        (end (vui-instance-region-end instance)))
+    (when (and buffer (buffer-live-p buffer)
+               start (marker-position start))
+      (with-current-buffer buffer
+        (let* ((inhibit-read-only t)
+               (inhibit-redisplay t)
+               (inhibit-modification-hooks t)
+               ;; Managed UI text is not part of the document's history
+               (buffer-undo-list t)
+               (pos (marker-position start))
+               (end-pos (marker-position end))
+               ;; Only track the cursor when it is inside the region;
+               ;; positions outside adjust automatically
+               (cursor-info (when (and (>= (point) pos)
+                                       (<= (point) end-pos))
+                              (vui--save-cursor-position pos end-pos)))
+               (vui--root-instance instance)
+               (vui--render-path nil)
+               (vui--pending-effects nil))
+          ;; Queue re-render requests until commit and effects are done
+          (setq vui--rendering-p t)
+          (unwind-protect
+              (progn
+                (save-excursion
+                  (vui--remove-widget-overlays pos end-pos)
+                  (vui--forget-region-fields pos end-pos)
+                  (delete-region pos end-pos)
+                  (goto-char pos)
                   (vui--render-instance instance)
+                  ;; Reposition the markers around the fresh content:
+                  ;; START's insertion type made it advance past our
+                  ;; own insertions (so user edits stay outside), put
+                  ;; it back at the region's beginning
+                  (set-marker start pos)
+                  (set-marker end (point))
                   (widget-setup)
-                  (vui--setup-field-placeholders)
-                  ;; Restore cursor position
-                  (vui--restore-cursor-position cursor-info)
-                  ;; Restore viewport for all windows
-                  (vui--restore-window-starts window-info)
-                  ;; Run effects after commit
-                  (vui--run-pending-effects))
-              (setq vui--rendering-p nil))))
+                  (vui--setup-field-placeholders))
+                (when cursor-info
+                  (vui--restore-cursor-position cursor-info pos
+                                                (marker-position end)))
+                ;; Run effects after commit
+                (vui--run-pending-effects))
+            (setq vui--rendering-p nil))))
+      ;; Run any re-renders requested during render/effects
+      (vui--flush-queued-rerenders))))
+
+(defun vui--rerender-buffer (instance)
+  "Re-render INSTANCE as the root of its whole buffer."
+  (let ((buffer (vui-instance-buffer instance)))
+    (when (and buffer (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (let* ((inhibit-read-only t)
+               (inhibit-redisplay t)  ; Prevent flicker
+               (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
+               ;; Save widget-relative cursor position
+               (cursor-info (vui--save-cursor-position))
+               ;; Save viewport (window-start) for all windows showing this buffer
+               (window-info (vui--save-window-starts buffer))
+               (vui--root-instance instance)
+               ;; Initialize render path for cursor tracking
+               (vui--render-path nil)
+               ;; Clear pending effects before render
+               (vui--pending-effects nil))
+          ;; Clear widget tracking before re-render
+          (setq widget-field-list nil)
+          (setq widget-field-new nil)
+          ;; Remove only widget overlays, preserve others (like hl-line)
+          (vui--remove-widget-overlays)
+          (erase-buffer)
+          ;; Queue re-render requests (vui-set-state with nil delay)
+          ;; until commit and effects are done
+          (setq vui--rendering-p t)
+          (unwind-protect
+              (progn
+                (vui--render-instance instance)
+                (widget-setup)
+                (vui--setup-field-placeholders)
+                ;; Restore cursor position
+                (vui--restore-cursor-position cursor-info)
+                ;; Restore viewport for all windows
+                (vui--restore-window-starts window-info)
+                ;; Run effects after commit
+                (vui--run-pending-effects))
+            (setq vui--rendering-p nil)))
         ;; Run any re-renders requested during render/effects
         (vui--flush-queued-rerenders)))))
 
@@ -2285,6 +2356,24 @@ like hl-line."
               (overlay-get ov 'field)
               (overlay-get ov 'vui-placeholder))
       (delete-overlay ov))))
+
+(defun vui--inline-p (instance)
+  "Return non-nil if INSTANCE was mounted inline (owns a region)."
+  (and (vui-instance-region-start instance) t))
+
+(defun vui--forget-region-fields (start end)
+  "Drop field-widget bookkeeping for fields between START and END.
+Field widgets whose text is about to be deleted would otherwise
+linger in `widget-field-list' with collapsed bounds, confusing
+`widget-before-change' and `vui-field-value'.  Entries whose field
+no longer exists are dropped as well."
+  (let ((in-region-p
+         (lambda (widget)
+           (let ((field-start (widget-field-start widget)))
+             (or (null field-start)
+                 (and (>= field-start start) (<= field-start end)))))))
+    (setq widget-field-list (cl-remove-if in-region-p widget-field-list))
+    (setq widget-field-new (cl-remove-if in-region-p widget-field-new))))
 
 (defun vui--field-add-placeholder (widget)
   "Show WIDGET's placeholder while its field is empty.
@@ -3359,6 +3448,12 @@ Returns the root instance."
         ;; re-render the old UI over the new mount.
         (when vui--root-instance
           (vui--unmount-root vui--root-instance))
+        ;; A full mount owns the whole buffer: tear down inline
+        ;; instances too, since erasing destroys their regions
+        (when vui--inline-instances
+          (dolist (inline-instance vui--inline-instances)
+            (vui--unmount-root inline-instance))
+          (kill-local-variable 'vui--inline-instances))
         ;; Enable vui-mode (this also sets up the keymap hierarchy)
         (unless (derived-mode-p 'vui-mode)
           (vui-mode))
@@ -3389,6 +3484,80 @@ Returns the root instance."
     (switch-to-buffer buf)
     instance))
 
+(defun vui-mount-inline (component-vnode &optional position)
+  "Mount COMPONENT-VNODE inline at POSITION in the current buffer.
+
+Unlike `vui-mount', this does not take over the buffer: the
+component renders into a managed region at POSITION (default:
+point) inside the existing buffer content.  The buffer's major mode
+is left untouched, and a buffer can host any number of inline
+instances alongside its regular content.
+
+The region is ephemeral UI, not document content: vui rewrites it
+on every state update, keeps those rewrites out of the undo
+history, and removes the region when the instance is unmounted.
+Manual edits inside the region (outside of input fields) are
+overwritten by the next re-render.
+
+POSITION must not fall strictly inside another inline instance's
+region.
+
+Returns the instance.  Pass it to `vui-unmount' to dismiss the UI
+and run the full teardown lifecycle (which also happens
+automatically when the buffer is killed), or drive it with
+`vui-rerender' / `vui-update' / `vui-update-props'.
+
+Example - an ephemeral form that dismisses itself on submit:
+
+  (let* ((form nil))
+    (setq form
+          (vui-mount-inline
+           (vui-component \\='server-query-form
+             :on-submit (lambda (params)
+                          (vui-unmount form)
+                          (run-query params))))))"
+  (let ((pos (or position (point))))
+    (when (cl-find-if (lambda (instance)
+                        (let ((s (vui-instance-region-start instance))
+                              (e (vui-instance-region-end instance)))
+                          (and s e (marker-position s)
+                               (> pos (marker-position s))
+                               (< pos (marker-position e)))))
+                      vui--inline-instances)
+      (error "Position %d is inside an existing inline VUI instance" pos))
+    (let ((instance (vui--create-instance component-vnode nil))
+          (start (make-marker))
+          (end (make-marker)))
+      (setf (vui-instance-buffer instance) (current-buffer))
+      (set-marker start pos)
+      (set-marker end pos)
+      ;; Text typed by the user at the boundaries stays outside the
+      ;; region: START advances past insertions at its position, END
+      ;; stays before them.  Render itself repositions both markers
+      ;; explicitly.
+      (set-marker-insertion-type start t)
+      (set-marker-insertion-type end nil)
+      (setf (vui-instance-region-start instance) start)
+      (setf (vui-instance-region-end instance) end)
+      (push instance vui--inline-instances)
+      ;; Release component resources when the buffer is killed
+      (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
+      (vui--rerender-instance instance)
+      instance)))
+
+(defun vui-inline-instance-at (&optional position)
+  "Return the inline VUI instance whose region contains POSITION.
+POSITION defaults to point.  Returns nil when POSITION is not inside
+any region mounted via `vui-mount-inline' in the current buffer."
+  (let ((pos (or position (point))))
+    (cl-find-if (lambda (instance)
+                  (let ((s (vui-instance-region-start instance))
+                        (e (vui-instance-region-end instance)))
+                    (and s e (marker-position s)
+                         (>= pos (marker-position s))
+                         (<= pos (marker-position e)))))
+                vui--inline-instances)))
+
 (defun vui-get-instance (&optional buffer)
   "Return the root component instance mounted in BUFFER.
 BUFFER defaults to the current buffer and may be a buffer object or
@@ -3405,40 +3574,85 @@ Use this together with `vui-rerender', `vui-update', and
       (buffer-local-value 'vui--root-instance buf))))
 
 (defun vui--teardown-on-kill ()
-  "Run the unmount lifecycle for the current buffer's root instance.
-Installed buffer-locally on `kill-buffer-hook' by `vui-mount' so
-components release their resources (timers, processes, subscriptions)
-when the buffer is killed."
+  "Run the unmount lifecycle for this buffer's mounted instances.
+Installed buffer-locally on `kill-buffer-hook' by `vui-mount' and
+`vui-mount-inline' so components release their resources (timers,
+processes, subscriptions) when the buffer is killed."
   (when vui--root-instance
     (vui--unmount-root vui--root-instance)
-    (kill-local-variable 'vui--root-instance)))
+    (kill-local-variable 'vui--root-instance))
+  (when vui--inline-instances
+    (dolist (instance vui--inline-instances)
+      (vui--unmount-root instance))
+    (kill-local-variable 'vui--inline-instances)))
 
-(defun vui-unmount (&optional buffer)
-  "Unmount the VUI instance mounted in BUFFER (default: current buffer).
-BUFFER may be a buffer object or a buffer name.
+(defun vui--unmount-inline (instance)
+  "Tear down inline INSTANCE and remove its region from the buffer.
+Returns INSTANCE, or nil if it was already unmounted."
+  (when (vui-instance-buffer instance)
+    (let ((buffer (vui-instance-buffer instance))
+          (start (vui-instance-region-start instance))
+          (end (vui-instance-region-end instance)))
+      ;; Run cleanups and detach first, so the tree cannot re-render
+      ;; into the region we are about to delete
+      (vui--unmount-root instance)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (setq vui--inline-instances (delq instance vui--inline-instances))
+          (when (and start (marker-position start))
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  ;; Managed UI text is not part of the undo history
+                  (buffer-undo-list t)
+                  (pos (marker-position start))
+                  (end-pos (marker-position end)))
+              (vui--remove-widget-overlays pos end-pos)
+              (vui--forget-region-fields pos end-pos)
+              (delete-region pos end-pos)))))
+      (when start (set-marker start nil))
+      (when end (set-marker end nil))
+      (setf (vui-instance-region-start instance) nil)
+      (setf (vui-instance-region-end instance) nil)
+      instance)))
 
-Runs the full teardown lifecycle for every component in the tree:
+(defun vui-unmount (&optional buffer-or-instance)
+  "Unmount a VUI instance, running its full teardown lifecycle.
+
+BUFFER-OR-INSTANCE selects what to unmount:
+- nil, a buffer, or a buffer name: the instance mounted in that
+  buffer (default: current buffer) via `vui-mount'.  The buffer's
+  content is erased, but the buffer itself is not killed.
+- an instance returned by `vui-mount-inline': its managed region is
+  removed from the host buffer; the rest of the buffer is untouched.
+- an instance returned by `vui-mount': same as passing its buffer.
+
+The teardown lifecycle runs for every component in the tree:
 on-unmount hooks, effect cleanup functions, cleanup functions
 returned from on-mount, and cancellation of pending async processes
-and deferred renders.  The buffer's content is erased, but the
-buffer itself is not killed.
+and deferred renders.
 
 After unmounting, async callbacks created via
 `vui-with-async-context' or `vui-async-callback' that captured this
 tree become no-ops.
 
-Returns the unmounted instance, or nil if BUFFER does not exist or
-has no mounted instance."
-  (when-let* ((instance (vui-get-instance buffer)))
-    (let ((buf (vui-instance-buffer instance)))
-      (vui--unmount-root instance)
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (kill-local-variable 'vui--root-instance)
-          (let ((inhibit-read-only t))
-            (remove-overlays)
-            (erase-buffer)))))
-    instance))
+Returns the unmounted instance, or nil if nothing was mounted."
+  (cond
+   ((vui-instance-p buffer-or-instance)
+    (if (vui--inline-p buffer-or-instance)
+        (vui--unmount-inline buffer-or-instance)
+      (when-let* ((buffer (vui-instance-buffer buffer-or-instance)))
+        (vui-unmount buffer))))
+   (t
+    (when-let* ((instance (vui-get-instance buffer-or-instance)))
+      (let ((buf (vui-instance-buffer instance)))
+        (vui--unmount-root instance)
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (kill-local-variable 'vui--root-instance)
+            (let ((inhibit-read-only t))
+              (remove-overlays)
+              (erase-buffer)))))
+      instance))))
 
 (provide 'vui)
 ;;; vui.el ends here

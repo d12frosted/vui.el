@@ -95,28 +95,84 @@ new tree renders.
 (vui-mount (vui-component 'my-app :title "Hello") "*my-app*")
 #+end_src
 
+** vui-mount-inline
+
+#+begin_src elisp
+(vui-mount-inline COMPONENT-VNODE &optional POSITION) -> instance
+#+end_src
+
+Mount a component inline at POSITION (default: point) in the current
+buffer, without taking the buffer over.
+
+Unlike =vui-mount=, the component renders into a managed region inside
+the existing buffer content: the buffer's major mode is left untouched,
+and a buffer can host any number of inline instances. State updates
+rewrite only the instance's region.
+
+The region is ephemeral UI, not document content: vui keeps its rewrites
+out of the undo history, and manual edits inside the region (outside of
+input fields) are overwritten by the next re-render. POSITION must not
+fall strictly inside another inline instance's region.
+
+Pass the returned instance to =vui-unmount= to dismiss the UI (teardown
+also runs automatically when the buffer is killed), or drive it with
+=vui-rerender= / =vui-update= / =vui-update-props=.
+
+#+begin_src elisp
+;; An ephemeral form that dismisses itself on submit
+(let ((form nil))
+  (setq form
+        (vui-mount-inline
+         (vui-component 'server-query-form
+           :on-submit (lambda (params)
+                        (vui-unmount form)
+                        (run-query params))))))
+#+end_src
+
+** vui-inline-instance-at
+
+#+begin_src elisp
+(vui-inline-instance-at &optional POSITION) -> instance or nil
+#+end_src
+
+Return the inline instance whose region contains POSITION (default:
+point) in the current buffer, or nil if there is none. Useful for
+commands like "dismiss the form at point":
+
+#+begin_src elisp
+(when-let* ((form (vui-inline-instance-at)))
+  (vui-unmount form))
+#+end_src
+
 ** vui-unmount
 
 #+begin_src elisp
-(vui-unmount &optional BUFFER) -> instance or nil
+(vui-unmount &optional BUFFER-OR-INSTANCE) -> instance or nil
 #+end_src
 
-Unmount the VUI instance mounted in BUFFER (default: current buffer).
+Unmount a VUI instance, running its full teardown lifecycle.
 
-Runs the full teardown lifecycle for every component in the tree:
+BUFFER-OR-INSTANCE selects what to unmount:
+- nil, a buffer, or a buffer name :: the instance mounted in that buffer
+  (default: current buffer) via =vui-mount=. The buffer's content is
+  erased, but the buffer itself is not killed.
+- an instance returned by =vui-mount-inline= :: its managed region is
+  removed from the host buffer; the rest of the buffer is untouched.
+- an instance returned by =vui-mount= :: same as passing its buffer.
+
+The teardown lifecycle runs for every component in the tree:
 =:on-unmount= hooks, effect cleanup functions, cleanup functions returned
 from =:on-mount=, and cancellation of pending async processes and deferred
-renders. The buffer's content is erased, but the buffer itself is not
-killed.
+renders.
 
 After unmounting, async callbacks created via =vui-with-async-context= or
 =vui-async-callback= that captured this tree become no-ops.
 
-- BUFFER :: Buffer object or buffer name (default: current buffer)
 - Returns :: The unmounted instance, or nil if nothing was mounted
 
 #+begin_src elisp
 (vui-unmount "*my-app*")
+(vui-unmount inline-form-instance)
 #+end_src
 
 ** vui-get-instance
