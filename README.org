@@ -169,6 +169,10 @@ For those curious about implementation details:
 - [[https://www.d12frosted.io/posts/2025-12-14-implicit-identity-call-order][Implicit Identity]] — How hooks use call order as implicit identity
 - [[https://www.d12frosted.io/posts/2025-12-16-cursor-preservation-buffer-rewrite][Cursor Preservation]] — Preserving cursor position across buffer rewrites
 
+Videos:
+
+- [[https://www.youtube.com/watch?v=7H3Lvo9LCvs][Declarative UIs in Emacs with vui.el]] — System Crafters Live! stream exploring vui.el
+
 * Examples
 
 See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
