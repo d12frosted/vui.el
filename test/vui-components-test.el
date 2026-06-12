@@ -534,7 +534,33 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (looking-at "    Inner content") :to-be-truthy))
           (kill-buffer "*test-collapsible-16*"))))))
 
+(defun vui-components-test--placeholder-overlays ()
+  "Return all placeholder overlays in the current buffer."
+  (seq-filter (lambda (ov) (overlay-get ov 'vui-placeholder))
+              (overlays-in (point-min) (point-max))))
+
 (describe "vui-typed-field"
+  (describe "placeholder"
+    (it "shows :placeholder while the field is empty"
+      (with-temp-buffer
+        (vui-render (vui-typed-field :type 'integer :size 8
+                                     :placeholder "0-100"))
+        (let ((overlays (vui-components-test--placeholder-overlays)))
+          (expect (length overlays) :to-equal 1)
+          (expect (overlay-get (car overlays) 'display) :to-match "0-100"))))
+
+    (it "does not show :placeholder when the field has a value"
+      (with-temp-buffer
+        (vui-render (vui-typed-field :type 'integer :size 8 :value 42
+                                     :placeholder "0-100"))
+        (expect (vui-components-test--placeholder-overlays) :to-equal nil)))
+
+    (it "works through the typed shortcuts"
+      (with-temp-buffer
+        (vui-render (vui-integer-field :size 8 :placeholder "count"))
+        (expect (length (vui-components-test--placeholder-overlays))
+                :to-equal 1))))
+
   (describe "vnode creation"
     (it "creates a component vnode"
       (let ((node (vui-typed-field :type 'integer :value 42)))
