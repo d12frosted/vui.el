@@ -190,6 +190,11 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/09-inline-form.el][Inline Forms]] — Ephemeral, validated forms expanding at point in existing buffers
 - [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]] — Countdown driven by a timer effect, work/break sessions, functional state updates
 
+The Pomodoro Timer example in action (click to open the source):
+
+#+caption: Pomodoro Timer example
+[[file:docs/examples/10-pomodoro.el][file:docs/images/10-pomodoro.png]]
+
 * Available Components
 
 ** Primitives
