@@ -15,6 +15,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Fixed
 
 - =vui-use-async= no longer lets a superseded load clobber the current one. When the key changed, the killed process's sentinel (or a late async result) could write the old entry back over the new pending one, surfacing a stale error or stale data and re-triggering the load on the next render. Resolve/reject callbacks from superseded loads are now ignored.
+- The Pomodoro example (=docs/examples/10-pomodoro.el=) now keeps time from the wall clock instead of counting timer ticks. =run-with-timer= fires late when Emacs is busy and drops missed repeats, so decrementing the remaining seconds once per tick drifted and silently lost time. It now stores a deadline and recomputes the remaining seconds on each tick, so the countdown stays accurate regardless of timer jitter; the timer only drives the refresh rate.
 
 ** Added
 
