@@ -18,6 +18,10 @@ Build reactive UIs in Emacs using familiar patterns from React and other modern 
 The API is stable and used in [[#built-with-vui][real-world projects]].
 #+end_quote
 
+The [[file:docs/examples/11-dashboard.el][CI Pipeline dashboard]] example — colored status, live progress bars, and reactive updates, all from declarative components:
+
+[[file:docs/images/11-dashboard.gif]]
+
 * Features
 
 - *Components* — Reusable UI building blocks with props and local state
@@ -189,11 +193,17 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/08-typed-fields.el][Typed Fields]] — Integer/float/symbol input with validation, shopping cart, forms
 - [[file:docs/examples/09-inline-form.el][Inline Forms]] — Ephemeral, validated forms expanding at point in existing buffers
 - [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]] — Countdown driven by a timer effect, work/break sessions, functional state updates
+- [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] — Live table dashboard with colored status, progress gauges, concurrency, and a timer-driven effect
 
-The Pomodoro Timer example in action (click to open the source):
+The [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] example in action:
+
+#+caption: CI Pipeline Dashboard example
+[[file:docs/images/11-dashboard.gif]]
+
+The [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]] example in action:
 
 #+caption: Pomodoro Timer example
-[[file:docs/examples/10-pomodoro.el][file:docs/images/10-pomodoro.png]]
+[[file:docs/images/10-pomodoro.png]]
 
 * Available Components
 
