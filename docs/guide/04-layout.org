@@ -531,6 +531,10 @@ to their whole rendered extent - including the whitespace the container
 itself inserts (separators, padding, indentation), which cannot be
 styled child-by-child.
 
+As with =vui-text=, =:face= accepts either a face symbol or an anonymous
+face spec such as =(:inherit highlight :weight bold)= - see [[file:03-primitives.org][Primitives]] for
+the forms and gotchas.
+
 The face is layered *beneath* the children's own faces, so children
 keep their styling while everything else gets the container face. This
 makes selected-row highlighting one prop:

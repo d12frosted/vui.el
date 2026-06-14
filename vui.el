@@ -913,7 +913,14 @@ Example:
 
 (defun vui-text (content &rest props)
   "Create a text vnode with CONTENT and optional PROPS.
-PROPS is a plist accepting :face, :key, and other text properties."
+PROPS is a plist accepting :face, :key, and other text properties.
+
+:face is passed straight through to the `face' text property, so it
+accepts a face symbol (\\='error), or an anonymous face spec - a plist of
+attributes such as (:inherit error :weight ultra-bold) or (:foreground
+\"red\").  Note that colors must be strings (\"red\", not the symbol red),
+and there is no bare-symbol shorthand: write (:inherit error ...), not
+(error ...)."
   (declare (indent 1))
   (vui-vnode-text--create
    :content content
