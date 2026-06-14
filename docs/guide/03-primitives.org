@@ -16,16 +16,58 @@ The most basic primitive. Displays text content.
 
 *** With Face (Styling)
 
+The =:face= property is passed straight through to the Emacs =face= text
+property, so it accepts anything Emacs accepts there. There are three forms.
+
+A *face symbol* names a face defined elsewhere (built-in, from a theme, or
+your own =defface=):
+
 #+begin_src elisp
 (vui-text "Error: Something went wrong" :face 'error)
 (vui-text "Success!" :face 'success)
 (vui-text "Dimmed text" :face 'shadow)
 #+end_src
 
-*** With Text Properties
+An *anonymous face spec* lets you style text inline, without a =defface=. It
+is a plist of face attributes. Use =:inherit= to derive from an existing face
+and override individual attributes:
 
 #+begin_src elisp
-(vui-text "Important" :face '(:weight bold :foreground "red"))
+;; inherit `error', but make it heavier
+(vui-text "Critical" :face '(:inherit error :weight ultra-bold))
+
+;; plain attributes, no inheritance
+(vui-text "Important" :face '(:foreground "red" :weight bold))
+#+end_src
+
+*** Face Gotchas
+
+Two non-obvious snags catch people (both surfaced from real use - see
+[[https://github.com/d12frosted/vui.el/issues/77][issue #77]]):
+
+- *Colors are strings.* Write =:foreground "red"=, not =:foreground red=. The
+  symbol form silently fails - the text just renders unstyled, with no error.
+
+- *No bare-symbol shorthand.* You cannot write =(error :weight ultra-bold)= to
+  mean "inherit =error= and override the weight." A face spec is a plist of
+  attributes, so the leading symbol is not recognized. Use =:inherit=
+  instead:
+
+  #+begin_src elisp
+  ;; does NOT work - silently ignored
+  (vui-text "text" :face '(error :weight ultra-bold))
+
+  ;; works - inherit explicitly
+  (vui-text "text" :face '(:inherit error :weight ultra-bold))
+  #+end_src
+
+*** With Text Properties
+
+Any property other than =:face= and =:key= is passed through as a plain text
+property:
+
+#+begin_src elisp
+(vui-text "Hover me" :help-echo "a tooltip")
 #+end_src
 
 *** With Key (for Reconciliation)
