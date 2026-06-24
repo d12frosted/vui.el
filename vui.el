@@ -6,7 +6,7 @@
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; URL: https://github.com/d12frosted/vui.el
-;; Version: 1.1.0
+;; Version: 1.2.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: ui, widgets, tools
 
