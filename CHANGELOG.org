@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]], and this project adheres to [[https://semver.org/spec/v2.0.0.html][Semantic Versioning]].
 
+* Unreleased
+
+** Documentation
+
+- Added a runnable =vui-flex= example (=docs/examples/12-flex-layout.el=): a form whose fields stretch to fill the window, the four =:justify= modes, and proportional =:grow= panels.
+
 * v1.2.0 - 2026-06-24
 
 ** Added
