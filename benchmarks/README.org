@@ -1,0 +1,51 @@
+#+TITLE: vui.el benchmarks
+
+A characterization suite for vui's render performance. The point is not
+micro-numbers but finding where vui starts to hurt.
+
+* Running
+
+#+begin_src sh
+eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run
+#+end_src
+
+Or load =benchmarks/vui-bench.el= and =M-x vui-bench-run=. The report
+goes to stdout (batch) or the echo area / =*Messages*= (interactive).
+
+These are not part of =eldev test= - they are slow and noisy, and not
+meant to gate CI.
+
+* Scenarios
+
+| Scenario          | What it measures                                            |
+|-------------------+------------------------------------------------------------|
+| Initial render    | Mount cost vs item count                                   |
+| Re-render         | Full re-render cost vs item count (tree unchanged)         |
+| Single-item update | Cost of changing one item in a list of N                  |
+| Streaming append  | Per-line re-render as a transcript grows                   |
+| Update throughput | Raw re-render floor for a trivial UI                       |
+| Widgets           | Full re-render cost vs interactive widget (button) count   |
+
+* What to expect (the shape, not the numbers)
+
+vui re-renders by rebuilding the buffer (or an inline region) from the
+component tree each cycle, so the durable findings are about scaling
+shape, not absolute milliseconds (which depend on the machine):
+
+- *Plain text/content scales linearly* and is cheap - thousands of rows
+  render in single-digit milliseconds.
+- *A small change costs a full re-render.* Updating one item in a list
+  of N costs about the same as re-rendering all N - there is no partial
+  patching yet (see issue #82).
+- *Streaming append is the sharp case.* Appending one line and
+  re-rendering is O(current length), so streaming M lines into a growing
+  transcript is O(M^2) overall. This is the case where a marker-based
+  append (insert at the end, no full rebuild) wins, and the main
+  motivation for incremental rendering (#82).
+- *Widgets are the steepest cliff.* Interactive widgets (buttons,
+  fields) are markedly more expensive than text and scale worse than
+  linearly, because each one is created through =widget.el= on every
+  render. Widget-heavy re-renders are where vui slows down first.
+
+Re-run after performance changes and compare; the suite exists so those
+changes can be justified and regressions caught.

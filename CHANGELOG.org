@@ -7,6 +7,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Internal
+
+- Added a benchmark suite (=benchmarks/vui-bench.el=, run with =eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run=) that characterizes render performance: scaling with content, cost of a small update in a large UI, streaming append into a growing buffer, raw render throughput, and widget-heavy re-renders. Not part of =eldev test= (#83).
+
 ** Documentation
 
 - Added a runnable =vui-flex= example (=docs/examples/12-flex-layout.el=): a form whose fields stretch to fill the window, the four =:justify= modes, and proportional =:grow= panels.
