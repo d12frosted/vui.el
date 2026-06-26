@@ -3569,6 +3569,7 @@ new list of (VNODE . LENGTH)."
 Requires a record for the same container kind and separator as VTREE."
   (let ((record (vui-instance-render-record instance)))
     (and record
+         (plist-member record :segs)
          (eq (type-of (plist-get record :vnode)) (type-of vtree))
          (equal (vui--incremental-separator (plist-get record :vnode))
                 (vui--incremental-separator vtree)))))
@@ -3579,8 +3580,14 @@ Patches incrementally when `vui-incremental-render' is on and VTREE is
 an eligible flat content container; otherwise erases and rebuilds.
 Maintains the instance's render record either way.  Used as the commit
 function of the root `vui--render-instance' call."
-  (let ((instance vui--current-instance))
+  (let* ((instance vui--current-instance)
+         (record (vui-instance-render-record instance)))
     (cond
+     ;; Whole-tree identity unchanged: the same vtree object as last
+     ;; commit (what should-update=nil and memoization produce) means
+     ;; the buffer already matches - skip everything (O(1)).
+     ((and vui-incremental-render record (eq vtree (plist-get record :vnode)))
+      nil)
      ;; Incremental patch: do not erase; reuse unchanged segments.
      ((and vui-incremental-render
            (vui--incremental-eligible-p vtree)
@@ -3604,13 +3611,17 @@ function of the root `vui--render-instance' call."
                    (vui--incremental-separator vtree))))
         (setf (vui-instance-render-record instance)
               (list :vnode vtree :segs segs))))
-     ;; Wholesale rebuild (default / ineligible).
+     ;; Wholesale rebuild (default / ineligible).  Record only the vnode
+     ;; (no :segs) so the eq short-circuit above can still skip an
+     ;; unchanged ineligible tree, while the patch path stays disabled
+     ;; for it (compatible-p requires :segs).
      (t
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
       (erase-buffer)
       (vui--render-vnode vtree)
-      (setf (vui-instance-render-record instance) nil)))))
+      (setf (vui-instance-render-record instance)
+            (when vui-incremental-render (list :vnode vtree)))))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
