@@ -710,7 +710,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   render-timer ; Pending deferred-render timer (only used on root instances)
   boundary-errors ; Hash of error-boundary key -> caught error (root instances)
   region-start ; Marker: start of managed region (inline instances only)
-  region-end)  ; Marker: end of managed region (inline instances only)
+  region-end   ; Marker: end of managed region (inline instances only)
+  render-record) ; Incremental-render bookkeeping for the root (see vui--patch-root)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -1520,6 +1521,20 @@ This delay allows multiple state changes to be batched into a single
 re-render for better performance.  Set to nil to render immediately."
   :type '(choice (number :tag "Delay in seconds")
           (const :tag "Disabled" nil))
+  :group 'vui)
+
+(defcustom vui-incremental-render nil
+  "When non-nil, re-render eligible buffers by patching changed regions.
+
+Experimental (issue #82).  When the root component renders a flat
+list of plain-content children (a `vui-fragment' or an unindented
+`vui-vstack' of `vui-text' / `vui-newline' / `vui-space' nodes - e.g.
+a streaming log or a large text list), a re-render patches only the
+segments that changed instead of erasing and rebuilding the whole
+buffer.  Anything else (components, widgets, other containers,
+indented vstacks) falls back to the full erase+rebuild, so behavior
+is unchanged for those."
+  :type 'boolean
   :group 'vui)
 
 (defun vui--find-state-owner (instance key)
@@ -2433,18 +2448,14 @@ ephemeral chrome, not document content."
                (vui--render-path nil)
                ;; Clear pending effects before render
                (vui--pending-effects nil))
-          ;; Clear widget tracking before re-render
-          (setq widget-field-list nil)
-          (setq widget-field-new nil)
-          ;; Remove only widget overlays, preserve others (like hl-line)
-          (vui--remove-widget-overlays)
-          (erase-buffer)
           ;; Queue re-render requests (vui-set-state with nil delay)
           ;; until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
               (progn
-                (vui--render-instance instance)
+                ;; `vui--commit-root' erases and rebuilds, or patches in
+                ;; place when incremental rendering is eligible.
+                (vui--render-instance instance #'vui--commit-root)
                 (widget-setup)
                 (vui--setup-field-placeholders)
                 ;; Restore cursor position
@@ -2818,8 +2829,11 @@ INSTANCE is the component instance."
         (error
          (vui--handle-error 'event callback-name err instance))))))
 
-(defun vui--render-instance (instance)
-  "Render a component INSTANCE into the current buffer."
+(defun vui--render-instance (instance &optional commit-fn)
+  "Render a component INSTANCE into the current buffer.
+When COMMIT-FN is non-nil it is called with the computed vtree to write
+it to the buffer, instead of the default `vui--render-vnode'.  This lets
+the root re-render commit incrementally (see `vui--commit-root')."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
@@ -2860,7 +2874,7 @@ INSTANCE is the component instance."
                   (vui-instance-cached-vtree instance))))
     (when vtree
       (vui--timing-start)
-      (vui--render-vnode vtree)
+      (if commit-fn (funcall commit-fn vtree) (vui--render-vnode vtree))
       (vui--timing-record 'commit component-name))
     ;; Update children list for next reconciliation
     (let ((new-children (nreverse vui--new-children)))
@@ -3445,6 +3459,145 @@ and `window'."
     (vui--apply-region-props flex-start (point)
                              (vui-vnode-flex-face vnode)
                              (vui-vnode-flex-keymap vnode))))
+
+;;; Incremental rendering (issue #82)
+
+(defun vui--incremental-content-child-p (vnode)
+  "Return non-nil if VNODE is a plain-content leaf safe to patch by segment.
+Restricted to text and nil: these render to a single predictable
+segment, avoiding the separator/empty-render subtleties of other leaf
+types.  Anything else makes the container ineligible (full rebuild)."
+  (or (null vnode)
+      (vui-vnode-text-p vnode)))
+
+(defun vui--incremental-empty-child-p (vnode)
+  "Return non-nil if VNODE renders to nothing (dropped from segments).
+Matches the wholesale renderer, which skips nil and empty-text children
+without emitting a separator for them."
+  (or (null vnode)
+      (and (vui-vnode-text-p vnode)
+           (string-empty-p (vui-vnode-text-content vnode)))))
+
+(defun vui--incremental-eligible-p (vnode)
+  "Return non-nil if VNODE is an eligible container for incremental patching.
+Eligible: a `vui-fragment', or an unindented `vui-vstack', whose direct
+children are all text or nil."
+  (let ((children
+         (cond ((vui-vnode-fragment-p vnode) (vui-vnode-fragment-children vnode))
+               ((and (vui-vnode-vstack-p vnode)
+                     (= 0 (or (vui-vnode-vstack-indent vnode) 0)))
+                (vui-vnode-vstack-children vnode))
+               (t :ineligible))))
+    (and (listp children)
+         (cl-every #'vui--incremental-content-child-p children))))
+
+(defun vui--incremental-separator (vnode)
+  "Return the separator string inserted between VNODE's child segments."
+  (cond ((vui-vnode-fragment-p vnode) "")
+        ((vui-vnode-vstack-p vnode)
+         (make-string (1+ (or (vui-vnode-vstack-spacing vnode) 0)) ?\n))
+        (t "")))
+
+(defun vui--incremental-segments (vnode)
+  "Return VNODE's renderable child segments (empty children dropped)."
+  (cl-remove-if
+   #'vui--incremental-empty-child-p
+   (cond ((vui-vnode-fragment-p vnode) (vui-vnode-fragment-children vnode))
+         ((vui-vnode-vstack-p vnode) (vui-vnode-vstack-children vnode)))))
+
+(defun vui--render-segment (index child sep)
+  "Render CHILD at point as segment INDEX, inserting SEP first when INDEX>0.
+Return the number of characters inserted."
+  (let ((start (point)))
+    (when (> index 0) (insert sep))
+    (vui--render-vnode child)
+    (- (point) start)))
+
+(defun vui--patch-segments (start old-segs new-children sep)
+  "Patch the current buffer from START so its segments become NEW-CHILDREN.
+OLD-SEGS is a list of (VNODE . LENGTH) describing what is currently in the
+buffer starting at START.  NEW-CHILDREN is the new list of child vnodes
+\(nils already dropped).  SEP is the separator string between segments.
+
+Compares index by index: an unchanged segment is skipped (left in the
+buffer untouched, widgets and overlays included), a changed one is
+replaced in place, and the tail is appended or truncated.  Returns the
+new list of (VNODE . LENGTH)."
+  (goto-char start)
+  (let ((new-segs nil)
+        (i 0))
+    (while (or old-segs new-children)
+      (let ((old (car old-segs))
+            (new (car new-children)))
+        (cond
+         ((and old new)
+          (if (equal (car old) new)
+              (progn (forward-char (cdr old))
+                     (push old new-segs))
+            (let ((p (point)))
+              (vui--forget-region-fields p (+ p (cdr old)))
+              (vui--remove-widget-overlays p (+ p (cdr old)))
+              (delete-region p (+ p (cdr old)))
+              (push (cons new (vui--render-segment i new sep)) new-segs))))
+         (new
+          (push (cons new (vui--render-segment i new sep)) new-segs))
+         (old
+          (let ((p (point)))
+            (vui--forget-region-fields p (+ p (cdr old)))
+            (vui--remove-widget-overlays p (+ p (cdr old)))
+            (delete-region p (+ p (cdr old))))))
+        (when old-segs (setq old-segs (cdr old-segs)))
+        (when new-children (setq new-children (cdr new-children)))
+        (setq i (1+ i))))
+    (nreverse new-segs)))
+
+(defun vui--render-record-compatible-p (instance vtree)
+  "Return non-nil if INSTANCE's render record can be patched toward VTREE.
+Requires a record for the same container kind and separator as VTREE."
+  (let ((record (vui-instance-render-record instance)))
+    (and record
+         (eq (type-of (plist-get record :vnode)) (type-of vtree))
+         (equal (vui--incremental-separator (plist-get record :vnode))
+                (vui--incremental-separator vtree)))))
+
+(defun vui--commit-root (vtree)
+  "Commit the root VTREE into the current buffer.
+Patches incrementally when `vui-incremental-render' is on and VTREE is
+an eligible flat content container; otherwise erases and rebuilds.
+Maintains the instance's render record either way.  Used as the commit
+function of the root `vui--render-instance' call."
+  (let ((instance vui--current-instance))
+    (cond
+     ;; Incremental patch: do not erase; reuse unchanged segments.
+     ((and vui-incremental-render
+           (vui--incremental-eligible-p vtree)
+           (vui--render-record-compatible-p instance vtree))
+      (let ((segs (vui--patch-segments
+                   (point-min)
+                   (plist-get (vui-instance-render-record instance) :segs)
+                   (vui--incremental-segments vtree)
+                   (vui--incremental-separator vtree))))
+        (setf (vui-instance-render-record instance)
+              (list :vnode vtree :segs segs))))
+     ;; Eligible but no compatible record: rebuild via the patch path
+     ;; from empty, which captures per-segment lengths for next time.
+     ((and vui-incremental-render (vui--incremental-eligible-p vtree))
+      (setq widget-field-list nil widget-field-new nil)
+      (vui--remove-widget-overlays)
+      (erase-buffer)
+      (let ((segs (vui--patch-segments
+                   (point-min) nil
+                   (vui--incremental-segments vtree)
+                   (vui--incremental-separator vtree))))
+        (setf (vui-instance-render-record instance)
+              (list :vnode vtree :segs segs))))
+     ;; Wholesale rebuild (default / ineligible).
+     (t
+      (setq widget-field-list nil widget-field-new nil)
+      (vui--remove-widget-overlays)
+      (erase-buffer)
+      (vui--render-vnode vtree)
+      (setf (vui-instance-render-record instance) nil)))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
