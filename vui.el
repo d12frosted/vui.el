@@ -3525,30 +3525,43 @@ replaced in place, and the tail is appended or truncated.  Returns the
 new list of (VNODE . LENGTH)."
   (goto-char start)
   (let ((new-segs nil)
-        (i 0))
-    (while (or old-segs new-children)
-      (let ((old (car old-segs))
-            (new (car new-children)))
-        (cond
-         ((and old new)
-          (if (equal (car old) new)
-              (progn (forward-char (cdr old))
+        (i 0)
+        ;; A pending run of consecutive changed segments, reversed.
+        ;; Each entry is (INDEX OLD-SEG NEW-VNODE); OLD-SEG or NEW-VNODE
+        ;; may be nil (appended / truncated).
+        (run nil))
+    (cl-flet ((flush ()
+                ;; Replace a whole run of changed segments with one
+                ;; delete + render so the all-changed case collapses to a
+                ;; single bulk operation (no per-segment overhead).
+                (when run
+                  (let ((entries (nreverse run))
+                        (p (point))
+                        (old-total 0))
+                    (dolist (e entries)
+                      (when (nth 1 e)
+                        (setq old-total (+ old-total (cdr (nth 1 e))))))
+                    (delete-region p (+ p old-total))
+                    (dolist (e entries)
+                      (when (nth 2 e)
+                        (push (cons (nth 2 e)
+                                    (vui--render-segment (nth 0 e) (nth 2 e) sep))
+                              new-segs))))
+                  (setq run nil))))
+      (while (or old-segs new-children)
+        (let ((old (car old-segs))
+              (new (car new-children)))
+          (if (and old new (equal (car old) new))
+              ;; unchanged: flush any pending run, then leave it in place
+              (progn (flush)
+                     (forward-char (cdr old))
                      (push old new-segs))
-            (let ((p (point)))
-              (vui--forget-region-fields p (+ p (cdr old)))
-              (vui--remove-widget-overlays p (+ p (cdr old)))
-              (delete-region p (+ p (cdr old)))
-              (push (cons new (vui--render-segment i new sep)) new-segs))))
-         (new
-          (push (cons new (vui--render-segment i new sep)) new-segs))
-         (old
-          (let ((p (point)))
-            (vui--forget-region-fields p (+ p (cdr old)))
-            (vui--remove-widget-overlays p (+ p (cdr old)))
-            (delete-region p (+ p (cdr old))))))
+            ;; changed / appended / truncated: accumulate into the run
+            (push (list i old new) run)))
         (when old-segs (setq old-segs (cdr old-segs)))
         (when new-children (setq new-children (cdr new-children)))
-        (setq i (1+ i))))
+        (setq i (1+ i)))
+      (flush))
     (nreverse new-segs)))
 
 (defun vui--render-record-compatible-p (instance vtree)
