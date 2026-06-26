@@ -193,12 +193,16 @@
                              "*rr-kl*")))
         (unwind-protect
             (with-current-buffer "*rr-kl*"
-              (let ((b (vui-rr--child-by-id inst 'rr-kc "b")))
-                (let ((vui--current-instance b)) (vui-set-state :clicks 5)))
-              (expect (buffer-string) :to-equal "[a:0]\n[b:5]\n[c:0]")
+              ;; Set state on a NON-fixed element (a moves under reversal)
+              ;; so the assertion discriminates keyed from positional reuse.
+              (let ((a (vui-rr--child-by-id inst 'rr-kc "a")))
+                (let ((vui--current-instance a)) (vui-set-state :clicks 5)))
+              (expect (buffer-string) :to-equal "[a:5]\n[b:0]\n[c:0]")
               (setq vui-rr-unmounts 0)
               (vui-update-props inst '(:order ("c" "b" "a")))
-              (expect (buffer-string) :to-equal "[c:0]\n[b:5]\n[a:0]")
+              ;; keyed: a keeps :5 and moves to the end. positional reuse
+              ;; would instead leave :5 on the first slot ("[c:5]...").
+              (expect (buffer-string) :to-equal "[c:0]\n[b:0]\n[a:5]")
               (expect vui-rr-unmounts :to-equal 0))
           (kill-buffer "*rr-kl*")))))
 
@@ -217,8 +221,14 @@
             (with-current-buffer "*rr-kl2*"
               (let ((a (vui-rr--child-by-id inst 'rr-kc2 "a")))
                 (let ((vui--current-instance a)) (vui-set-state :clicks 7)))
+              ;; set state on the neighbor AFTER the insertion point too, so
+              ;; the assertion discriminates keyed from positional reuse.
+              (let ((b (vui-rr--child-by-id inst 'rr-kc2 "b")))
+                (let ((vui--current-instance b)) (vui-set-state :clicks 9)))
               (vui-update-props inst '(:order ("a" "x" "b")))
-              (expect (buffer-string) :to-equal "[a:7]\n[x:0]\n[b:0]"))
+              ;; keyed: b keeps :9 in its shifted slot. positional reuse
+              ;; would put :9 on the inserted x ("[a:7]\n[x:9]\n[b:0]").
+              (expect (buffer-string) :to-equal "[a:7]\n[x:0]\n[b:9]"))
           (kill-buffer "*rr-kl2*")))))
 
   (it "deletes a middle key, unmounting only that child"
