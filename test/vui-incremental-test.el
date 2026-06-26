@@ -85,6 +85,29 @@
                 (expect (overlay-end ov) :to-equal 6)))
           (kill-buffer "*inc-skip*"))))))
 
+(describe "incremental rendering whole-tree skip"
+  (it "skips entirely when should-update returns nil"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-static ()
+        :should-update nil
+        :state ((tick 0))
+        :render (vui-vstack (vui-text "aaa") (vui-text "bbb")))
+      (let ((inst (vui-mount (vui-component 'inc-static) "*inc-static*")))
+        (unwind-protect
+            (with-current-buffer "*inc-static*"
+              ;; First re-render establishes the record.
+              (let ((vui--current-instance inst)) (vui-set-state :tick 1))
+              ;; Overlay over the first line; many no-op re-renders must
+              ;; leave the buffer and the overlay completely untouched.
+              (let ((ov (make-overlay 1 4)))
+                (dotimes (k 5)
+                  (let ((vui--current-instance inst)) (vui-set-state :tick (+ 2 k))))
+                (expect (buffer-string) :to-equal "aaa\nbbb")
+                (expect (overlay-start ov) :to-equal 1)
+                (expect (overlay-end ov) :to-equal 4)))
+          (kill-buffer "*inc-static*"))))))
+
 (describe "incremental rendering falls back for ineligible trees"
   (it "renders a component list correctly (wholesale fallback)"
     (let ((vui-incremental-render t)

@@ -109,6 +109,15 @@ Return (MIN-SECONDS . GC-SECONDS-OF-FASTEST-RUN)."
   :state ((n 0))
   :render (vui-text (format "count: %d" n)))
 
+(vui-defcomponent vui-bench-static (n)
+  ;; should-update nil: every re-render reuses the cached vtree, so with
+  ;; incremental rendering the whole-tree eq short-circuit applies.
+  :should-update nil
+  :state ((tick 0))
+  :render (vui-list (number-sequence 1 (or n 0))
+                    (lambda (i) (vui-text (format "row %d" i)))
+                    #'identity))
+
 (defun vui-bench--items (n)
   "Return an alist of N (ID . LABEL) pairs."
   (cl-loop for i from 1 to n collect (cons i (format "row %d - content" i))))
@@ -235,6 +244,17 @@ A diffing renderer can only lose here (pure diff/marker overhead)."
     (vui-bench--row '(16 . "per update")
                     (cons 14 (concat (vui-bench--ms (/ (car res) 2000.0)) " ms")))))
 
+(defun vui-bench-skip-knob ()
+  "Re-render cost when should-update returns nil (the manual skip knob)."
+  (vui-bench--header "should-update=nil re-render (manual skip knob)")
+  (dolist (n '(500 2000))
+    (let* ((buf (format "*vui-bench-sk-%d*" n))
+           (inst (vui-mount (vui-component 'vui-bench-static :n n) buf)))
+      (vui-bench--result-row
+       n (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
+      (vui-unmount inst)
+      (when (get-buffer buf) (kill-buffer buf)))))
+
 (defun vui-bench-widgets ()
   "Re-render cost vs interactive widget count (buttons)."
   (vui-bench--header "Widgets (full re-render of N buttons)")
@@ -262,6 +282,7 @@ A diffing renderer can only lose here (pure diff/marker overhead)."
     (vui-bench-reorder)
     (vui-bench-streaming)
     (vui-bench-throughput)
+    (vui-bench-skip-knob)
     (vui-bench-widgets)
     (message "")
     (message "done.")))
