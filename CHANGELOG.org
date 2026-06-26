@@ -10,7 +10,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Internal
 
 - Added a benchmark suite (=benchmarks/vui-bench.el=, run with =eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run=) that characterizes render performance: scaling with content, cost of a small update in a large UI, streaming append into a growing buffer, raw render throughput, and widget-heavy re-renders. Not part of =eldev test= (#83).
-- Experimental incremental rendering behind =vui-incremental-render= (default off, #82): when the root renders a flat content container (fragment or unindented vstack of text), a re-render patches only the changed segments instead of erasing and rebuilding. Off by default and not yet a clear win - it speeds up stable-content cases but regresses all-changed/reorder, because the render function still rebuilds the whole vnode tree each render; see =.context/incremental-findings.md=.
+- Experimental incremental rendering behind =vui-incremental-render= (default off, #82). Two parts: (1) a whole-tree skip - when a re-render yields the same vtree object as last time (what =should-update= returning nil and memoization produce), commit does nothing, making such re-renders O(1) instead of a full rebuild; (2) a segment patch for flat content containers (fragment or unindented vstack of text) that rewrites only changed lines. The whole-tree skip is a clean win; the segment patch is off by default because it only speeds stable-content cases while regressing all-changed/reorder, since the render function still rebuilds the whole vnode tree each render (see #82).
 
 ** Documentation
 
