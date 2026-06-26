@@ -12,8 +12,19 @@
 ;; streaming append into a growing buffer behaves, and how widget-heavy
 ;; UIs compare to plain text.
 ;;
-;; These are not run by `eldev test' (they are slow and noisy). Run them
-;; explicitly:
+;; Methodology: each measurement warms up once (untimed), then times K
+;; runs and reports the MINIMUM wall time (least noisy estimator for "is
+;; A faster than B") plus the GC time of that run, so allocation-driven
+;; cost is visible.
+;;
+;; Several scenarios exist specifically to gate the incremental-rendering
+;; work (issue #82): worst case (everything changed - pure overhead for a
+;; diffing renderer), best case (nothing changed - dirty-check floor),
+;; localized updates by position, and keyed reorder. Today they measure
+;; the wholesale (erase+rebuild) baseline; once incremental rendering
+;; lands behind a flag, run with and without it and compare.
+;;
+;; These are not run by `eldev test' (they are slow and noisy). Run:
 ;;
 ;;   eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run
 ;;
@@ -37,16 +48,32 @@
   (message "=== %s ===" title))
 
 (defun vui-bench--row (&rest cells)
-  "Print a table row from CELLS (each a cons of (WIDTH . STRING))."
+  "Print a table row from CELLS (each a cons of (WIDTH . VALUE))."
   (message "%s"
            (mapconcat (lambda (c)
                         (let ((w (car c)) (s (format "%s" (cdr c))))
                           (concat s (make-string (max 0 (- w (length s))) ?\s))))
                       cells "  ")))
 
-(defmacro vui-bench--elapse (&rest body)
-  "Run BODY once after a GC, return elapsed seconds."
-  `(progn (garbage-collect) (car (benchmark-run 1 ,@body))))
+(defun vui-bench--measure (k thunk)
+  "Warm up THUNK once (untimed), then time it K times.
+Return (MIN-SECONDS . GC-SECONDS-OF-FASTEST-RUN)."
+  (funcall thunk)
+  (let ((best most-positive-fixnum)
+        (best-gc 0.0))
+    (dotimes (_ k)
+      (garbage-collect)
+      (let ((r (benchmark-run 1 (funcall thunk))))
+        (when (< (nth 0 r) best)
+          (setq best (nth 0 r)
+                best-gc (nth 2 r)))))
+    (cons best best-gc)))
+
+(defun vui-bench--result-row (label res)
+  "Print LABEL and a measurement RES (cons of seconds . gc-seconds)."
+  (vui-bench--row (cons 9 label)
+                  (cons 13 (concat (vui-bench--ms (car res)) " ms"))
+                  (cons 12 (concat (vui-bench--ms (cdr res)) " gc"))))
 
 ;;; Components used by the scenarios
 
@@ -56,12 +83,18 @@
                       (vui-text (format "row %d - representative line of content here" i)))
                     #'identity))
 
-(vui-defcomponent vui-bench-item-list (n)
-  :state ((items (cl-loop for i from 1 to (or n 0)
-                          collect (list :id i :label (format "row %d - content" i)))))
-  :render (vui-list items
-                    (lambda (it) (vui-text (plist-get it :label)))
-                    (lambda (it) (plist-get it :id))))
+(vui-defcomponent vui-bench-worst (n)
+  ;; Every item's content changes whenever `gen' bumps, so a re-render
+  ;; after bumping is an "everything changed" render.
+  :state ((gen 0))
+  :render (vui-list (number-sequence 1 (or n 0))
+                    (lambda (i) (vui-text (format "row %d - gen %d" i gen)))
+                    #'identity))
+
+(vui-defcomponent vui-bench-keyed (items)
+  ;; Keyed list driven by state; key is the car, label the cdr.
+  :state ((data items))
+  :render (vui-list data (lambda (it) (vui-text (cdr it))) #'car))
 
 (vui-defcomponent vui-bench-button-list (n)
   :render (vui-list (number-sequence 1 (or n 0))
@@ -76,6 +109,10 @@
   :state ((n 0))
   :render (vui-text (format "count: %d" n)))
 
+(defun vui-bench--items (n)
+  "Return an alist of N (ID . LABEL) pairs."
+  (cl-loop for i from 1 to n collect (cons i (format "row %d - content" i))))
+
 ;;; Scenarios
 
 (defconst vui-bench--sizes '(50 200 500 1000 2000 4000)
@@ -84,51 +121,81 @@
 (defun vui-bench-initial-render ()
   "Initial mount cost vs item count."
   (vui-bench--header "Initial render (mount N text rows)")
-  (vui-bench--row '(10 . "N") '(14 . "total/mount"))
   (dolist (n vui-bench--sizes)
-    (let* ((buf (format "*vui-bench-init-%d*" n))
-           (el (/ (vui-bench--elapse
-                   (dotimes (_ 3) (vui-mount (vui-component 'vui-bench-text-list :n n) buf)))
-                  3.0)))
+    (let ((buf (format "*vui-bench-init-%d*" n)))
+      (vui-bench--result-row
+       n (vui-bench--measure
+          3 (lambda () (vui-mount (vui-component 'vui-bench-text-list :n n) buf))))
       (vui-unmount buf)
-      (when (get-buffer buf) (kill-buffer buf))
-      (vui-bench--row (cons 10 n) (cons 14 (concat (vui-bench--ms el) " ms"))))))
+      (when (get-buffer buf) (kill-buffer buf)))))
 
-(defun vui-bench-rerender ()
-  "Full re-render cost vs item count (tree unchanged)."
-  (vui-bench--header "Re-render (full re-render of N text rows)")
-  (vui-bench--row '(10 . "N") '(14 . "per re-render"))
+(defun vui-bench-rerender-unchanged ()
+  "Best case: re-render with an unchanged tree (dirty-check floor)."
+  (vui-bench--header "Re-render, unchanged tree (best case)")
   (dolist (n vui-bench--sizes)
     (let* ((buf (format "*vui-bench-rr-%d*" n))
-           (inst (vui-mount (vui-component 'vui-bench-text-list :n n) buf))
-           (el (/ (vui-bench--elapse (dotimes (_ 5) (vui--rerender-instance inst))) 5.0)))
+           (inst (vui-mount (vui-component 'vui-bench-text-list :n n) buf)))
+      (vui-bench--result-row
+       n (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
       (vui-unmount inst)
-      (when (get-buffer buf) (kill-buffer buf))
-      (vui-bench--row (cons 10 n) (cons 14 (concat (vui-bench--ms el) " ms"))))))
+      (when (get-buffer buf) (kill-buffer buf)))))
 
-(defun vui-bench-single-update ()
-  "Cost of changing ONE item in a list of N, then re-rendering."
-  (vui-bench--header "Single-item update in a list of N")
-  (vui-bench--row '(10 . "N") '(14 . "per update"))
+(defun vui-bench-rerender-all-changed ()
+  "Worst case: re-render where every item's content changed.
+A diffing renderer can only lose here (pure diff/marker overhead)."
+  (vui-bench--header "Re-render, everything changed (worst case)")
   (dolist (n vui-bench--sizes)
-    (let* ((buf (format "*vui-bench-su-%d*" n))
-           (inst (vui-mount (vui-component 'vui-bench-item-list :n n) buf))
-           (toggle 0)
-           (el (/ (vui-bench--elapse
-                   (dotimes (_ 5)
-                     (let ((vui--current-instance inst))
-                       (setq toggle (1+ toggle))
-                       ;; replace one item with a fresh label, then render
-                       (vui-set-state
-                        :items
-                        (lambda (items)
-                          (let ((copy (copy-sequence items)))
-                            (setcar copy (list :id 1 :label (format "row 1 - %d" toggle)))
-                            copy))))))
-                  5.0)))
+    (let* ((buf (format "*vui-bench-wc-%d*" n))
+           (inst (vui-mount (vui-component 'vui-bench-worst :n n) buf)))
+      (vui-bench--result-row
+       n (vui-bench--measure
+          5 (lambda ()
+              (let ((vui--current-instance inst))
+                (vui-set-state :gen (1+ (plist-get (vui-instance-state inst) :gen)))))))
       (vui-unmount inst)
-      (when (get-buffer buf) (kill-buffer buf))
-      (vui-bench--row (cons 10 n) (cons 14 (concat (vui-bench--ms el) " ms"))))))
+      (when (get-buffer buf) (kill-buffer buf)))))
+
+(defun vui-bench-localized-update ()
+  "Change ONE item (first/middle/last) in a list of N, by position."
+  (vui-bench--header "Localized single-item update (N = 2000)")
+  (let* ((n 2000)
+         (base (vui-bench--items n)))
+    (dolist (spec `(("first" . 0) ("middle" . ,(/ n 2)) ("last" . ,(1- n))))
+      (let* ((pos (cdr spec))
+             (buf (format "*vui-bench-loc-%s*" (car spec)))
+             ;; alt differs from base only at POS (same key, new label)
+             (alt (let ((c (copy-sequence base)))
+                    (setf (nth pos c) (cons (car (nth pos base)) "row - CHANGED"))
+                    c))
+             (inst (vui-mount (vui-component 'vui-bench-keyed :items base) buf))
+             (tog nil))
+        (vui-bench--result-row
+         (car spec)
+         (vui-bench--measure
+          7 (lambda ()
+              (setq tog (not tog))
+              (let ((vui--current-instance inst))
+                (vui-set-state :data (if tog alt base))))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
+(defun vui-bench-reorder ()
+  "Keyed reorder (reverse) cost vs item count."
+  (vui-bench--header "Keyed reorder (reverse) vs N")
+  (dolist (n '(200 500 1000 2000))
+    (let* ((buf (format "*vui-bench-ro-%d*" n))
+           (base (vui-bench--items n))
+           (rev (reverse base))
+           (inst (vui-mount (vui-component 'vui-bench-keyed :items base) buf))
+           (tog nil))
+      (vui-bench--result-row
+       n (vui-bench--measure
+          5 (lambda ()
+              (setq tog (not tog))
+              (let ((vui--current-instance inst))
+                (vui-set-state :data (if tog rev base))))))
+      (vui-unmount inst)
+      (when (get-buffer buf) (kill-buffer buf)))))
 
 (defun vui-bench-streaming ()
   "Append lines into a growing transcript, one render per line."
@@ -140,9 +207,10 @@
          (samples '(100 500 1000 2000))
          (total 0.0))
     (dotimes (i 2000)
-      (let ((el (vui-bench--elapse
-                 (let ((vui--current-instance inst))
-                   (vui-set-state :lines (lambda (old) (cons line old)))))))
+      (garbage-collect)
+      (let ((el (car (benchmark-run 1
+                       (let ((vui--current-instance inst))
+                         (vui-set-state :lines (lambda (old) (cons line old))))))))
         (setq total (+ total el))
         (when (memq (1+ i) samples)
           (vui-bench--row (cons 10 (1+ i))
@@ -153,28 +221,30 @@
 
 (defun vui-bench-throughput ()
   "Raw re-render throughput for a trivial UI (lower bound per render)."
-  (vui-bench--header "Update throughput (trivial counter, 2000 updates)")
+  (vui-bench--header "Update throughput (trivial counter)")
   (let* ((buf "*vui-bench-tp*")
          (inst (vui-mount (vui-component 'vui-bench-counter) buf))
-         (el (vui-bench--elapse
-              (let ((vui--current-instance inst))
-                (dotimes (_ 2000) (vui-set-state :n #'1+))))))
+         (res (vui-bench--measure
+               3 (lambda ()
+                   (let ((vui--current-instance inst))
+                     (dotimes (_ 2000) (vui-set-state :n #'1+)))))))
     (vui-unmount inst)
     (when (get-buffer buf) (kill-buffer buf))
-    (vui-bench--row '(16 . "2000 updates") (cons 14 (concat (vui-bench--ms el) " ms total")))
-    (vui-bench--row '(16 . "per update") (cons 14 (concat (vui-bench--ms (/ el 2000.0)) " ms")))))
+    (vui-bench--row '(16 . "2000 updates")
+                    (cons 14 (concat (vui-bench--ms (car res)) " ms")))
+    (vui-bench--row '(16 . "per update")
+                    (cons 14 (concat (vui-bench--ms (/ (car res) 2000.0)) " ms")))))
 
 (defun vui-bench-widgets ()
   "Re-render cost vs interactive widget count (buttons)."
   (vui-bench--header "Widgets (full re-render of N buttons)")
-  (vui-bench--row '(10 . "N") '(14 . "per re-render"))
   (dolist (n '(50 200 500 1000))
     (let* ((buf (format "*vui-bench-w-%d*" n))
-           (inst (vui-mount (vui-component 'vui-bench-button-list :n n) buf))
-           (el (/ (vui-bench--elapse (dotimes (_ 5) (vui--rerender-instance inst))) 5.0)))
+           (inst (vui-mount (vui-component 'vui-bench-button-list :n n) buf)))
+      (vui-bench--result-row
+       n (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
       (vui-unmount inst)
-      (when (get-buffer buf) (kill-buffer buf))
-      (vui-bench--row (cons 10 n) (cons 14 (concat (vui-bench--ms el) " ms"))))))
+      (when (get-buffer buf) (kill-buffer buf)))))
 
 ;;;###autoload
 (defun vui-bench-run ()
@@ -184,9 +254,12 @@
         (vui-timing-enabled nil)
         (vui-debug-enabled nil))
     (message "VUI benchmark suite (Emacs %s)" emacs-version)
+    (message "(min of K runs after warmup; gc = GC time of fastest run)")
     (vui-bench-initial-render)
-    (vui-bench-rerender)
-    (vui-bench-single-update)
+    (vui-bench-rerender-unchanged)
+    (vui-bench-rerender-all-changed)
+    (vui-bench-localized-update)
+    (vui-bench-reorder)
     (vui-bench-streaming)
     (vui-bench-throughput)
     (vui-bench-widgets)
