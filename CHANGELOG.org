@@ -26,10 +26,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   so a form referencing =props= or =state= (including the documented example)
   raised =void-variable=.
 
+** Changed
+
+- The whole-tree skip (commit-skip) is now always on, independent of the
+  experimental =vui-incremental-render= flag. When a re-render produces the
+  exact same vtree object as the previous commit - which =should-update=
+  returning nil and memoized (=eq=) vnodes both produce - the commit does
+  nothing instead of erasing and rebuilding the buffer, so that re-render
+  is O(1) regardless of buffer size. It only ever skips provably-unchanged
+  work (a single =eq= check, no bookkeeping), so it carries no risk and
+  needs no opt-in.
+
 ** Internal
 
 - Added a benchmark suite (=benchmarks/vui-bench.el=, run with =eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run=) that characterizes render performance: scaling with content, cost of a small update in a large UI, streaming append into a growing buffer, raw render throughput, and widget-heavy re-renders. Not part of =eldev test= (#83).
-- Experimental incremental rendering behind =vui-incremental-render= (default off, #82). Three parts: (1) a whole-tree skip - when a re-render yields the same vtree object as last time (what =should-update= returning nil and memoization produce), commit does nothing, O(1) instead of a full rebuild; (2) a segment patch for flat content containers (fragment or unindented vstack of text) that rewrites only changed lines; (3) a component-list bailout - when the root renders a flat vstack/fragment of component children, a re-render skips each child that opted in with =:should-update= and reports no change (and whose consumed context values are unchanged), leaving its buffer region, widgets, and state in place; changed children patch in place, reorder reuses instances by key. This breaks the per-instance commit floor: a one-item change in a 2000-component list drops from ~350ms to ~12ms. The whole suite passes with the flag on as well as off (full parity); the flag stays off pending broader coverage (nested containers, providers above a list - see #82).
+- Experimental incremental rendering behind =vui-incremental-render= (default off, #82). Two flag-gated parts (the whole-tree skip that used to be the third is now unconditional - see Changed): (1) a segment patch for flat content containers (fragment or unindented vstack of text) that rewrites only changed lines; (2) a component-list bailout - when the root renders a flat vstack/fragment of component children, a re-render skips each child that opted in with =:should-update= / =:memo= and reports no change (and whose consumed context values are unchanged), leaving its buffer region, widgets, and state in place; changed children patch in place, reorder reuses instances by key. This breaks the per-instance commit floor: a localized one-item change in a 2000-component list drops from ~1760ms to ~50ms (a 36x speedup, measured in batch; see =vui-bench-compare-run=). The whole suite passes with the flag on as well as off (full parity); the flag stays off pending broader coverage (nested containers, providers above a list - see #82).
 
 ** Documentation
 

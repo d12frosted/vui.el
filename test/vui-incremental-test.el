@@ -109,6 +109,32 @@
                 (expect (overlay-end ov) :to-equal 4)))
           (kill-buffer "*inc-static*"))))))
 
+(describe "whole-tree eq-skip is on by default (flag off)"
+  (it "skips the rebuild when the vtree is unchanged, even with the flag off"
+    ;; eq-skip needs no bookkeeping and only ever skips provably-unchanged
+    ;; work, so it is not gated by `vui-incremental-render'.  An overlay on
+    ;; an unchanged buffer must survive no-op re-renders that would
+    ;; otherwise erase and rebuild it.
+    (let ((vui-incremental-render nil)
+          (vui-render-delay nil))
+      (vui-defcomponent eqskip-default ()
+        :should-update nil
+        :state ((tick 0))
+        :render (vui-vstack (vui-text "xxx") (vui-text "yyy")))
+      (let ((inst (vui-mount (vui-component 'eqskip-default) "*eqskip*")))
+        (unwind-protect
+            (with-current-buffer "*eqskip*"
+              ;; First re-render establishes the record.
+              (let ((vui--current-instance inst)) (vui-set-state :tick 1))
+              (let ((ov (make-overlay 1 4)))
+                (dotimes (k 4)
+                  (let ((vui--current-instance inst)) (vui-set-state :tick (+ 2 k))))
+                (expect (buffer-string) :to-equal "xxx\nyyy")
+                ;; A full erase+rebuild would collapse the overlay to 1,1.
+                (expect (overlay-start ov) :to-equal 1)
+                (expect (overlay-end ov) :to-equal 4)))
+          (kill-buffer "*eqskip*"))))))
+
 (describe "incremental component-list patching"
   ;; A keyed list of child components with should-update: unchanged
   ;; children bail out of re-rendering and keep their buffer regions.
