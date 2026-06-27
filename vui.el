@@ -905,19 +905,30 @@ Example:
                       (ignore children ,@args ,@state-vars)
                       ,form)))
                 (make-update-fn (form)
-                  `(lambda (--props-- --state-- --prev-props-- --prev-state--)
-                     (ignore --props-- --state-- --prev-props-- --prev-state--)
-                     (let (,@(mapcar (lambda (arg)
-                                       `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
-                              args)
-                           ,@(mapcar (lambda (var)
-                                       `(,var (plist-get --state-- ,(intern (format ":%s" var)))))
-                              state-vars)
-                           (children (plist-get --props-- :children))
-                           (prev-props --prev-props--)
-                           (prev-state --prev-state--))
-                      (ignore children prev-props prev-state ,@args ,@state-vars)
-                      ,form))))
+                  ;; Expose the raw `props'/`state' plists too, as documented
+                  ;; for :on-update and :should-update, unless a prop or state
+                  ;; var of that exact name already claims the binding.
+                  (let ((bind-props (not (or (memq 'props args)
+                                             (memq 'props state-vars))))
+                        (bind-state (not (or (memq 'state args)
+                                             (memq 'state state-vars)))))
+                    `(lambda (--props-- --state-- --prev-props-- --prev-state--)
+                       (ignore --props-- --state-- --prev-props-- --prev-state--)
+                       (let (,@(mapcar (lambda (arg)
+                                         `(,arg (plist-get --props-- ,(intern (format ":%s" arg)))))
+                                args)
+                             ,@(mapcar (lambda (var)
+                                         `(,var (plist-get --state-- ,(intern (format ":%s" var)))))
+                                state-vars)
+                             (children (plist-get --props-- :children))
+                             ,@(when bind-props '((props --props--)))
+                             ,@(when bind-state '((state --state--)))
+                             (prev-props --prev-props--)
+                             (prev-state --prev-state--))
+                        (ignore children prev-props prev-state ,@args ,@state-vars
+                                ,@(when bind-props '(props))
+                                ,@(when bind-state '(state)))
+                        ,form)))))
         `(progn
            (vui--register-component
             (vui-component-def--create

@@ -18,6 +18,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   entirely. Note that =:children= counts as a prop, so a memo component
   wrapping nested content re-renders whenever its parent does.
 
+** Fixed
+
+- =:should-update= and =:on-update= now actually bind the raw =props= and
+  =state= plists, as the documentation has always promised. Previously only
+  the named prop/state variables, =prev-props=, and =prev-state= were bound,
+  so a form referencing =props= or =state= (including the documented example)
+  raised =void-variable=.
+
 ** Internal
 
 - Added a benchmark suite (=benchmarks/vui-bench.el=, run with =eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run=) that characterizes render performance: scaling with content, cost of a small update in a large UI, streaming append into a growing buffer, raw render throughput, and widget-heavy re-renders. Not part of =eldev test= (#83).

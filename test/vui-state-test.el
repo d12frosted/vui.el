@@ -438,6 +438,34 @@
                       :to-equal "i=42 u=999"))
           (kill-buffer "*test-smart*")))))
 
+  (it "exposes the raw props and state plists (as documented)"
+    ;; api.org promises `props'/`state' (the full plists) inside
+    ;; :should-update and :on-update; guard that they are actually bound.
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (seen-props nil)
+          (seen-state nil))
+      (vui-defcomponent raw-plists (label)
+        :state ((n 0))
+        :should-update (progn
+                         (setq seen-props props seen-state state)
+                         (not (equal (plist-get state :n)
+                                     (plist-get prev-state :n))))
+        :render (progn (setq render-count (1+ render-count))
+                       (vui-text (format "%s-%d" label n))))
+      (let ((instance (vui-mount (vui-component 'raw-plists :label "x")
+                                 "*test-raw*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer "*test-raw*"
+                (let ((vui--current-instance instance)
+                      (vui--root-instance instance))
+                  (vui-set-state :n 1)))
+              (expect render-count :to-equal 2)
+              (expect (plist-get seen-props :label) :to-equal "x")
+              (expect (plist-get seen-state :n) :to-equal 1))
+          (kill-buffer "*test-raw*")))))
+
   (it "does not call on-update when render skipped"
     (let ((vui-render-delay nil)
           (update-count 0))
