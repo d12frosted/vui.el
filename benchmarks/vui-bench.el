@@ -305,6 +305,38 @@ on the per-instance commit floor is visible."
         (vui-unmount inst)
         (when (get-buffer buf) (kill-buffer buf))))))
 
+(vui-defcomponent vui-bench-msg (id)
+  :should-update nil   ; content fixed per id; a streamed message never changes
+  :render (vui-text (format "[%d] log line content here" id)))
+
+(vui-defcomponent vui-bench-msg-list (ids)
+  :render (apply #'vui-vstack
+                 (mapcar (lambda (id) (vui-component 'vui-bench-msg :key id :id id)) ids)))
+
+(defun vui-bench-streaming-growth ()
+  "Cost of appending ONE message as a component transcript grows.
+This is the pi.el-style case (a log that grows without bound).  The
+slope of cost vs size is what matters: a flat slope means O(1) append
+\(supports unbounded growth); a rising slope means O(n) per append and
+thus O(n^2) to stream N (does not).  Reported wholesale vs incremental."
+  (vui-bench--header "Streaming growth: append 1 message at transcript size S")
+  (dolist (s '(200 500 1000 2000 4000))
+    (dolist (flag '((nil . "wholesale") (t . "incremental")))
+      (let* ((vui-incremental-render (car flag))
+             (base (number-sequence 1 s))
+             (plus (append base (list (1+ s))))
+             (buf "*vui-bench-sg*")
+             (inst (vui-mount (vui-component 'vui-bench-msg-list :ids base) buf))
+             (tog nil))
+        (vui-update inst (list :ids base))
+        (vui-bench--result-row
+         (format "%d %s" s (cdr flag))
+         (vui-bench--measure
+          5 (lambda () (setq tog (not tog))
+              (vui-update inst (list :ids (if tog plus base))))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
 (defun vui-bench-run ()
   "Run the full vui benchmark suite and print a report."
   (interactive)
@@ -323,6 +355,7 @@ on the per-instance commit floor is visible."
     (vui-bench-skip-knob)
     (vui-bench-widgets)
     (vui-bench-component-bailout)
+    (vui-bench-streaming-growth)
     (message "")
     (message "done.")))
 
