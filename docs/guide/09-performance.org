@@ -67,6 +67,37 @@ Return =t= to render, =nil= to skip.
   :render ...)
 #+end_src
 
+* The Common Case - =:memo=
+
+Most =:should-update= forms just say "skip when nothing changed". =:memo
+t= is a shorthand for exactly that: skip the re-render while props are
+shallow-equal (=equal= on each value) and state is unchanged, like
+=React.memo=. These two components behave the same:
+
+#+begin_src elisp
+(vui-defcomponent row-explicit (id label)
+  :should-update (or (not (equal id (plist-get prev-props :id)))
+                     (not (equal label (plist-get prev-props :label))))
+  :render (vui-text (format "%s: %s" id label)))
+
+(vui-defcomponent row-memo (id label)
+  :memo t
+  :render (vui-text (format "%s: %s" id label)))
+#+end_src
+
+This is the easiest win for list items: give each row =:memo t= and a
+stable =:key=, and a change to one item only re-renders that item.
+
+A few things to know:
+
+- An explicit =:should-update= always wins over =:memo=.
+- =:children= counts as a prop. A memo component wrapping nested content
+  re-renders whenever its parent does, because the child vnodes are
+  rebuilt fresh each render. =:memo= pays off for leaf-ish components
+  driven purely by their own props.
+- A memo component still re-renders on its own =vui-set-state=, since
+  state changes are part of the check.
+
 * Memoization - =use-memo=
 
 Cache expensive computations:
@@ -235,7 +266,7 @@ The report shows time spent in each phase per component.
 
 * Performance Checklist
 
-1. [ ] Use =:should-update= for components with expensive renders
+1. [ ] Use =:should-update= (or =:memo t=) for components with expensive renders
 2. [ ] Use =use-memo= for expensive computations
 3. [ ] Use =use-callback= for callbacks passed to children
 4. [ ] Use =vui-batch= for multiple state updates

@@ -221,5 +221,115 @@
               (expect (buffer-string) :to-equal "one\ntwo"))
           (kill-buffer "*inc-tog*"))))))
 
+(describe "incremental :memo shorthand"
+  (it "bails out unchanged memo children (only the changed one re-renders)"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent inc-memo-child (id label)
+        :memo t
+        :render (progn (setq renders (1+ renders))
+                       (vui-text (format "[%s:%s]" id label))))
+      (vui-defcomponent inc-memo-list (items)
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (it)
+                                 (vui-component 'inc-memo-child
+                                   :key (car it) :id (car it) :label (cdr it)))
+                               items)))
+      (let ((inst (vui-mount (vui-component 'inc-memo-list
+                                            :items '((1 . "a") (2 . "b") (3 . "c")))
+                             "*inc-memo*")))
+        (unwind-protect
+            (with-current-buffer "*inc-memo*"
+              (expect (buffer-string) :to-equal "[1:a]\n[2:b]\n[3:c]")
+              (setq renders 0)
+              ;; only item 2 changes; memo must skip 1 and 3
+              (vui-update inst '(:items ((1 . "a") (2 . "B") (3 . "c"))))
+              (expect renders :to-equal 1)
+              (expect (buffer-string) :to-equal "[1:a]\n[2:B]\n[3:c]")
+              ;; no change at all: memo skips every child
+              (setq renders 0)
+              (vui-update inst '(:items ((1 . "a") (2 . "B") (3 . "c"))))
+              (expect renders :to-equal 0)
+              (expect (buffer-string) :to-equal "[1:a]\n[2:B]\n[3:c]"))
+          (kill-buffer "*inc-memo*")))))
+
+  (it "re-renders a memo child when its own state changes (not just props)"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-memo-stateful (id)
+        :memo t
+        :state ((n 0))
+        :render (vui-text (format "[%s:%d]" id n)))
+      (vui-defcomponent inc-memo-slist (ids)
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (id)
+                                 (vui-component 'inc-memo-stateful :key id :id id))
+                               ids)))
+      (let ((inst (vui-mount (vui-component 'inc-memo-slist :ids '("a" "b"))
+                             "*inc-memo-s*")))
+        (unwind-protect
+            (with-current-buffer "*inc-memo-s*"
+              (expect (buffer-string) :to-equal "[a:0]\n[b:0]")
+              (let ((a (cl-find "a" (vui-get-component-instances 'inc-memo-stateful inst)
+                                :key (lambda (i) (plist-get (vui-instance-props i) :id))
+                                :test #'equal)))
+                (let ((vui--current-instance a)) (vui-set-state :n 7)))
+              ;; props unchanged but state changed -> must NOT bail
+              (expect (buffer-string) :to-equal "[a:7]\n[b:0]"))
+          (kill-buffer "*inc-memo-s*")))))
+
+  (it "lets an explicit :should-update override :memo"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (renders 0))
+      ;; :should-update t forces a render every time, despite :memo t
+      (vui-defcomponent inc-memo-override (id label)
+        :memo t
+        :should-update t
+        :render (progn (setq renders (1+ renders))
+                       (vui-text (format "[%s:%s]" id label))))
+      (vui-defcomponent inc-memo-olist (items)
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (it)
+                                 (vui-component 'inc-memo-override
+                                   :key (car it) :id (car it) :label (cdr it)))
+                               items)))
+      (let ((inst (vui-mount (vui-component 'inc-memo-olist
+                                            :items '((1 . "a") (2 . "b")))
+                             "*inc-memo-o*")))
+        (unwind-protect
+            (with-current-buffer "*inc-memo-o*"
+              (setq renders 0)
+              ;; nothing changed, but should-update=t forces both to render
+              (vui-update inst '(:items ((1 . "a") (2 . "b"))))
+              (expect renders :to-equal 2))
+          (kill-buffer "*inc-memo-o*"))))))
+
+(describe ":memo in wholesale mode (flag off)"
+  (it "skips a child's vnode production when its props are unchanged"
+    (let ((vui-incremental-render nil)
+          (vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent inc-memo-ws (label)
+        :memo t
+        :render (progn (setq renders (1+ renders)) (vui-text label)))
+      (vui-defcomponent inc-memo-ws-parent (label)
+        :state ((tick 0))
+        :render (vui-vstack
+                 (vui-text (format "tick%d" tick))
+                 (vui-component 'inc-memo-ws :label label)))
+      (let ((inst (vui-mount (vui-component 'inc-memo-ws-parent :label "x")
+                             "*memo-ws*")))
+        (unwind-protect
+            (with-current-buffer "*memo-ws*"
+              (setq renders 0)
+              ;; bump the parent's state; the child's prop is unchanged, so
+              ;; its render-fn must not run even on the wholesale path
+              (let ((vui--current-instance inst)) (vui-set-state :tick 1))
+              (expect renders :to-equal 0)
+              (expect (buffer-string) :to-equal "tick1\nx"))
+          (kill-buffer "*memo-ws*"))))))
+
 (provide 'vui-incremental-test)
 ;;; vui-incremental-test.el ends here

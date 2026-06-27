@@ -7,6 +7,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- =:memo= keyword for =vui-defcomponent=: =:memo t= is a shorthand for the
+  most common =:should-update= - skip the re-render while props are
+  shallow-equal (=equal= on each value) and state is unchanged, like
+  =React.memo=. An explicit =:should-update= takes precedence. Works on the
+  normal render path (it skips the component's vnode production) and, with
+  =vui-incremental-render= on, lets the component bail out of re-rendering
+  entirely. Note that =:children= counts as a prop, so a memo component
+  wrapping nested content re-renders whenever its parent does.
+
 ** Internal
 
 - Added a benchmark suite (=benchmarks/vui-bench.el=, run with =eldev emacs --batch -l benchmarks/vui-bench.el -f vui-bench-run=) that characterizes render performance: scaling with content, cost of a small update in a large UI, streaming append into a growing buffer, raw render throughput, and widget-heavy re-renders. Not part of =eldev test= (#83).

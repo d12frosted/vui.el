@@ -805,6 +805,13 @@ Each entry is a vui-context-binding.")
   (or (gethash name vui--component-registry)
       (error "Unknown component: %s" name)))
 
+(defun vui--shallow-equal-plist (a b)
+  "Non-nil if plists A and B have the same keys with `equal' values.
+Used by `:memo' components to decide whether props are unchanged."
+  (and (= (length a) (length b))
+       (cl-loop for (k v) on a by #'cddr
+                always (and (plist-member b k) (equal v (plist-get b k))))))
+
 (defmacro vui-defcomponent (name args &rest body)
   "Define a component named NAME.
 
@@ -816,6 +823,12 @@ keyword sections:
   :on-update FORM - called after re-render (optional)
   :on-unmount FORM - called before removal (optional)
   :should-update FORM - return t to re-render, nil to skip (optional)
+  :memo BOOL - when non-nil, a shorthand for a `:should-update' that
+    skips the re-render while props are shallow-equal and state is
+    unchanged (like React.memo).  Ignored when `:should-update' is
+    also given, which always wins.  `:children' counts as a prop, so
+    a memo component with nested content re-renders whenever its
+    parent does (its children are freshly built each render).
   :render FORM - the render expression (required)
 
 All forms have access to props as variables, state variables,
@@ -846,12 +859,15 @@ Example:
          (on-unmount-form nil)
          (should-update-form nil)
          (should-update-provided nil)
+         (memo-flag nil)
          (rest body-rest))
     ;; Parse keyword arguments
     (while rest
       (pcase (car rest)
         (:state (setq state-spec (cadr rest)
                       rest (cddr rest)))
+        (:memo (setq memo-flag (cadr rest)
+                     rest (cddr rest)))
         (:on-mount (setq on-mount-form (cadr rest)
                          rest (cddr rest)))
         (:on-update (setq on-update-form (cadr rest)
@@ -866,6 +882,14 @@ Example:
         (_ (error "Unknown vui-defcomponent keyword: %s" (car rest)))))
     (unless render-form
       (error "vui-defcomponent %s: :render is required" name))
+    ;; `:memo t' is a shorthand for the most common `:should-update' - skip
+    ;; the re-render when props are shallow-equal and state is unchanged
+    ;; (React.memo).  An explicit `:should-update' always wins.
+    (when (and memo-flag (not should-update-provided))
+      (setq should-update-form
+            '(not (and (vui--shallow-equal-plist --props-- --prev-props--)
+                       (equal --state-- --prev-state--)))
+            should-update-provided t))
     (let ((state-vars (mapcar #'car state-spec))
           (state-inits (mapcar #'cadr state-spec)))
       (cl-flet ((make-body-fn (form)

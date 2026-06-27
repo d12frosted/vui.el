@@ -29,7 +29,16 @@ Define a component named NAME.
 | =:on-update=     | No       | Form run after re-render (not first)        |
 | =:on-unmount=    | No       | Form run before removal                     |
 | =:should-update= | No       | Return t to allow re-render, nil to skip    |
+| =:memo=          | No       | =t= shorthand for a shallow-prop should-update |
 | =:render=        | Yes      | The render expression (must return a vnode) |
+
+=:memo t= is a shorthand for the most common =:should-update=: skip the
+re-render while props are shallow-equal (=equal= on each value) and state
+is unchanged, like =React.memo=.  An explicit =:should-update= always
+takes precedence over =:memo=.  Note that =:children= counts as a prop,
+so a memo component wrapping nested content re-renders whenever its
+parent does (the children vnodes are freshly built each render); =:memo=
+pays off for leaf-ish components driven purely by their own props.
 
 *** Available Variables in Body
 
@@ -1263,6 +1272,7 @@ Clear debug log buffer.
   :on-update FORM
   :on-unmount FORM
   :should-update FORM
+  :memo BOOL
   :render VNODE)
 #+end_src
 

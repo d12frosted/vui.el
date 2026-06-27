@@ -30,7 +30,8 @@ The =vui-defcomponent= macro is the primary way to create components:
   :on-mount body
   :on-update body
   :on-unmount body
-  :should-update body)
+  :should-update body
+  :memo bool)
 #+end_src
 
 ** Component Name
