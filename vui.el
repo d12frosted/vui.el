@@ -711,7 +711,9 @@ Maps boundary keys to caught errors.  Lazily initialized by
   boundary-errors ; Hash of error-boundary key -> caught error (root instances)
   region-start ; Marker: start of managed region (inline instances only)
   region-end   ; Marker: end of managed region (inline instances only)
-  render-record) ; Incremental-render bookkeeping for the root (see vui--patch-root)
+  render-record ; Incremental-render bookkeeping for the root (see vui--commit-root)
+  consumed-contexts ; Alist (context . value) read by this instance and its subtree
+  r-len)       ; Rendered length in chars (component-list incremental patching)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -726,6 +728,12 @@ Maps boundary keys to caught errors.  Lazily initialized by
 
 (defvar vui--child-index 0
   "Index counter for child components during render (for keyless reconciliation).")
+
+(defvar vui--consumed-contexts nil
+  "Accumulator for contexts read during the current instance's own render.
+Bound per instance by `vui--render-instance'; each `vui--consume-context'
+call pushes a (CONTEXT . VALUE) pair.  Used to decide whether an instance
+may bail out of re-rendering (its consumed context values are unchanged).")
 
 (defvar vui--new-children nil
   "Accumulator for child instances created during render.")
@@ -1959,14 +1967,32 @@ DOCSTRING is an optional documentation string for the context."
 
        ',name)))
 
-(defun vui--consume-context (context)
-  "Get the current value of CONTEXT.
-Searches up the context stack for a matching provider.
-Returns `default-value' if no provider found."
+(defun vui--lookup-context (context)
+  "Return CONTEXT's current value from the context stack, or its default.
+Pure lookup with no side effects (does not record consumption)."
   (or (cl-loop for binding in vui--context-stack
                when (eq (vui-context-binding-context binding) context)
                return (vui-context-binding-value binding))
       (vui-context-default-value context)))
+
+(defun vui--consume-context (context)
+  "Get the current value of CONTEXT and record that it was consumed.
+Searches up the context stack for a matching provider; returns
+`default-value' if none.  While an instance is rendering, the
+\(CONTEXT . VALUE) pair is recorded so the renderer can later tell
+whether the instance still depends on the same context values."
+  (let ((value (vui--lookup-context context)))
+    (when vui--current-instance
+      (push (cons context value) vui--consumed-contexts))
+    value))
+
+(defun vui--instance-contexts-unchanged-p (instance)
+  "Return non-nil if every context INSTANCE consumed still has its value.
+Compared against the live context stack, so a provider change above
+INSTANCE makes this nil and blocks a bailout."
+  (cl-every (lambda (pair)
+              (equal (cdr pair) (vui--lookup-context (car pair))))
+            (vui-instance-consumed-contexts instance)))
 
 (defun vui-use-context (context)
   "Return the current value of CONTEXT.
@@ -2837,6 +2863,7 @@ the root re-render commit incrementally (see `vui--commit-root')."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
+         (vui--consumed-contexts nil) ; Contexts read by this instance's own render
          (vui--effect-index 0)    ; Reset effect counter for this component
          (vui--ref-index 0)       ; Reset ref counter for this component
          (vui--callback-index 0)  ; Reset callback counter for this component
@@ -2895,7 +2922,16 @@ the root re-render commit incrementally (see `vui--commit-root')."
       (dolist (old-child old-children)
         (unless (memq old-child new-children)
           (vui--call-unmount-recursive old-child)))
-      (setf (vui-instance-children instance) new-children))
+      (setf (vui-instance-children instance) new-children)
+      ;; Record the contexts this instance's whole subtree depends on:
+      ;; its own reads plus every child's recorded set.  Used to decide
+      ;; whether the instance may bail out of a future re-render.
+      (setf (vui-instance-consumed-contexts instance)
+            (let ((acc (copy-sequence vui--consumed-contexts)))
+              (dolist (child new-children acc)
+                (setq acc (nconc (copy-sequence
+                                  (vui-instance-consumed-contexts child))
+                                 acc))))))
     ;; Lifecycle hooks (wrapped with error handling).
     ;; Skipped during measure passes: those render throwaway instances
     ;; into a temp buffer and must not produce side effects.
