@@ -2017,7 +2017,9 @@ Searches up the context stack for a matching provider; returns
 \(CONTEXT . VALUE) pair is recorded so the renderer can later tell
 whether the instance still depends on the same context values."
   (let ((value (vui--lookup-context context)))
-    (when vui--current-instance
+    ;; The consumed-context record only feeds the flag-gated bailout, so
+    ;; skip the bookkeeping entirely when incremental rendering is off.
+    (when (and vui-incremental-render vui--current-instance)
       (push (cons context value) vui--consumed-contexts))
     value))
 
@@ -2959,14 +2961,18 @@ the root re-render commit incrementally (see `vui--commit-root')."
           (vui--call-unmount-recursive old-child)))
       (setf (vui-instance-children instance) new-children)
       ;; Record the contexts this instance's whole subtree depends on:
-      ;; its own reads plus every child's recorded set.  Used to decide
-      ;; whether the instance may bail out of a future re-render.
-      (setf (vui-instance-consumed-contexts instance)
-            (let ((acc (copy-sequence vui--consumed-contexts)))
-              (dolist (child new-children acc)
-                (setq acc (nconc (copy-sequence
-                                  (vui-instance-consumed-contexts child))
-                                 acc))))))
+      ;; its own reads plus every child's recorded set.  Used only to
+      ;; decide whether the instance may bail out of a future re-render,
+      ;; so it is skipped entirely (no per-instance union) with the flag
+      ;; off.  Safe because a bail can only follow a flag-on render, which
+      ;; rebuilds this set (a flag-off render leaves no patchable record).
+      (when vui-incremental-render
+        (setf (vui-instance-consumed-contexts instance)
+              (let ((acc (copy-sequence vui--consumed-contexts)))
+                (dolist (child new-children acc)
+                  (setq acc (nconc (copy-sequence
+                                    (vui-instance-consumed-contexts child))
+                                   acc)))))))
     ;; Lifecycle hooks (wrapped with error handling).
     ;; Skipped during measure passes: those render throwaway instances
     ;; into a temp buffer and must not produce side effects.
@@ -4294,10 +4300,13 @@ function of the root `vui--render-instance' call."
       ;; Track this child for future reconciliation
       (push instance vui--new-children)
       ;; Record the instance's rendered length so the component-list
-      ;; incremental patcher can skip or replace it by position.
-      (let ((start (point)))
-        (vui--render-instance instance)
-        (setf (vui-instance-r-len instance) (- (point) start)))))
+      ;; incremental patcher can skip or replace it by position - only
+      ;; needed (and only paid for) when the flag is on.
+      (if vui-incremental-render
+          (let ((start (point)))
+            (vui--render-instance instance)
+            (setf (vui-instance-r-len instance) (- (point) start)))
+        (vui--render-instance instance))))
 
    ;; Context provider - push context and render children
    ((vui-vnode-provider-p vnode)
