@@ -1,0 +1,137 @@
+;;; vui-stream-test.el --- vui-stream imperative append invariants -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2025-2026 Free Software Foundation, Inc.
+
+;;; Commentary:
+
+;; Phase 1 invariants for `vui-stream' (issue #82, dir 5): an append-only
+;; region that grows ABOVE a persistent declarative line.  The point of
+;; the primitive is an O(1) imperative append, but the bar is correctness:
+;;
+;;   - after any sequence of appends the buffer is BYTE-IDENTICAL to what a
+;;     plain list of the same items would render (the oracle);
+;;   - the declarative content BELOW the stream stays correct as the stream
+;;     grows (it just shifts down);
+;;   - a full re-render (a sibling's state change) re-emits the items, so
+;;     the wholesale path matches the oracle too;
+;;   - point below the stream is preserved across an append above it.
+
+;;; Code:
+
+(require 'buttercup)
+(require 'vui)
+
+;; A stream above a declarative note line.  The handle is passed in as a
+;; prop so the test owns it and can append imperatively.
+(vui-defcomponent vui-st-app (stream note)
+  :render
+  (vui-vstack
+   (vui-stream stream)
+   (vui-text (format "note: %s" (or note "")))))
+
+(defun vui-st--oracle (lines note)
+  "Expected buffer string: LINES stacked above the NOTE line.
+With no lines the stream is an empty vstack child and is dropped (no
+leading separator), matching what a plain declarative list renders."
+  (if lines
+      (concat (mapconcat #'identity lines "\n") "\nnote: " note)
+    (concat "note: " note)))
+
+(defun vui-st--mount (stream note)
+  (vui-mount (vui-component 'vui-st-app :stream stream :note note) "*vui-st*"))
+
+(defun vui-st--buffer ()
+  (with-current-buffer "*vui-st*" (buffer-string)))
+
+(defun vui-st--kill ()
+  (when (get-buffer "*vui-st*") (kill-buffer "*vui-st*")))
+
+(describe "vui-stream: append is byte-identical to the oracle"
+  (it "matches a plain list after a sequence of appends"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "line 1"))
+              (vui-stream-append s (vui-text "line 2"))
+              (vui-stream-append s (vui-text "line 3"))
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("line 1" "line 2" "line 3") "n0")))
+          (vui-st--kill)))))
+
+  (it "handles the empty stream and the first append (no leading newline)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "hi")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              ;; nothing appended yet: just the note, below an empty region
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "hi"))
+              (vui-stream-append s (vui-text "first"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("first") "hi")))
+          (vui-st--kill))))))
+
+(describe "vui-stream: the line below stays correct as the stream grows"
+  (it "keeps the note intact and in place across 100 appends"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "footer")))
+        (ignore inst)
+        (unwind-protect
+            (let (lines)
+              (dotimes (i 100)
+                (let ((txt (format "msg %d" i)))
+                  (push txt lines)
+                  (vui-stream-append s (vui-text txt))))
+              (setq lines (nreverse lines))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle lines "footer"))
+              ;; the note line is still present, exactly once, at the bottom
+              (with-current-buffer "*vui-st*"
+                (goto-char (point-min))
+                (expect (how-many "^note: footer$") :to-equal 1)
+                (goto-char (point-max))
+                (expect (line-number-at-pos)
+                        :to-equal (1+ (length lines)))))
+          (vui-st--kill))))))
+
+(describe "vui-stream: a full re-render re-emits identically"
+  (it "matches the oracle after a sibling state change rebuilds the buffer"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-append s (vui-text "b"))
+              ;; change the note prop: forces a wholesale root re-render,
+              ;; which must re-emit the stream items from the handle
+              (vui-update inst (list :stream s :note "n1"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("a" "b") "n1"))
+              ;; appends after a re-render keep working
+              (vui-stream-append s (vui-text "c"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("a" "b" "c") "n1")))
+          (vui-st--kill))))))
+
+(describe "vui-stream: point below the stream is preserved on append"
+  (it "leaves point in the note line after an append above it"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "tail")))
+        (ignore inst)
+        (unwind-protect
+            (with-current-buffer "*vui-st*"
+              (vui-stream-append s (vui-text "x"))
+              ;; put point on the 'l' of "tail"
+              (goto-char (point-max))
+              (let ((before (char-before)))
+                (vui-stream-append s (vui-text "y"))
+                ;; point still at end of buffer, still after the same char
+                (expect (point) :to-equal (point-max))
+                (expect (char-before) :to-equal before)))
+          (vui-st--kill))))))
+
+(provide 'vui-stream-test)
+;;; vui-stream-test.el ends here

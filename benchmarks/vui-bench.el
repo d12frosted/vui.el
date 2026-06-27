@@ -517,15 +517,43 @@ this re-render and the slope should go flat.  Wholesale vs incremental."
                                      :status (if tog "busy" "idle"))))))
         (vui-bench--agent-teardown inst buf)))))
 
+;; The imperative counterpart: a `vui-stream' above a box line.  Appends
+;; go through `vui-stream-append', which owns the region and writes one
+;; spot in O(1) - so this slope should be FLAT where the declarative
+;; agent-append-growth above rises.
+(vui-defcomponent vui-bench-stream-app (stream)
+  :render (vui-vstack (vui-stream stream)
+                      (vui-text "---- input box ----")))
+
+(defun vui-bench-stream-append-growth ()
+  "Cost of ONE `vui-stream-append' as the stream grows, box below.
+The pass/fail metric for vui-stream (#82): a FLAT slope means O(1)
+append, independent of stream size - contrast the rising slope of
+`vui-bench-agent-append-growth', which rebuilds the transcript."
+  (vui-bench--header "Stream append: +1 item at stream size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (let* ((handle (vui-make-stream))
+           (buf "*vui-bench-stream*")
+           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf)))
+      ;; pre-fill (the first item pays a one-time re-render, the rest O(1))
+      (dotimes (i s)
+        (vui-stream-append handle (vui-text (format "message %d content" i))))
+      (vui-bench--result-row
+       (format "%d stream" s)
+       (vui-bench--measure
+        8 (lambda () (vui-stream-append handle (vui-text "freshly streamed line")))))
+      (vui-bench--agent-teardown inst buf))))
+
 (defun vui-bench-agent-run ()
-  "Run only the agent-chat streaming-seam benchmarks."
+  "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
   (interactive)
   (let ((vui-render-delay nil)
         (vui-timing-enabled nil)
         (vui-debug-enabled nil))
-    (message "VUI agent-chat seam (Emacs %s)" emacs-version)
+    (message "VUI streaming seam (Emacs %s)" emacs-version)
     (vui-bench-agent-append-growth)
     (vui-bench-agent-box-update)
+    (vui-bench-stream-append-growth)
     (message "")
     (message "done.")))
 
@@ -765,6 +793,7 @@ machine-readable CMPDATA lines."
     (vui-bench-streaming-growth)
     (vui-bench-agent-append-growth)
     (vui-bench-agent-box-update)
+    (vui-bench-stream-append-growth)
     (message "")
     (message "done.")))
 
