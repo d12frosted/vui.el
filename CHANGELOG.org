@@ -36,6 +36,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   is O(1) regardless of buffer size. It only ever skips provably-unchanged
   work (a single =eq= check, no bookkeeping), so it carries no risk and
   needs no opt-in.
+- Reconciling a list of children is now O(n) instead of O(n^2).
+  =vui--find-matching-child= used to linear-scan the existing children for
+  every child on every render, so a flat list of S components cost O(S^2)
+  to reconcile (and streaming N of them O(N^3)). It now builds a per-render
+  lookup once - a hash keyed by =(type . key)= for keyed children, a vector
+  for positional reuse - so each match is O(1). Reuse semantics are
+  unchanged (keyed children by key, unkeyed by position, first match wins).
+  Measured in batch: one re-render of a 2000-item keyed list drops from
+  ~1660ms to ~51ms (32x), and the gap widens with size since this is an
+  asymptotic change, not a constant factor.
 
 ** Internal
 

@@ -738,6 +738,14 @@ may bail out of re-rendering (its consumed context values are unchanged).")
 (defvar vui--new-children nil
   "Accumulator for child instances created during render.")
 
+(defvar vui--reconcile-lookup nil
+  "O(1) lookup over the current parent's existing children during render.
+Bound per instance by `vui--render-instance' to the result of
+`vui--build-reconcile-lookup', and consulted by `vui--find-matching-child'
+so reconciling a list of S children is O(S) rather than O(S^2).  Nil when
+no lookup was built (e.g. measurement passes), in which case
+`vui--find-matching-child' falls back to a linear scan.")
+
 (defvar vui--render-path nil
   "Current vnode path during rendering.
 A list of indices from root to current position, e.g., (0 1 2) means
@@ -2907,6 +2915,10 @@ the root re-render commit incrementally (see `vui--commit-root')."
          (vui--memo-index 0)      ; Reset memo counter for this component
          (vui--async-index 0)     ; Reset async counter for this component
          (old-children (vui-instance-children instance))
+         ;; O(1) child lookup for this render, so reconciling S children is
+         ;; O(S) not O(S^2).  Nil when there is nothing to reuse.
+         (vui--reconcile-lookup (and old-children
+                                     (vui--build-reconcile-lookup instance old-children)))
          (def (vui-instance-def instance))
          (component-name (vui-component-def-name def))
          (render-fn (vui-component-def-render-fn def))
@@ -3061,22 +3073,51 @@ requests for this tree become no-ops."
   (vui--cancel-render-timer instance)
   (vui--detach-instance instance))
 
+(defun vui--build-reconcile-lookup (parent children)
+  "Build an O(1) reconciliation lookup over PARENT's existing CHILDREN.
+Returns a plist with :parent (for validation), :vec (a vector of the
+children for positional/index reuse) and :by-key (a hash from (TYPE . KEY)
+to the FIRST child with that type and key, matching the first-match
+semantics of the previous linear `cl-find-if').  Built once per parent
+render, so per-child lookup in `vui--find-matching-child' is O(1)."
+  (let ((by-key (make-hash-table :test 'equal)))
+    (dolist (child children)
+      (let ((key (vui-vnode-key (vui-instance-vnode child))))
+        (when key
+          (let ((hk (cons (vui-component-def-name (vui-instance-def child)) key)))
+            ;; first wins: keep the earliest child for a (type . key)
+            (unless (gethash hk by-key)
+              (puthash hk child by-key))))))
+    (list :parent parent :vec (vconcat children) :by-key by-key)))
+
 (defun vui--find-matching-child (parent type key index)
-  "Find a child of PARENT matching TYPE and KEY or INDEX."
+  "Find a child of PARENT matching TYPE and KEY or INDEX.
+Uses `vui--reconcile-lookup' for O(1) matching when it was built for
+PARENT; otherwise falls back to a linear scan (identical semantics)."
   (when parent
-    (let ((children (vui-instance-children parent)))
-      (if key
-          ;; Key-based lookup - find child with same type AND key
-          (cl-find-if (lambda (child)
-                        (and (eq (vui-component-def-name (vui-instance-def child)) type)
-                             (equal (vui-vnode-key (vui-instance-vnode child)) key)))
-                      children)
-        ;; Index-based lookup - find child at same global position with same type
-        ;; This matches React's behavior for children without keys
-        (let ((child-at-index (nth index children)))
-          (when (and child-at-index
-                     (eq (vui-component-def-name (vui-instance-def child-at-index)) type))
-            child-at-index))))))
+    (if (and vui--reconcile-lookup
+             (eq (plist-get vui--reconcile-lookup :parent) parent))
+        ;; Fast path: O(1) lookup built for this render.
+        (if key
+            ;; Key-based: child with same type AND key (first match).
+            (gethash (cons type key) (plist-get vui--reconcile-lookup :by-key))
+          ;; Index-based: child at same global position with same type.
+          (let* ((vec (plist-get vui--reconcile-lookup :vec))
+                 (child (and (< index (length vec)) (aref vec index))))
+            (when (and child
+                       (eq (vui-component-def-name (vui-instance-def child)) type))
+              child)))
+      ;; Fallback: linear scan (e.g. no lookup built during measurement).
+      (let ((children (vui-instance-children parent)))
+        (if key
+            (cl-find-if (lambda (child)
+                          (and (eq (vui-component-def-name (vui-instance-def child)) type)
+                               (equal (vui-vnode-key (vui-instance-vnode child)) key)))
+                        children)
+          (let ((child-at-index (nth index children)))
+            (when (and child-at-index
+                       (eq (vui-component-def-name (vui-instance-def child-at-index)) type))
+              child-at-index)))))))
 
 (defun vui--create-instance (vnode &optional parent)
   "Create a new component instance from VNODE with optional PARENT."
