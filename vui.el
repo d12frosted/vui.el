@@ -3763,8 +3763,11 @@ function of the root `vui--render-instance' call."
     (cond
      ;; Whole-tree identity unchanged: the same vtree object as last
      ;; commit (what should-update=nil and memoization produce) means
-     ;; the buffer already matches - skip everything (O(1)).
-     ((and vui-incremental-render record (eq vtree (plist-get record :vnode)))
+     ;; the buffer already matches - skip everything (O(1)).  This is
+     ;; always on: it only ever skips provably-unchanged work, costs one
+     ;; `eq', and needs no bookkeeping, so it does not depend on the
+     ;; experimental `vui-incremental-render' flag.
+     ((and record (eq vtree (plist-get record :vnode)))
       nil)
      ;; Content patch: flat content container, reuse unchanged segments.
      ((and vui-incremental-render
@@ -3808,16 +3811,17 @@ function of the root `vui--render-instance' call."
       (vui--render-vnode vtree)
       (setf (vui-instance-render-record instance)
             (list :kind 'components :vnode vtree)))
-     ;; Wholesale rebuild (default / ineligible).  Record only the vnode
-     ;; so the eq short-circuit above can still skip an unchanged
-     ;; ineligible tree; the patch paths stay disabled (kind is nil).
+     ;; Wholesale rebuild (default / ineligible).  Always record the
+     ;; vnode so the eq short-circuit above can skip an unchanged tree on
+     ;; the next commit even with the flag off; the patch paths stay
+     ;; disabled (no :segs / :components kind, so they never match).
      (t
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
       (erase-buffer)
       (vui--render-vnode vtree)
       (setf (vui-instance-render-record instance)
-            (when vui-incremental-render (list :kind 'wholesale :vnode vtree)))))))
+            (list :kind 'wholesale :vnode vtree))))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
