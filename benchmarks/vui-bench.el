@@ -118,6 +118,18 @@ Return (MIN-SECONDS . GC-SECONDS-OF-FASTEST-RUN)."
                     (lambda (i) (vui-text (format "row %d" i)))
                     #'identity))
 
+(vui-defcomponent vui-bench-cell (id label)
+  ;; opts into bailout: unchanged cells are skipped under incremental render
+  :should-update (not (equal label (plist-get prev-props :label)))
+  :render (vui-text (format "[%s:%s]" id label)))
+
+(vui-defcomponent vui-bench-cell-list (items)
+  :render (apply #'vui-vstack
+                 (mapcar (lambda (it)
+                           (vui-component 'vui-bench-cell
+                             :key (car it) :id (car it) :label (cdr it)))
+                         items)))
+
 (defun vui-bench--items (n)
   "Return an alist of N (ID . LABEL) pairs."
   (cl-loop for i from 1 to n collect (cons i (format "row %d - content" i))))
@@ -267,6 +279,32 @@ A diffing renderer can only lose here (pure diff/marker overhead)."
       (when (get-buffer buf) (kill-buffer buf)))))
 
 ;;;###autoload
+(defun vui-bench-component-bailout ()
+  "Localized one-item change in a list of should-update component children.
+Reports wholesale vs incremental so the component-list bailout's effect
+on the per-instance commit floor is visible."
+  (vui-bench--header "Component-list localized update (should-update children)")
+  (dolist (n '(500 2000))
+    (dolist (flag '((nil . "wholesale") (t . "incremental")))
+      (let* ((vui-incremental-render (car flag))
+             (items (vui-bench--items n))
+             (mid (/ n 2))
+             (alt (let ((c (copy-sequence items)))
+                    (setf (nth mid c) (cons (car (nth mid items)) "CHANGED"))
+                    c))
+             (buf "*vui-bench-cb*")
+             (inst (vui-mount (vui-component 'vui-bench-cell-list :items items) buf))
+             (tog nil))
+        (vui-update inst (list :items items))
+        (vui-bench--result-row
+         (format "%d %s" n (cdr flag))
+         (vui-bench--measure
+          7 (lambda ()
+              (setq tog (not tog))
+              (vui-update inst (list :items (if tog alt items))))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
 (defun vui-bench-run ()
   "Run the full vui benchmark suite and print a report."
   (interactive)
@@ -284,6 +322,7 @@ A diffing renderer can only lose here (pure diff/marker overhead)."
     (vui-bench-throughput)
     (vui-bench-skip-knob)
     (vui-bench-widgets)
+    (vui-bench-component-bailout)
     (message "")
     (message "done.")))
 
