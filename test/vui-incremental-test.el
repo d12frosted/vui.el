@@ -15,6 +15,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'cl-lib)
 
 (defun vui-inc--string (vnode)
   "Return the wholesale-rendered string of VNODE."
@@ -108,25 +109,87 @@
                 (expect (overlay-end ov) :to-equal 4)))
           (kill-buffer "*inc-static*"))))))
 
-(describe "incremental rendering falls back for ineligible trees"
-  (it "renders a component list correctly (wholesale fallback)"
+(describe "incremental component-list patching"
+  ;; A keyed list of child components with should-update: unchanged
+  ;; children bail out of re-rendering and keep their buffer regions.
+  (it "matches wholesale across update / append / delete / reorder"
     (let ((vui-incremental-render t)
           (vui-render-delay nil))
-      (vui-defcomponent inc-child (id)
-        :render (vui-text (format "[%s]" id)))
-      (vui-defcomponent inc-comp-list (order)
+      (vui-defcomponent inc-cl-child (id label)
+        :should-update (not (equal label (plist-get prev-props :label)))
+        :render (vui-text (format "[%s:%s]" id label)))
+      (vui-defcomponent inc-cl (items)
         :render (apply #'vui-vstack
-                       (mapcar (lambda (id) (vui-component 'inc-child :key id :id id))
-                               order)))
-      (let ((inst (vui-mount (vui-component 'inc-comp-list :order '("a" "b"))
-                             "*inc-comp*")))
+                       (mapcar (lambda (it)
+                                 (vui-component 'inc-cl-child
+                                   :key (car it) :id (car it) :label (cdr it)))
+                               items)))
+      (let ((inst (vui-mount (vui-component 'inc-cl
+                                            :items '((1 . "a") (2 . "b") (3 . "c")))
+                             "*inc-cl*")))
         (unwind-protect
-            (with-current-buffer "*inc-comp*"
-              (expect (buffer-string) :to-equal "[a]\n[b]")
-              (vui-update inst '(:order ("a" "b" "c")))
-              (expect (buffer-string) :to-equal "[a]\n[b]\n[c]"))
-          (kill-buffer "*inc-comp*")))))
+            (with-current-buffer "*inc-cl*"
+              (expect (buffer-string) :to-equal "[1:a]\n[2:b]\n[3:c]")
+              (vui-update inst '(:items ((1 . "a") (2 . "B") (3 . "c")))) ; update
+              (expect (buffer-string) :to-equal "[1:a]\n[2:B]\n[3:c]")
+              (vui-update inst '(:items ((1 . "a") (2 . "B") (3 . "c") (4 . "d")))) ; append
+              (expect (buffer-string) :to-equal "[1:a]\n[2:B]\n[3:c]\n[4:d]")
+              (vui-update inst '(:items ((1 . "a") (3 . "c") (4 . "d")))) ; delete middle
+              (expect (buffer-string) :to-equal "[1:a]\n[3:c]\n[4:d]")
+              (vui-update inst '(:items ((4 . "d") (1 . "a") (3 . "c")))) ; reorder
+              (expect (buffer-string) :to-equal "[4:d]\n[1:a]\n[3:c]"))
+          (kill-buffer "*inc-cl*")))))
 
+  (it "skips the children that bail out (re-renders only what changed)"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent inc-cl-count (id label)
+        :should-update (not (equal label (plist-get prev-props :label)))
+        :render (progn (setq renders (1+ renders)) (vui-text (format "[%s:%s]" id label))))
+      (vui-defcomponent inc-cl2 (items)
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (it)
+                                 (vui-component 'inc-cl-count
+                                   :key (car it) :id (car it) :label (cdr it)))
+                               items)))
+      (let ((inst (vui-mount (vui-component 'inc-cl2
+                                            :items '((1 . "a") (2 . "b") (3 . "c")))
+                             "*inc-cl2*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cl2*"
+              (setq renders 0)
+              ;; change only item 2: only it should re-render
+              (vui-update inst '(:items ((1 . "a") (2 . "B") (3 . "c"))))
+              (expect renders :to-equal 1)
+              (expect (buffer-string) :to-equal "[1:a]\n[2:B]\n[3:c]"))
+          (kill-buffer "*inc-cl2*")))))
+
+  (it "preserves child state across a reorder"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-cl-stateful (id)
+        :state ((clicks 0))
+        :render (vui-text (format "[%s:%d]" id clicks)))
+      (vui-defcomponent inc-cl3 (order)
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (id) (vui-component 'inc-cl-stateful :key id :id id))
+                               order)))
+      (let ((inst (vui-mount (vui-component 'inc-cl3 :order '("a" "b" "c"))
+                             "*inc-cl3*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cl3*"
+              (let ((a (cl-find "a" (vui-get-component-instances 'inc-cl-stateful inst)
+                                :key (lambda (i) (plist-get (vui-instance-props i) :id))
+                                :test #'equal)))
+                (let ((vui--current-instance a)) (vui-set-state :clicks 5)))
+              (expect (buffer-string) :to-equal "[a:5]\n[b:0]\n[c:0]")
+              (vui-update inst '(:order ("c" "b" "a")))
+              ;; a kept its state and moved to the end
+              (expect (buffer-string) :to-equal "[c:0]\n[b:0]\n[a:5]"))
+          (kill-buffer "*inc-cl3*"))))))
+
+(describe "incremental rendering falls back for ineligible trees"
   (it "renders an indented vstack correctly (wholesale fallback)"
     (let ((vui-incremental-render t)
           (vui-render-delay nil))

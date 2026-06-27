@@ -3600,6 +3600,113 @@ new list of (VNODE . LENGTH)."
       (flush))
     (nreverse new-segs)))
 
+(defun vui--component-container-p (vnode)
+  "Non-nil if VNODE is a fragment or unindented vstack of only components.
+These are the containers the component-list patcher can patch by
+position, skipping children that bail out of re-rendering."
+  (let* ((raw (cond ((vui-vnode-fragment-p vnode)
+                     (vui-vnode-fragment-children vnode))
+                    ((and (vui-vnode-vstack-p vnode)
+                          (= 0 (or (vui-vnode-vstack-indent vnode) 0)))
+                     (vui-vnode-vstack-children vnode))
+                    (t :no)))
+         (children (and (listp raw) (remq nil raw))))
+    (and children (cl-every #'vui-vnode-component-p children))))
+
+(defun vui--instance-may-bail-p (instance)
+  "Non-nil if INSTANCE can skip re-rendering entirely.
+True only for a mounted instance that opted in with `:should-update',
+whose should-update reports no change for the current props/state, and
+none of whose consumed context values changed.  This is the structural
+bailout: skipping it leaves the instance's buffer region (text and
+widgets) untouched."
+  (let* ((def (vui-instance-def instance))
+         (su (vui-component-def-should-update def)))
+    (and (vui-instance-mounted-p instance)
+         su
+         (vui-instance-r-len instance)
+         (not (funcall su
+                       (vui-instance-props instance)
+                       (vui-instance-state instance)
+                       (vui-instance-prev-props instance)
+                       (vui-instance-prev-state instance)))
+         (vui--instance-contexts-unchanged-p instance))))
+
+(defun vui--patch-component-list (instance vtree)
+  "Patch INSTANCE's buffer (a list of component children) to match VTREE.
+Point starts at the list's beginning.  Walks the new component vnodes
+against the existing child instances by position, reusing instances by
+key, skipping those that bail out (leaving their buffer region intact),
+re-rendering changed ones in place, inserting new children, and deleting
+removed ones.  Pushes the resulting child instances onto
+`vui--new-children' in order so the caller's reconcile tail finalizes
+the children list and unmounts whatever was removed."
+  (let* ((sep (vui--incremental-separator vtree))
+         (sep-len (length sep))
+         (old-children (vui-instance-children instance))
+         (new-vnodes (remq nil (vui--incremental-segments vtree)))
+         (i 0))
+    (goto-char (point-min))
+    (dolist (vnode new-vnodes)
+      (let* ((type (vui-vnode-component-type vnode))
+             (key (vui-vnode-key vnode))
+             (children (vui-vnode-component-children vnode))
+             (props (vui-vnode-component-props vnode))
+             (props-wc (if children
+                           (plist-put (copy-sequence props) :children children)
+                         props))
+             (old-at-i (nth i old-children))
+             (same-pos (and old-at-i
+                            (eq type (vui-component-def-name
+                                      (vui-instance-def old-at-i)))
+                            (equal key (vui-vnode-key
+                                        (vui-instance-vnode old-at-i)))))
+             (old-seg-len (+ (if (> i 0) sep-len 0)
+                             (if old-at-i (or (vui-instance-r-len old-at-i) 0) 0)))
+             (chosen (cond
+                      (same-pos old-at-i)
+                      ;; key match elsewhere: reuse the instance (preserve
+                      ;; its state) even though it moved
+                      ((and key
+                            (cl-find-if
+                             (lambda (c)
+                               (and (eq type (vui-component-def-name
+                                              (vui-instance-def c)))
+                                    (equal key (vui-vnode-key
+                                                (vui-instance-vnode c)))))
+                             old-children)))
+                      (t nil))))
+        ;; reconcile props onto the chosen instance, or create a new one
+        (if chosen
+            (progn (setf (vui-instance-props chosen) props-wc)
+                   (setf (vui-instance-vnode chosen) vnode))
+          (setq chosen (vui--create-instance vnode instance)))
+        (if (and same-pos (vui--instance-may-bail-p chosen))
+            ;; bail: leave separator+content in place, advance past it
+            (forward-char old-seg-len)
+          ;; render the chosen instance here, replacing what was at i
+          (let ((p (point)))
+            (when (and old-at-i (> old-seg-len 0))
+              (vui--forget-region-fields p (+ p old-seg-len))
+              (vui--remove-widget-overlays p (+ p old-seg-len))
+              (delete-region p (+ p old-seg-len)))
+            (when (> i 0) (insert sep))
+            (let ((s (point)))
+              (vui--render-instance chosen)
+              (setf (vui-instance-r-len chosen) (- (point) s)))))
+        (push chosen vui--new-children))
+      (setq i (1+ i)))
+    ;; delete the buffer regions of any leftover (removed) old children;
+    ;; not pushed to `vui--new-children', so the tail unmounts them
+    (dolist (old (nthcdr i old-children))
+      (let* ((seg-len (+ (if (> i 0) sep-len 0)
+                         (or (vui-instance-r-len old) 0)))
+             (p (point)))
+        (vui--forget-region-fields p (+ p seg-len))
+        (vui--remove-widget-overlays p (+ p seg-len))
+        (delete-region p (+ p seg-len))
+        (setq i (1+ i))))))
+
 (defun vui--render-record-compatible-p (instance vtree)
   "Return non-nil if INSTANCE's render record can be patched toward VTREE.
 Requires a record for the same container kind and separator as VTREE."
@@ -3624,19 +3731,29 @@ function of the root `vui--render-instance' call."
      ;; the buffer already matches - skip everything (O(1)).
      ((and vui-incremental-render record (eq vtree (plist-get record :vnode)))
       nil)
-     ;; Incremental patch: do not erase; reuse unchanged segments.
+     ;; Content patch: flat content container, reuse unchanged segments.
      ((and vui-incremental-render
+           (eq (plist-get record :kind) 'content)
            (vui--incremental-eligible-p vtree)
            (vui--render-record-compatible-p instance vtree))
       (let ((segs (vui--patch-segments
                    (point-min)
-                   (plist-get (vui-instance-render-record instance) :segs)
+                   (plist-get record :segs)
                    (vui--incremental-segments vtree)
                    (vui--incremental-separator vtree))))
         (setf (vui-instance-render-record instance)
-              (list :vnode vtree :segs segs))))
-     ;; Eligible but no compatible record: rebuild via the patch path
-     ;; from empty, which captures per-segment lengths for next time.
+              (list :kind 'content :vnode vtree :segs segs))))
+     ;; Component patch: flat list of components, skip those that bail.
+     ((and vui-incremental-render
+           (eq (plist-get record :kind) 'components)
+           (vui--component-container-p vtree)
+           (equal (vui--incremental-separator (plist-get record :vnode))
+                  (vui--incremental-separator vtree)))
+      (vui--patch-component-list instance vtree)
+      (setf (vui-instance-render-record instance)
+            (list :kind 'components :vnode vtree)))
+     ;; Content eligible, no compatible record: rebuild via the patch
+     ;; path from empty, capturing per-segment lengths for next time.
      ((and vui-incremental-render (vui--incremental-eligible-p vtree))
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
@@ -3646,18 +3763,26 @@ function of the root `vui--render-instance' call."
                    (vui--incremental-segments vtree)
                    (vui--incremental-separator vtree))))
         (setf (vui-instance-render-record instance)
-              (list :vnode vtree :segs segs))))
+              (list :kind 'content :vnode vtree :segs segs))))
+     ;; Component eligible, no compatible record: wholesale render (the
+     ;; component branch captures per-instance lengths), mark for patch.
+     ((and vui-incremental-render (vui--component-container-p vtree))
+      (setq widget-field-list nil widget-field-new nil)
+      (vui--remove-widget-overlays)
+      (erase-buffer)
+      (vui--render-vnode vtree)
+      (setf (vui-instance-render-record instance)
+            (list :kind 'components :vnode vtree)))
      ;; Wholesale rebuild (default / ineligible).  Record only the vnode
-     ;; (no :segs) so the eq short-circuit above can still skip an
-     ;; unchanged ineligible tree, while the patch path stays disabled
-     ;; for it (compatible-p requires :segs).
+     ;; so the eq short-circuit above can still skip an unchanged
+     ;; ineligible tree; the patch paths stay disabled (kind is nil).
      (t
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
       (erase-buffer)
       (vui--render-vnode vtree)
       (setf (vui-instance-render-record instance)
-            (when vui-incremental-render (list :vnode vtree)))))))
+            (when vui-incremental-render (list :kind 'wholesale :vnode vtree)))))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
@@ -4129,7 +4254,11 @@ function of the root `vui--render-instance' call."
     (let ((instance (vui--reconcile-component vnode vui--current-instance)))
       ;; Track this child for future reconciliation
       (push instance vui--new-children)
-      (vui--render-instance instance)))
+      ;; Record the instance's rendered length so the component-list
+      ;; incremental patcher can skip or replace it by position.
+      (let ((start (point)))
+        (vui--render-instance instance)
+        (setf (vui-instance-r-len instance) (- (point) start)))))
 
    ;; Context provider - push context and render children
    ((vui-vnode-provider-p vnode)
