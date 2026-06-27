@@ -4657,7 +4657,13 @@ Returns the unmounted instance, or nil if nothing was mounted."
         (when (buffer-live-p buf)
           (with-current-buffer buf
             (kill-local-variable 'vui--root-instance)
-            (let ((inhibit-read-only t))
+            ;; Inhibit modification hooks while erasing: a `vui-field' in
+            ;; the buffer installs an after-change hook that runs
+            ;; `widget-after-change' against the now half-removed field and
+            ;; signals (number-or-marker-p nil).  The render path inhibits
+            ;; these hooks for the same reason; teardown must too.
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t))
               (remove-overlays)
               (erase-buffer)))))
       instance))))

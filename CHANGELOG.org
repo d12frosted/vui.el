@@ -25,6 +25,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the named prop/state variables, =prev-props=, and =prev-state= were bound,
   so a form referencing =props= or =state= (including the documented example)
   raised =void-variable=.
+- =vui-unmount= no longer signals when tearing down a buffer that contains
+  a =vui-field=. It erased the buffer without inhibiting modification hooks,
+  so the field's =widget-after-change= ran against the half-removed field
+  and raised =(number-or-marker-p nil)=. Teardown now inhibits modification
+  hooks while erasing, as the render path already does.
 
 ** Changed
 
