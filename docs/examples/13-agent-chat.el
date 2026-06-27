@@ -37,14 +37,19 @@
 
 ;;; Message - drawn differently per role
 
-(vui-defcomponent vui-chat-message (id role text)
-  "One transcript message, rendered differently depending on ROLE."
-  :render
+(defun vui-chat-message-vnode (role text)
+  "Return a content vnode rendering TEXT for ROLE, drawn per role.
+Shared by the declarative `vui-chat-message' component and the streaming
+transcript, so a message renders identically whichever path emits it."
   (pcase role
     ('user  (vui-text (concat "you> " text) :face 'bold))
     ('agent (vui-text (concat "ai>  " text)))
     ('tool  (vui-text (concat "  [tool] " text) :face 'shadow))
     (_      (vui-text text))))
+
+(vui-defcomponent vui-chat-message (id role text)
+  "One transcript message, rendered differently depending on ROLE."
+  :render (vui-chat-message-vnode role text))
 
 ;;; Transcript - the O(n) part vui-stream will replace
 
@@ -93,6 +98,18 @@ with `vui-update'."
    (vui-component 'vui-chat-transcript :messages messages)
    (vui-component 'vui-chat-box :queue queue :status status)))
 
+;;; Streaming root - the SAME UI, transcript driven by `vui-stream'
+
+(vui-defcomponent vui-agent-chat-stream (stream queue status)
+  "Agent chat whose transcript is a `vui-stream' (handle STREAM).
+Identical output to `vui-agent-chat', but messages are appended
+imperatively with `vui-stream-append' (O(1)) instead of rebuilt from a
+:messages prop.  QUEUE and STATUS feed the same persistent box below."
+  :render
+  (vui-vstack
+   (vui-stream stream)
+   (vui-component 'vui-chat-box :queue queue :status status)))
+
 ;;; Interactive demo - simulate async agent streaming with a timer
 
 (defun vui-agent-chat--roles (i)
@@ -124,12 +141,42 @@ grows.  INTERVAL defaults to 0.5."
     (vui-component 'vui-agent-chat
       :messages messages :queue queue :status status)))
 
+(vui-defcomponent vui-agent-chat-stream-demo (interval)
+  "Stream a fake message every INTERVAL seconds via `vui-stream-append'.
+The transcript grows in O(1) per message while the box below stays put
+and editable.  INTERVAL defaults to 0.5."
+  :state ((queue 0) (status "idle"))
+  :render
+  (let ((stream (vui-use-stream)))
+    ;; Append imperatively on each tick.  The message number comes from
+    ;; the stream's own length, so the timer closure needs no live state.
+    (vui-use-effect ()
+      (let ((timer (run-with-timer
+                    (or interval 0.5) (or interval 0.5)
+                    (vui-with-async-context
+                     (let ((n (1+ (length (vui-stream-handle-items-rev stream)))))
+                       (vui-stream-append
+                        stream
+                        (vui-chat-message-vnode
+                         (vui-agent-chat--roles n)
+                         (format "streamed message %d" n))))))))
+        (lambda () (cancel-timer timer))))
+    (vui-component 'vui-agent-chat-stream
+      :stream stream :queue queue :status status)))
+
 ;;;###autoload
 (defun vui-example-agent-chat ()
-  "Run the agent-chat streaming demo."
+  "Run the agent-chat streaming demo (declarative transcript)."
   (interactive)
   (vui-mount (vui-component 'vui-agent-chat-demo :interval 0.5)
              "*vui-agent-chat*"))
+
+;;;###autoload
+(defun vui-example-agent-chat-stream ()
+  "Run the agent-chat demo with a `vui-stream' transcript (O(1) appends)."
+  (interactive)
+  (vui-mount (vui-component 'vui-agent-chat-stream-demo :interval 0.5)
+             "*vui-agent-chat-stream*"))
 
 (provide '13-agent-chat)
 ;;; 13-agent-chat.el ends here

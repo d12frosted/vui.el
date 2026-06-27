@@ -155,5 +155,44 @@ that any incremental path must reproduce byte-for-byte."
                     :to-equal (vui-agent--string msgs 2 "busy")))
         (vui-agent--kill buf)))))
 
+(describe "agent-chat: the streaming transcript matches the declarative UI"
+  ;; The vui-stream version must render byte-identically to the wholesale
+  ;; vui-agent-chat oracle - same messages, same box.
+  (it "appends messages via vui-stream to the same buffer as a fresh mount"
+    (let* ((vui-render-delay nil)
+           (s (vui-make-stream))
+           (msgs (vui-agent--messages 25))
+           (buf "*vui-agent-stream*")
+           (inst (vui-mount (vui-component 'vui-agent-chat-stream
+                              :stream s :queue 2 :status "busy")
+                            buf)))
+      (ignore inst)
+      (unwind-protect
+          (progn
+            (dolist (m msgs)
+              (vui-stream-append
+               s (vui-chat-message-vnode (plist-get m :role) (plist-get m :text))))
+            (expect (with-current-buffer buf (buffer-string))
+                    :to-equal (vui-agent--string msgs 2 "busy")))
+        (vui-agent--kill buf))))
+
+  (it "keeps the box (field + status) correct as the stream grows"
+    (let* ((vui-render-delay nil)
+           (s (vui-make-stream))
+           (buf "*vui-agent-stream-box*")
+           (inst (vui-mount (vui-component 'vui-agent-chat-stream
+                              :stream s :queue 0 :status "idle")
+                            buf)))
+      (ignore inst)
+      (unwind-protect
+          (progn
+            (dotimes (i 150)
+              (vui-stream-append s (vui-chat-message-vnode 'agent (format "m%d" i))))
+            (with-current-buffer buf
+              (expect (buffer-string) :to-match "status: idle")
+              (expect (buffer-string) :to-match "queue: 0 pending")
+              (expect widget-field-list :not :to-be nil)))
+        (vui-agent--kill buf)))))
+
 (provide 'vui-agent-chat-test)
 ;;; vui-agent-chat-test.el ends here
