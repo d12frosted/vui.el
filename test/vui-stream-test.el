@@ -133,5 +133,79 @@ leading separator), matching what a plain declarative list renders."
                 (expect (char-before) :to-equal before)))
           (vui-st--kill))))))
 
+(describe "vui-stream: update-last grows the in-progress item in place"
+  (it "matches the oracle after updating the last item (token streaming)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "line 1"))
+              (vui-stream-append s (vui-text "par"))      ; in-progress msg
+              ;; tokens arrive: re-render the last item with the message so far
+              (vui-stream-update-last s (vui-text "partial"))
+              (vui-stream-update-last s (vui-text "partial response"))
+              (vui-stream-update-last s (vui-text "partial response done"))
+              (expect (vui-st--buffer)
+                      :to-equal
+                      (vui-st--oracle '("line 1" "partial response done") "n0")))
+          (vui-st--kill)))))
+
+  (it "works on the very first item (which took the re-render path)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "hi")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "first"))    ; empty -> non-empty
+              (vui-stream-update-last s (vui-text "first updated"))
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("first updated") "hi")))
+          (vui-st--kill)))))
+
+  (it "appends correctly after an update-last (continue the stream)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "z")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-update-last s (vui-text "aa"))
+              (vui-stream-append s (vui-text "b"))
+              (vui-stream-update-last s (vui-text "bb"))
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("aa" "bb") "z")))
+          (vui-st--kill)))))
+
+  (it "leaves the line below correct after an update-last"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "footer")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (dotimes (i 50) (vui-stream-append s (vui-text (format "m%d" i))))
+              (vui-stream-update-last s (vui-text "m49 GROWN with more text"))
+              (with-current-buffer "*vui-st*"
+                (goto-char (point-min))
+                (expect (how-many "^note: footer$") :to-equal 1)
+                (goto-char (point-max))
+                (expect (char-before) :to-equal ?r)))  ; ...footer
+          (vui-st--kill)))))
+
+  (it "is a no-op on an empty stream"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-update-last s (vui-text "ignored"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
+          (vui-st--kill))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here

@@ -21,10 +21,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   re-render re-emits the items, so the buffer stays byte-identical to what
   a plain list would render. The empty -> non-empty transition does one
   re-render (a container drops an empty child and its separator); every
-  later append is O(1). Measured in batch: appending into a 4000-item
-  stream is ~0.02ms and flat regardless of size, vs ~21ms and rising for
-  the declarative rebuild (~950x at N=4000, the gap widening with size).
-  Items are content vnodes (text) for now (#82).
+  later append is O(1). =vui-stream-update-last= rewrites just the last
+  item's region, for the in-progress message in a streaming agent UI (grow
+  it as tokens arrive): its cost depends on that one message, not on the
+  transcript length. Measured in batch: both appending into and growing the
+  last item of a 4000-item stream are ~0.02ms and flat regardless of size,
+  vs ~21ms and rising for the declarative rebuild (~950x at N=4000, the gap
+  widening with size). Items are content vnodes (text/fragment, drawn
+  however you like per item) for now (#82).
 - =:memo= keyword for =vui-defcomponent=: =:memo t= is a shorthand for the
   most common =:should-update= - skip the re-render while props are
   shallow-equal (=equal= on each value) and state is unchanged, like

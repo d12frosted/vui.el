@@ -141,26 +141,49 @@ grows.  INTERVAL defaults to 0.5."
     (vui-component 'vui-agent-chat
       :messages messages :queue queue :status status)))
 
+(defvar vui-agent-chat--script
+  '((user  . "what's the weather like today?")
+    (agent . "Let me check the forecast for you right now.")
+    (tool  . "weather.get(location = here)")
+    (agent . "It looks sunny with a high around 24 degrees - a great day."))
+  "Scripted messages for the streaming demo, typed out word by word.")
+
 (vui-defcomponent vui-agent-chat-stream-demo (interval)
-  "Stream a fake message every INTERVAL seconds via `vui-stream-append'.
-The transcript grows in O(1) per message while the box below stays put
-and editable.  INTERVAL defaults to 0.5."
+  "Simulate an agent typing messages token-by-token over `vui-stream'.
+Each scripted message is appended on its first word, then grown one word
+at a time with `vui-stream-update-last' (so the in-progress message
+updates in place), then the next message begins.  The transcript and the
+box below never re-render during this - only the last line changes.
+INTERVAL defaults to 0.25."
   :state ((queue 0) (status "idle"))
   :render
   (let ((stream (vui-use-stream)))
-    ;; Append imperatively on each tick.  The message number comes from
-    ;; the stream's own length, so the timer closure needs no live state.
     (vui-use-effect ()
-      (let ((timer (run-with-timer
-                    (or interval 0.5) (or interval 0.5)
-                    (vui-with-async-context
-                     (let ((n (1+ (length (vui-stream-handle-items-rev stream)))))
-                       (vui-stream-append
+      ;; Mutable cursor over the script, captured by the timer.  wi = 0
+      ;; means "start the next message"; later words grow it in place.
+      (let ((mi 0) (wi 0)
+            (script vui-agent-chat--script))
+        (let ((timer
+               (run-with-timer
+                (or interval 0.25) (or interval 0.25)
+                (vui-with-async-context
+                 (when (< mi (length script))
+                   (let* ((msg (nth mi script))
+                          (role (car msg))
+                          (words (split-string (cdr msg) " ")))
+                     (if (= wi 0)
+                         ;; first word: append a new message
+                         (vui-stream-append
+                          stream (vui-chat-message-vnode role (car words)))
+                       ;; later words: grow the in-progress message in place
+                       (vui-stream-update-last
                         stream
                         (vui-chat-message-vnode
-                         (vui-agent-chat--roles n)
-                         (format "streamed message %d" n))))))))
-        (lambda () (cancel-timer timer))))
+                         role (string-join (cl-subseq words 0 (1+ wi)) " "))))
+                     (setq wi (1+ wi))
+                     (when (>= wi (length words))
+                       (setq mi (1+ mi) wi 0))))))))
+          (lambda () (cancel-timer timer)))))
     (vui-component 'vui-agent-chat-stream
       :stream stream :queue queue :status status)))
 

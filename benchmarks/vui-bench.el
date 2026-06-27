@@ -544,6 +544,28 @@ append, independent of stream size - contrast the rising slope of
         8 (lambda () (vui-stream-append handle (vui-text "freshly streamed line")))))
       (vui-bench--agent-teardown inst buf))))
 
+(defun vui-bench-stream-update-last-growth ()
+  "Cost of one `vui-stream-update-last' as the stream grows, box below.
+The per-token path of a streaming agent UI (the in-progress message grows
+word by word).  A FLAT slope means the update is independent of transcript
+size - only the last item's region is rewritten."
+  (vui-bench--header "Stream update-last: grow last item at stream size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (let* ((handle (vui-make-stream))
+           (buf "*vui-bench-stream-ul*")
+           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf))
+           (k 0))
+      (dotimes (i s)
+        (vui-stream-append handle (vui-text (format "message %d content" i))))
+      (vui-stream-append handle (vui-text "in progress"))
+      (vui-bench--result-row
+       (format "%d stream" s)
+       (vui-bench--measure
+        8 (lambda () (setq k (1+ k))
+            (vui-stream-update-last
+             handle (vui-text (format "growing message token %d here" k))))))
+      (vui-bench--agent-teardown inst buf))))
+
 (defun vui-bench-agent-run ()
   "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
   (interactive)
@@ -554,6 +576,7 @@ append, independent of stream size - contrast the rising slope of
     (vui-bench-agent-append-growth)
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
+    (vui-bench-stream-update-last-growth)
     (message "")
     (message "done.")))
 
@@ -794,6 +817,7 @@ machine-readable CMPDATA lines."
     (vui-bench-agent-append-growth)
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
+    (vui-bench-stream-update-last-growth)
     (message "")
     (message "done.")))
 

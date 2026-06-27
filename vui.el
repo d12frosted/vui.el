@@ -3904,6 +3904,7 @@ bound when the stream is first rendered, and are nil until then."
   buffer
   region-start
   region-end
+  last-start        ; Marker at the start of the last item (for update-last)
   (items-rev nil)
   (separator "\n"))
 
@@ -3944,17 +3945,28 @@ repositions END explicitly instead."
     (setf (vui-stream-handle-region-start handle) s
           (vui-stream-handle-region-end handle) e)))
 
+(defun vui--stream-set-last-start (handle pos buffer)
+  "Record POS in BUFFER as the start of HANDLE's last item."
+  (let ((m (or (vui-stream-handle-last-start handle) (make-marker))))
+    (set-marker m pos buffer)
+    (set-marker-insertion-type m nil)
+    (setf (vui-stream-handle-last-start handle) m)))
+
 (defun vui--stream-render (handle)
   "Render HANDLE's items at point and bind its region around them.
 Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
   (let ((sep (vui-stream-handle-separator handle))
         (start (point))
-        (first t))
+        (first t)
+        (last-start nil))
     (dolist (item (reverse (vui-stream-handle-items-rev handle)))
       (unless first (insert sep))
       (setq first nil)
+      (setq last-start (point))
       (vui--render-vnode item))
-    (vui--stream-bind-region handle (current-buffer) start (point))))
+    (vui--stream-bind-region handle (current-buffer) start (point))
+    (when last-start
+      (vui--stream-set-last-start handle last-start (current-buffer)))))
 
 (defun vui--stream-request-rerender (handle)
   "Re-render the root of HANDLE's buffer so the layout reflects new items."
@@ -4001,10 +4013,36 @@ supported yet."
             (goto-char (marker-position end))
             ;; There is already at least one item, so separate from it.
             (insert (vui-stream-handle-separator handle))
+            (vui--stream-set-last-start handle (point) buf)
             (vui--render-vnode vnode)
             ;; END stays put on insert (so the parent's separator below is
             ;; never captured); move it explicitly past what we inserted.
             (set-marker end (point))))))))
+  handle)
+
+(defun vui-stream-update-last (handle vnode)
+  "Replace HANDLE's last item with VNODE, re-rendering only its region.
+This is the in-progress message in a streaming agent UI: as tokens
+arrive, update the last item with the message-so-far.  The cost depends
+on that one item's size, not on the number of items above it, so the
+transcript can be arbitrarily long.  A no-op when the stream is empty or
+not yet live.  VNODE must be a content vnode (text/fragment)."
+  (when (vui-stream-handle-items-rev handle)
+    (setcar (vui-stream-handle-items-rev handle) vnode)
+    (let ((buf (vui-stream-handle-buffer handle))
+          (ls (vui-stream-handle-last-start handle))
+          (end (vui-stream-handle-region-end handle)))
+      (when (and buf (buffer-live-p buf)
+                 ls (marker-position ls) end (marker-position end))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t))
+            (save-excursion
+              (delete-region (marker-position ls) (marker-position end))
+              (goto-char (marker-position ls))
+              (vui--render-vnode vnode)
+              (set-marker end (point))))))))
   handle)
 
 (defun vui--render-vnode (vnode)
