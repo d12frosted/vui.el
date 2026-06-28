@@ -1,0 +1,240 @@
+#+title: Design: random-access nodes for vui-stream
+#+author: vui.el
+
+* Status
+
+Design note, de-risked with measurements; not yet implemented. The risky
+question ("does a ref-based node API throw away vui-stream's O(1) append?")
+is answered below: no, *if* finalized nodes drop their markers.
+
+* Problem
+
+=vui-stream-update-last= can only touch the most recently appended item. That
+bakes in a "strictly sequential" assumption: one in-flight item at a time,
+always the last. Real agent UIs break it constantly:
+
+- a tool-call card needs to appear while the reply is still streaming;
+- a notification/extension event arrives mid-thinking;
+- the user sends a follow-up before the previous answer has finished.
+
+The instant a second item is appended, your handle on the first is gone. The
+feedback that prompted this: /append should return a ref, and you update that
+ref regardless of where it has drifted to./ That is the right instinct - it is
+the [[https://www.gnu.org/software/emacs/manual/html_node/ewoc/][ewoc]]
+model.
+
+* Prior art: ewoc, and pi.el
+
+Two existing implementations bracket the design - ewoc (the core primitive)
+and pi.el (a real-world agent client built on the same idea).
+
+** ewoc (Emacs core)
+
+ewoc (=lisp/emacs-lisp/ewoc.el=) is the canonical "list of nodes, each mapped
+to a buffer region, addressable by ref." Its API is the shape we want:
+
+| ewoc                       | role                                   |
+|----------------------------+----------------------------------------|
+| =ewoc-enter-last= -> node  | append, return a ref                   |
+| =ewoc-enter-before/after=  | insert out of order                    |
+| =ewoc-invalidate node=     | re-render a node's region (anywhere)   |
+| =ewoc-delete node=         | remove a node                          |
+| =ewoc-locate pos=          | find the node at a buffer position     |
+
+One detail worth stealing: *one marker per node*. A node stores a single
+=start-marker=; its extent is =[its start, the NEXT node's start]= - the
+neighbour's start is your end, so no end marker is needed (halves the marker
+count). The empty-node case (a node that renders to nothing shares a position
+with its neighbour) is handled by =ewoc--adjust= reseating coincident markers
+after a re-render - the subtlety to get right.
+
+** pi.el (a real agent client)
+
+pi.el (=ananthakumaran/pi.el=, an Emacs client for the Pi coding agent) is the
+closest real-world match: it streams an agent's reply, reasoning, and tool
+calls into a buffer - exactly our case - and has already made these decisions
+under production pressure. Its unit is a =pi-section=, and crucially it is a
+*tree*, not a flat list:
+
+#+begin_src elisp
+(cl-defstruct pi-section parent children beginning end type hidden info padding)
+#+end_src
+
+A response is a section; its thinking, its text, and each tool-call (with a
+=tool-result= child) are sections under it. The API is the reviewer's
+"(create .. parent), keep the ref, append/replace":
+
+| pi-section                       | role                                |
+|----------------------------------+-------------------------------------|
+| =pi-new-section type parent=     | create a node under a parent        |
+| =pi-append-section section ...=  | append content to a node (O(delta)) |
+| =pi-replace-section section ...= | re-render a node's whole region     |
+| =pi-create-or-replace-section=   | upsert by ref                       |
+| =pi-delete-section=              | remove                              |
+
+Its streaming loop *is* append-to-a-ref: it keeps =pi-thinking-section= and
+=pi-text-section= as live refs and, on each =text_delta= / =thinking_delta=,
+=pi-append-section='s the delta onto the matching ref (creating it if nil). A
+tool call is =pi-new-section 'tool-call= with a =tool-result= child streamed by
+append/replace. Out-of-order works because each section owns its region and
+=pi-update-section-end= propagates a child's new end up to its ancestors.
+
+Three things pi.el does better than my first sketch, worth adopting:
+
+1. *Separators belong to the node, not the container.* Each section owns a
+   trailing =padding= string, inserted as part of the section. This dissolves
+   the empty-child/separator hack vui-stream needed (a =vstack= drops an empty
+   child's separator and so the first append has to force a full re-render); a
+   node that owns its own separator has no such edge case.
+2. *Explicit append vs. replace.* pi separates =pi-append-section= (add at the
+   end, O(delta) - the streaming primitive) from =pi-replace-section=
+   (re-render the whole region). Cleaner than my "=update= auto-detects a prefix
+   extension" - give the caller both verbs.
+3. *A tree, not a flat list.* Hierarchy lets a whole response collapse (parent
+   + children) and lets thinking / text / tool-result be addressed
+   independently.
+
+And one thing pi.el does *not* do, which is our actual contribution: *a marker
+lifecycle*. pi keeps two markers per section live for the buffer's whole life
+and never finalizes; it relies on a chat session being *bounded*, with
+=pi-section-autohide= collapsing old sections for *clutter* (not for marker
+cost). So pi inherits ewoc's O(N)-markers wall - it is just rarely hit because
+sessions are short. =finalize= (drop the marker, demote to static text) is the
+piece neither ewoc nor pi has, and the measurements below show it is what buys
+back O(1) for a genuinely unbounded stream.
+
+* The measured risk
+
+The whole question is whether per-node markers reintroduce the O(N) append
+that vui-stream exists to kill. Measured (batch, Emacs 30/31):
+
+** Markers are not free
+Cost of one =insert= at point-max vs. the number of live markers in the buffer
+(Emacs walks the full marker list per insertion, even inserting after all of
+them):
+
+| live markers | append cost |
+|--------------+-------------|
+|            0 | 3.1 us      |
+|        1,000 | 6.9 us      |
+|       10,000 | 20 us       |
+|      100,000 | 146 us      |
+
+So "a marker per item, forever" => O(N) append => O(N^2) streaming. ewoc's
+wall, confirmed.
+
+** A bounded live set stays O(1)
+Per-append cost vs. stream size N, by marker strategy:
+
+| N      | finalize-now | keep-3-live | keep-all-live |
+|--------+--------------+-------------+---------------|
+| 2,000  | 0.95 us      | 1.9 us      | 3.8 us        |
+| 80,000 | 0.95 us      | 1.9 us      | 146 us        |
+
+Finalizing old nodes (dropping their markers) keeps append *flat* regardless
+of length. Keep everything live and it degrades to O(N). A chat has ~2-3
+concurrent live nodes (the streaming reply + an in-flight tool card), so it
+rides the flat 1.9 us curve forever.
+
+** Out-of-order update is correct
+Appending three nodes and updating the *middle* one (grow then shrink): the
+buffer stays correct, all three refs still resolve, and the round-trip is
+byte-identical. Nodes after the edited one move via their own markers.
+
+* The model
+
+Every stream item is a *node* bounding one buffer region. A node is either:
+
+- *live* - holds a marker, can be updated / removed / moved by ref;
+- *static* - finalized; no marker, just text, and therefore free for append.
+
+** The load-bearing invariant
+
+#+begin_quote
+Append cost is O(live markers in the buffer). Keep the live set bounded by
+*concurrency*, not by length.
+#+end_quote
+
+=finalize= is what enforces it: a message demotes to static when its turn
+ends, dropping its marker and keeping append flat forever.
+
+* Proposed API
+
+#+begin_src elisp
+(vui-stream-append    handle vnode)        ; static, O(1), fire-and-forget (logs, done msgs)
+(vui-stream-open      handle vnode) -> node ; live: returns a ref you keep
+(vui-stream-append-to node vnode)          ; append content to a live node (O(delta)) - streaming
+(vui-stream-update    node vnode)          ; replace a live node's whole region
+(vui-stream-finalize  node)                ; live -> static, release the marker
+(vui-stream-remove    node)                ; delete the region (ephemeral notifications)
+(vui-stream-before    node vnode) -> node  ; insert a live node before NODE
+(vui-stream-after     node vnode) -> node  ; insert a live node after NODE
+(vui-stream-update-last handle vnode)      ; sugar: replace/extend the last live node (back-compat)
+#+end_src
+
+Following pi.el, =append-to= and =update= are *separate verbs* rather than one
+auto-detecting call: =append-to= adds at the node's end (the streaming
+primitive, O(delta) - redisplay touches only the new tokens), while =update=
+re-renders the whole region (content node) or updates props (component node,
+state preserved). The shipped =update-last= prefix-extension fast-path becomes
+the natural behaviour of =append-to=.
+
+* Content vs. component nodes (honest scaling)
+
+- *Content nodes* finalize cleanly -> static text -> O(1) append at any length.
+  This is the unbounded-log case (a huge build log, a 100k-line transcript) -
+  the one pi.el itself does not cover, since it never drops a marker.
+- *Component nodes* (interactive rows: collapsible cards) are inline instances
+  that /must/ keep a region to stay interactive, so each costs one marker for
+  its life: append is O(interactive rows). Fine for a chat (tens-hundreds of
+  rows = tens of us); not for 100k live widgets - that is virtualization, a
+  separate problem. =finalize= on a component freezes it into static text if
+  you ever need to reclaim the marker. (Today's component-rows code already
+  has this latent O(rows)-per-append cost; the node model makes it explicit and
+  gives you the escape hatch.)
+
+* Implementation sketch
+
+- A =vui-stream-node= = a single marker + a back-pointer to the handle + the
+  current vnode/instance. Extent is =[its marker, next node's marker]= (steal
+  ewoc's one-marker scheme + =ewoc--adjust= for the empty case).
+- Adopt pi.el's *node-owned separator*: a node carries its trailing padding as
+  part of its own region, so no container ever has to drop an empty child's
+  separator - the empty -> non-empty forced full re-render in today's stream
+  goes away.
+- =open= inserts and records a live node; =finalize= nulls the marker and drops
+  the node from the live list (the text stays).
+- =update= dispatches: content -> the existing delta-append / full-render
+  logic, scoped to the node's region instead of =[last-start, region-end]=;
+  component -> =vui-update= the instance.
+- The stream keeps its own end marker; =region-end= / =last-start= bookkeeping
+  generalizes to "each live node tracks its own region."
+- =update-last= reimplemented as sugar over the most-recent live node.
+- A small doubly-linked list of live nodes (ewoc-style) gives O(1)
+  =before/after= insertion and =locate=; pure-append never touches it.
+
+* Compatibility
+
+Additive. =vui-stream-append= and =vui-stream-update-last= keep working
+(update-last becomes sugar). New entry points (=open=, =update=, =finalize=,
+=remove=, =before=, =after=) are opt-in. The existing test suite is the
+regression guard; new differential tests cover out-of-order update/insert vs a
+wholesale render.
+
+* Open questions
+
+1. Default of bare =append= for a /component/ vnode: static snapshot vs.
+   auto-=open=. Lean: components auto-open (interactivity is the point).
+2. =finalize= explicit (caller releases) vs. inferred (auto-finalize a content
+   node when a newer node is appended after it, mimicking update-last's "only
+   last is live"). Explicit is safer; inferred is more ergonomic. Probably
+   offer both - explicit =finalize=, plus an =append= that auto-finalizes the
+   previous live content node.
+3. Whether =locate= / click-to-node mapping is needed for the first cut (it is
+   not for streaming chat; defer).
+4. *Flat list vs. pi.el's tree.* pi models sections as a tree - a response owns
+   its thinking / text / tool-result children - so "collapse the whole response"
+   and per-child addressing fall out for free. A flat list is simpler to ship
+   first and already covers the streaming-reply + tool-card cases. Likely: ship
+   flat, but give the node struct =parent= / =children= slots (unused at first)
+   so the tree is a later addition rather than a rewrite.
