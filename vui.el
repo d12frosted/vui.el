@@ -4116,16 +4116,18 @@ keeping its state."
      ;; Content: rewrite just that item's region.
      (t
       (let* ((old (car (vui-stream-handle-items-rev handle)))
-             (buf (vui-stream-handle-buffer handle))
-             (ls (vui-stream-handle-last-start handle))
-             (end (vui-stream-handle-region-end handle))
-             ;; Fast path: the new text simply EXTENDS the old one (a
-             ;; message streaming in token by token).  Append only the new
-             ;; suffix instead of deleting and re-rendering the whole item.
-             ;; The win is redisplay - only the freshly inserted text is
-             ;; marked dirty and redrawn, instead of the entire (growing)
-             ;; message getting torn down and redrawn on every token, which
-             ;; is what makes a long streaming reply feel laggy.
+             ;; If the last item is a live NODE, route through the node API so
+             ;; its own markers stay valid - update-last is sugar for "update
+             ;; the most-recent live node".
+             (node (cl-find (vui-stream-handle-items-rev handle)
+                            (vui-stream-handle-nodes handle)
+                            :key #'vui--stream-node-cell))
+             ;; Fast path: the new text simply EXTENDS the old one (a message
+             ;; streaming in token by token).  Append only the new suffix
+             ;; instead of re-rendering the whole item.  The win is redisplay -
+             ;; only the freshly inserted text is marked dirty and redrawn,
+             ;; instead of the entire (growing) message getting torn down on
+             ;; every token, which is what makes a long reply feel laggy.
              (suffix (and (vui-vnode-text-p old) (vui-vnode-text-p vnode)
                           (equal (vui-vnode-text-face old) (vui-vnode-text-face vnode))
                           (equal (vui-vnode-text-properties old)
@@ -4135,27 +4137,42 @@ keeping its state."
                             (and (> (length n) (length o))
                                  (string-prefix-p o n)
                                  (substring n (length o)))))))
-        (setcar (vui-stream-handle-items-rev handle) vnode)
-        (when (and buf (buffer-live-p buf)
-                   ls (marker-position ls) end (marker-position end))
-          (with-current-buffer buf
-            (let ((inhibit-read-only t)
-                  (inhibit-modification-hooks t)
-                  (buffer-undo-list t))
-              (save-excursion
-                (if suffix
-                    (progn
-                      (goto-char (marker-position end))
-                      (vui--render-vnode
-                       (vui-vnode-text--create
-                        :content suffix
-                        :face (vui-vnode-text-face vnode)
-                        :properties (vui-vnode-text-properties vnode)))
-                      (set-marker end (point)))
-                  (delete-region (marker-position ls) (marker-position end))
-                  (goto-char (marker-position ls))
-                  (vui--render-vnode vnode)
-                  (set-marker end (point)))))))))))
+        (if (and node (vui--stream-node-start node)
+                 (marker-position (vui--stream-node-start node)))
+            ;; Live node: extend -> append-to (O(delta)); else replace.  Both
+            ;; keep the node's start/end markers correct.
+            (if suffix
+                (vui-stream-append-to
+                 node (vui-vnode-text--create
+                       :content suffix
+                       :face (vui-vnode-text-face vnode)
+                       :properties (vui-vnode-text-properties vnode)))
+              (vui-stream-update node vnode))
+          ;; Legacy path: rewrite [last-start, region-end] directly.
+          (let ((buf (vui-stream-handle-buffer handle))
+                (ls (vui-stream-handle-last-start handle))
+                (end (vui-stream-handle-region-end handle)))
+            (setcar (vui-stream-handle-items-rev handle) vnode)
+            (when (and buf (buffer-live-p buf)
+                       ls (marker-position ls) end (marker-position end))
+              (with-current-buffer buf
+                (let ((inhibit-read-only t)
+                      (inhibit-modification-hooks t)
+                      (buffer-undo-list t))
+                  (save-excursion
+                    (if suffix
+                        (progn
+                          (goto-char (marker-position end))
+                          (vui--render-vnode
+                           (vui-vnode-text--create
+                            :content suffix
+                            :face (vui-vnode-text-face vnode)
+                            :properties (vui-vnode-text-properties vnode)))
+                          (set-marker end (point)))
+                      (delete-region (marker-position ls) (marker-position end))
+                      (goto-char (marker-position ls))
+                      (vui--render-vnode vnode)
+                      (set-marker end (point)))))))))))))
   handle)
 
 ;; --- Random-access nodes: address a region by ref, not just "the last" ---
@@ -4248,7 +4265,10 @@ bounded by concurrency (finalize a message when its turn ends) and append
 stays O(1) - see docs/design/vui-stream-nodes.org.  Like a component row,
 a node wants the stream live and non-empty first; opening the only item of
 an empty stream pays the one full re-render the empty -> non-empty
-transition always costs.
+transition always costs.  Open that first item from a command or async
+callback, not from inside another component's render, so the one-time
+re-render runs synchronously and binds the node (otherwise it is deferred
+and the returned node stays unbound until the next render).
 
 VNODE must be a content vnode (text/fragment); component rows still go
 through `vui-stream-append'."
@@ -4344,7 +4364,11 @@ screen.  A no-op returning nil if NODE is not live."
          (cell (vui--stream-node-cell node))
          (buf (vui-stream-handle-buffer handle))
          (sep (vui-stream-handle-separator handle))
-         (start (vui--stream-node-start node)))
+         (start (vui--stream-node-start node))
+         ;; NODE is the last item when its cell heads items-rev.  Inserting
+         ;; above it moves its start, so the handle's last-start (used by
+         ;; `vui-stream-update-last') must follow to the re-seated start.
+         (last-p (eq cell (vui-stream-handle-items-rev handle))))
     (when (and buf (buffer-live-p buf) start (marker-position start))
       (let ((new (vui--stream-node-create :handle handle)))
         ;; items-rev is reverse render order, so an item ABOVE NODE is OLDER
@@ -4363,6 +4387,8 @@ screen.  A no-op returning nil if NODE is not live."
                   (insert sep)
                   ;; NODE's content now begins after the inserted separator.
                   (set-marker start (point))
+                  (when last-p
+                    (vui--stream-set-last-start handle (point) buf))
                   (vui--stream-node-bind new x-start x-end buf))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
@@ -4401,7 +4427,11 @@ if NODE is not live."
                 (vui--render-vnode vnode)
                 (let ((x-end (point)))
                   (vui--stream-node-bind new x-start x-end buf)
-                  (vui--stream-sync-end handle x-end))))))
+                  (vui--stream-sync-end handle x-end)
+                  ;; If NODE was the last item, the new node is now last:
+                  ;; last-start (used by `vui-stream-update-last') follows it.
+                  (when (eq cell head)
+                    (vui--stream-set-last-start handle x-start buf)))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
 
@@ -4440,6 +4470,20 @@ if NODE is not live."
             (setq prev (cdr prev)))
           (when (cdr prev) (setcdr prev (cdr cell)))))
       (vui-stream-finalize node)
+      ;; If NODE was the last item, the handle's last-start now dangles in the
+      ;; deleted span - re-point it at the new last item so a later content
+      ;; `vui-stream-update-last' rewrites the right region.  When that item is
+      ;; static (no live marker), clear last-start so update-last safely
+      ;; no-ops until the next append rather than corrupting it.
+      (when (eq cell head)
+        (let* ((next (cdr cell))
+               (n (and next (cl-find next (vui-stream-handle-nodes handle)
+                                     :key #'vui--stream-node-cell)))
+               (ns (and n (vui--stream-node-start n))))
+          (if (and ns (marker-position ns))
+              (vui--stream-set-last-start handle (marker-position ns) buf)
+            (when-let* ((ls (vui-stream-handle-last-start handle)))
+              (set-marker ls nil)))))
       ;; Emptying the stream changes the surrounding layout (the container
       ;; drops the now-empty child and its separator), the mirror of the
       ;; empty -> non-empty transition - re-lay once so the buffer matches a

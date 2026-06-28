@@ -156,26 +156,75 @@
                     :to-equal (vui-snode--oracle '("header" "frozen") "n0")))
         (vui-snode--kill)))))
 
-(describe "vui-stream nodes: model stays in sync for re-emit"
-  (it "a forced wholesale re-render reproduces the streamed content"
+(describe "vui-stream nodes: last-start stays valid for update-last"
+  ;; A boundary node op (after/before/remove on the LAST item) must keep the
+  ;; handle's last-start marker pointing at the real last item, or a later
+  ;; non-extending `vui-stream-update-last' (content path) deletes the wrong
+  ;; region.  The fast extend-path uses region-end and hid this.
+  (it "after on the last node, then update-last, rewrites the right item"
     (let ((vui-render-delay nil)
           (s (vui-make-stream)))
-      (let ((inst (vui-snode--mount s "n0")))
-        (unwind-protect
-            (let (node)
-              (vui-stream-append s (vui-text "header"))
-              (setq node (vui-stream-open s (vui-text "re")))
-              (vui-stream-append-to node (vui-text "ply"))
-              (vui-stream-append-to node (vui-text "-done"))
-              (vui-stream-finalize node)
-              ;; Force the wholesale path (no incremental box-update patch):
-              ;; it re-emits items-rev, which must carry the accumulated text.
-              (let ((vui-incremental-render nil))
-                (vui-rerender inst))
-              (expect (vui-snode--buffer)
-                      :to-equal
-                      (vui-snode--oracle '("header" "reply-done") "n0")))
-          (vui-snode--kill))))))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "A")))
+            (vui-stream-after a (vui-text "X"))          ; header A X (X last)
+            (vui-stream-update-last s (vui-text "Z"))    ; replace X, not A
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "Z") "n0")))
+        (vui-snode--kill))))
+
+  (it "before on the last node, then update-last, rewrites the right item"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (l)
+            (vui-stream-append s (vui-text "header"))
+            (setq l (vui-stream-open s (vui-text "L")))
+            (vui-stream-before l (vui-text "X"))         ; header X L (L last)
+            (vui-stream-update-last s (vui-text "Q"))    ; replace L, not X
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "X" "Q") "n0")))
+        (vui-snode--kill))))
+
+  (it "remove of the last node, then update-last, rewrites the new last item"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (b)
+            (vui-stream-append s (vui-text "header"))
+            (vui-stream-open s (vui-text "A"))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (vui-stream-remove b)                        ; header A (A last)
+            (vui-stream-update-last s (vui-text "Q"))    ; replace A
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "Q") "n0")))
+        (vui-snode--kill)))))
+
+(describe "vui-stream nodes: model stays in sync for re-emit"
+  ;; The stream-tail patch is always on, so an in-place re-render leaves the
+  ;; live region untouched and would exercise nothing.  Re-mounting the handle
+  ;; into a fresh buffer renders the stream from scratch (`vui--stream-render'
+  ;; over items-rev), genuinely checking the model.
+  (it "re-mounting re-emits the accumulated streamed content"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (node)
+            (vui-stream-append s (vui-text "header"))
+            (setq node (vui-stream-open s (vui-text "re")))
+            (vui-stream-append-to node (vui-text "ply"))
+            (vui-stream-append-to node (vui-text "-done"))
+            (vui-stream-finalize node)
+            (vui-snode--kill)
+            (vui-snode--mount s "n0")
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "reply-done") "n0")))
+        (vui-snode--kill)))))
 
 (describe "vui-stream nodes: out-of-order insert"
   (it "before inserts a live node above another, byte-identical"
@@ -300,19 +349,20 @@
   (it "re-emits insert/remove results in the right order"
     (let ((vui-render-delay nil)
           (s (vui-make-stream)))
-      (let ((inst (vui-snode--mount s "n0")))
-        (unwind-protect
-            (let (a b)
-              (vui-stream-append s (vui-text "header"))
-              (setq a (vui-stream-open s (vui-text "A")))
-              (setq b (vui-stream-open s (vui-text "B")))
-              (vui-stream-after a (vui-text "X"))   ; header A X B
-              (vui-stream-remove b)                 ; header A X
-              (let ((vui-incremental-render nil))
-                (vui-rerender inst))
-              (expect (vui-snode--buffer)
-                      :to-equal (vui-snode--oracle '("header" "A" "X") "n0")))
-          (vui-snode--kill))))))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a b)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "A")))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (vui-stream-after a (vui-text "X"))   ; header A X B
+            (vui-stream-remove b)                 ; header A X
+            ;; re-mount the handle -> render the model from scratch
+            (vui-snode--kill)
+            (vui-snode--mount s "n0")
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "X") "n0")))
+        (vui-snode--kill)))))
 
 (provide 'vui-stream-node-test)
 ;;; vui-stream-node-test.el ends here
