@@ -10,5 +10,11 @@
 ;; Main package is vui.el
 (setf eldev-project-main-file "vui.el")
 
+;; Examples live in docs/examples; put that directory on `load-path' so
+;; the benchmark and test suites can (require ...) the agent-chat example
+;; under every eldev command (compile, test, emacs).  The examples
+;; themselves are not compilation targets.
+(add-to-list 'load-path (expand-file-name "docs/examples"))
+
 ;; Lint using package-lint only (skip elisp-lint style checks)
 (setf eldev-lint-default '(package))

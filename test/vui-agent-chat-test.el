@@ -26,12 +26,8 @@
 (require 'vui)
 (require 'cl-lib)
 
-;; The example app lives under docs/examples; put it on the load path by
-;; finding the project root (the directory holding vui.el) from here.
-(let* ((here (or load-file-name buffer-file-name default-directory))
-       (root (locate-dominating-file here "vui.el")))
-  (when root
-    (add-to-list 'load-path (expand-file-name "docs/examples" root))))
+;; The example app lives under docs/examples, which the Eldev file puts
+;; on `load-path' for every eldev command.
 (require '13-agent-chat)
 
 (defun vui-agent--kill (buf)

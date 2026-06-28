@@ -46,12 +46,8 @@
 (require 'cl-lib)
 
 ;; The agent-chat seam example (a transcript growing above a persistent
-;; box) lives under docs/examples; load it for the streaming-seam
-;; benchmarks (`vui-bench-agent-*').  Find the project root from here.
-(let* ((here (or load-file-name buffer-file-name default-directory))
-       (root (locate-dominating-file here "vui.el")))
-  (when root
-    (add-to-list 'load-path (expand-file-name "docs/examples" root))))
+;; box) drives the streaming-seam benchmarks (`vui-bench-agent-*' and the
+;; `vui-stream' ones).  The Eldev file puts docs/examples on `load-path'.
 (require '13-agent-chat)
 
 ;;; Harness
