@@ -41,6 +41,22 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   appended to an empty stream falls back to a plain child render), and
   relies on the always-on stream-tail patch to survive box updates; rows
   unmount with the buffer (#82).
+- Random-access =vui-stream= nodes. =vui-stream-update-last= can only touch
+  the most recent item; =vui-stream-open= instead appends an item and
+  returns a stable ref (a =vui-stream-node=) you keep, so you can edit it
+  later no matter how many items land below it - the streaming-agent case
+  update-last could not cover (a tool card appears while the reply is still
+  streaming, a follow-up arrives mid-thinking). =vui-stream-append-to= grows
+  a node in O(delta) (only the new tokens are inserted and redrawn),
+  =vui-stream-update= rewrites its whole region, and =vui-stream-finalize=
+  freezes it to static text. Out-of-order edits stay byte-identical to a
+  wholesale render, and the model is kept in sync so a full re-render
+  re-emits the streamed content. The load-bearing piece is =finalize=: a
+  live node costs one region's markers and Emacs walks every marker on each
+  insert, so keeping the live set bounded by concurrency (finalize a message
+  when its turn ends) keeps append flat for an unbounded transcript -
+  measured ~1.9us from N=2000 to N=80000, vs O(N) (146us at N=80000) if
+  nothing is ever finalized. See docs/design/vui-stream-nodes.org (#82).
 - A re-render driven by a sibling's state change (the "box" below a stream
   - status, queue, an input field) no longer re-emits the whole transcript.
   When the root is a flat container whose first child is a live stream, the

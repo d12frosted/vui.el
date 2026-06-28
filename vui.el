@@ -3924,6 +3924,7 @@ bound when the stream is first rendered, and are nil until then."
   region-end
   last-start        ; Marker at the start of the last item (for update-last)
   (items-rev nil)
+  (nodes nil)       ; Live `vui-stream-node's (open, not finalized); bounds append cost
   (separator "\n"))
 
 (defun vui-make-stream (&optional separator)
@@ -4156,6 +4157,182 @@ keeping its state."
                   (vui--render-vnode vnode)
                   (set-marker end (point)))))))))))
   handle)
+
+;; --- Random-access nodes: address a region by ref, not just "the last" ---
+;;
+;; `vui-stream-update-last' can only touch the most recently appended item.
+;; A NODE is a stable ref to ONE region that survives later appends: open
+;; it, keep the ref, and grow / rewrite / freeze it wherever it has drifted
+;; to.  This is the streaming-agent primitive - an in-flight reply while
+;; tool cards and follow-up messages land below it.  See the design note,
+;; docs/design/vui-stream-nodes.org.
+;;
+;; The load-bearing invariant: a live node costs the buffer one region's
+;; markers, and Emacs walks the whole marker list on each insert, so append
+;; is O(live nodes).  `vui-stream-finalize' drops a node's markers (demoting
+;; it to static text), keeping the live set bounded by CONCURRENCY rather
+;; than stream length - which is what keeps append O(1) no matter how long
+;; the transcript grows (measured in the design note).
+
+(cl-defstruct (vui-stream-node (:constructor vui--stream-node-create)
+                               (:conc-name vui--stream-node-)
+                               (:copier nil))
+  "A live, addressable region inside a `vui-stream'.
+Returned by `vui-stream-open'; pass it to `vui-stream-append-to',
+`vui-stream-update', and `vui-stream-finalize'.
+
+HANDLE is the owning stream.  CELL is the cons in HANDLE's ITEMS-REV whose
+car is this node's current vnode - kept in sync so a wholesale re-render
+re-emits the streamed content.  START and END are markers bounding the
+region; both are nil once the node is finalized.  PARENT and CHILDREN are
+reserved for a future section tree (see the design note) and unused today."
+  handle cell start end parent children)
+
+(defun vui--stream-vnode-combine (a b)
+  "Combine vnodes A and B into the one vnode their renders concatenate to.
+Used by `vui-stream-append-to' to keep the model in sync with the buffer:
+two text vnodes with the same face and properties merge into one (the
+common streaming case); anything else is grouped in a `vui-fragment',
+which renders its children back to back with no separator."
+  (cond
+   ((and (vui-vnode-text-p a) (vui-vnode-text-p b)
+         (equal (vui-vnode-text-face a) (vui-vnode-text-face b))
+         (equal (vui-vnode-text-properties a) (vui-vnode-text-properties b)))
+    (vui-vnode-text--create
+     :content (concat (vui-vnode-text-content a) (vui-vnode-text-content b))
+     :face (vui-vnode-text-face a)
+     :properties (vui-vnode-text-properties a)))
+   ((vui-vnode-fragment-p a)
+    (vui-vnode-fragment--create
+     :children (append (vui-vnode-fragment-children a) (list b))))
+   (t
+    (vui-vnode-fragment--create :children (list a b)))))
+
+(defun vui--stream-node-bind (node start end buffer)
+  "Bind NODE's markers to BUFFER region [START, END).
+Both markers take insertion type nil so that text inserted at END (a later
+item, or a sibling growing) lands AFTER the node rather than being pulled
+into it - the node's own edits reposition END explicitly."
+  (let ((s (or (vui--stream-node-start node) (make-marker)))
+        (e (or (vui--stream-node-end node) (make-marker))))
+    (set-marker s start buffer)
+    (set-marker e end buffer)
+    (set-marker-insertion-type s nil)
+    (set-marker-insertion-type e nil)
+    (setf (vui--stream-node-start node) s
+          (vui--stream-node-end node) e)))
+
+(defun vui--stream-sync-end (handle pos)
+  "Advance HANDLE's region-end to POS after an edit grew the LAST node.
+An insert AT a type-nil marker does not move it, so editing the node that
+sits at the stream's end leaves region-end pointing inside the node; bring
+it back to the true end so the next plain append lands after everything.
+A no-op when the edited node is not the last (region-end sits past POS and
+has already shifted on its own)."
+  (let ((end (vui-stream-handle-region-end handle)))
+    (when (and end (marker-position end) (>= pos (marker-position end)))
+      (set-marker end pos))))
+
+(defun vui-stream-open (handle vnode)
+  "Append VNODE to HANDLE as a LIVE node and return that node.
+Unlike `vui-stream-append' (static text you can never touch again), the
+returned node is a stable ref: `vui-stream-append-to' grows it,
+`vui-stream-update' rewrites it, and `vui-stream-finalize' freezes it -
+each regardless of how many items are appended below it afterwards.  This
+is the streaming-agent primitive: open a node for the in-flight reply,
+keep the ref, and append token deltas to it even as tool cards and later
+messages land underneath.
+
+A live node holds one region's markers until finalized; keep the live set
+bounded by concurrency (finalize a message when its turn ends) and append
+stays O(1) - see docs/design/vui-stream-nodes.org.  Like a component row,
+a node wants the stream live and non-empty first; opening the only item of
+an empty stream pays the one full re-render the empty -> non-empty
+transition always costs.
+
+VNODE must be a content vnode (text/fragment); component rows still go
+through `vui-stream-append'."
+  (vui--stream-append-content handle vnode)
+  (let ((buf (vui-stream-handle-buffer handle))
+        (ls (vui-stream-handle-last-start handle))
+        (end (vui-stream-handle-region-end handle))
+        (node (vui--stream-node-create
+               :handle handle
+               :cell (vui-stream-handle-items-rev handle))))
+    (when (and buf (buffer-live-p buf)
+               ls (marker-position ls) end (marker-position end))
+      (vui--stream-node-bind node (marker-position ls) (marker-position end) buf))
+    (push node (vui-stream-handle-nodes handle))
+    node))
+
+(defun vui-stream-append-to (node vnode)
+  "Append VNODE's content at the end of live NODE's region; return NODE.
+The streaming primitive: each delta costs O(delta) - only the new text is
+inserted, and only it is marked dirty for redisplay - no matter how long
+the node has grown or how many items sit below it.  VNODE is typically a
+text vnode carrying the freshly arrived tokens.  A no-op once NODE has been
+finalized."
+  (let* ((handle (vui--stream-node-handle node))
+         (cell (vui--stream-node-cell node))
+         (buf (vui-stream-handle-buffer handle))
+         (end (vui--stream-node-end node)))
+    ;; Keep the model in sync so a wholesale re-render re-emits the whole
+    ;; accumulated node, not just the latest delta.
+    (when cell
+      (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
+    (when (and buf (buffer-live-p buf) end (marker-position end))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              (buffer-undo-list t))
+          (save-excursion
+            (goto-char (marker-position end))
+            (vui--render-vnode vnode)
+            (set-marker end (point))
+            (vui--stream-sync-end handle (point))))))
+    node))
+
+(defun vui-stream-update (node vnode)
+  "Replace live NODE's whole region with VNODE; return NODE.
+Use when the content changes wholesale (a tool card going from \"running\"
+to its result), as opposed to `vui-stream-append-to' which grows it.  Cost
+is O(VNODE), independent of the items around it.  A no-op once NODE has
+been finalized."
+  (let* ((handle (vui--stream-node-handle node))
+         (cell (vui--stream-node-cell node))
+         (buf (vui-stream-handle-buffer handle))
+         (start (vui--stream-node-start node))
+         (end (vui--stream-node-end node)))
+    (when cell (setcar cell vnode))
+    (when (and buf (buffer-live-p buf)
+               start (marker-position start) end (marker-position end))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              (buffer-undo-list t))
+          (save-excursion
+            (delete-region (marker-position start) (marker-position end))
+            (goto-char (marker-position start))
+            (vui--render-vnode vnode)
+            (set-marker end (point))
+            (vui--stream-sync-end handle (point))))))
+    node))
+
+(defun vui-stream-finalize (node)
+  "Finalize NODE: drop its markers, demoting it to static text; return NODE.
+The text stays exactly as rendered, but the node can no longer be updated -
+and the buffer no longer carries a marker for it, so appends elsewhere stop
+paying for it.  This is what enforces the load-bearing invariant: the live
+set stays bounded by concurrency, not stream length.  Call it when a
+message's turn ends.  Idempotent."
+  (let ((handle (vui--stream-node-handle node)))
+    (when-let* ((s (vui--stream-node-start node))) (set-marker s nil))
+    (when-let* ((e (vui--stream-node-end node))) (set-marker e nil))
+    (setf (vui--stream-node-start node) nil
+          (vui--stream-node-end node) nil
+          (vui-stream-handle-nodes handle)
+          (delq node (vui-stream-handle-nodes handle))))
+  node)
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
 ;;
