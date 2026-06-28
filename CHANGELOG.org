@@ -140,8 +140,9 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   messages typed out token by token, collapsible tool-call rows).
   =docs/examples/14-claude-chat.el= is a real, working chat against the
   =claude -p= CLI: it parses Claude Code's streaming JSON into a live
-  =vui-stream= transcript - the reply grows token by token
-  (=vui-stream-update-last=), reasoning and per-turn details render as
+  =vui-stream= transcript - the reply is a live node grown token by token
+  (=vui-stream-open= + =vui-stream-append-to=, finalized with
+  =vui-stream-finalize=), reasoning and per-turn details render as
   collapsible component rows (=vui-stream-append= of a component), the input
   box stays editable throughout, and =--resume= keeps conversation context
   across turns. Requires the =claude= CLI on PATH.
