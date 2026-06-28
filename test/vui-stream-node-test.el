@@ -177,5 +177,142 @@
                       (vui-snode--oracle '("header" "reply-done") "n0")))
           (vui-snode--kill))))))
 
+(describe "vui-stream nodes: out-of-order insert"
+  (it "before inserts a live node above another, byte-identical"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (b x)
+            (vui-stream-append s (vui-text "header"))
+            (vui-stream-open s (vui-text "A"))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (setq x (vui-stream-before b (vui-text "X")))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "X" "B") "n0"))
+            ;; the inserted node is live - it can keep streaming
+            (vui-stream-append-to x (vui-text "-grown"))
+            (expect (vui-snode--buffer)
+                    :to-equal
+                    (vui-snode--oracle '("header" "A" "X-grown" "B") "n0")))
+        (vui-snode--kill))))
+
+  (it "before the only node (opened on an empty stream) puts it on top"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (setq a (vui-stream-open s (vui-text "A")))   ; first item, via re-render
+            (vui-stream-before a (vui-text "X"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("X" "A") "n0")))
+        (vui-snode--kill))))
+
+  (it "after inserts a live node below another, byte-identical"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "A")))
+            (vui-stream-open s (vui-text "B"))
+            (vui-stream-after a (vui-text "X"))   ; between A and B
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "X" "B") "n0")))
+        (vui-snode--kill))))
+
+  (it "after the last node keeps region-end at the true end"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "A")))
+            (vui-stream-after a (vui-text "X"))   ; X is now the last item
+            ;; a plain append must land after X, not inside the stream
+            (vui-stream-append s (vui-text "tail"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "X" "tail") "n0")))
+        (vui-snode--kill)))))
+
+(describe "vui-stream nodes: remove"
+  (it "removes a middle item, byte-identical"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (b)
+            (vui-stream-append s (vui-text "header"))
+            (vui-stream-open s (vui-text "A"))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (vui-stream-open s (vui-text "C"))
+            (vui-stream-remove b)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "C") "n0")))
+        (vui-snode--kill))))
+
+  (it "removes the last item and a later append lands correctly"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (b)
+            (vui-stream-append s (vui-text "header"))
+            (vui-stream-open s (vui-text "A"))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (vui-stream-remove b)
+            (vui-stream-append s (vui-text "tail"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "A" "tail") "n0")))
+        (vui-snode--kill))))
+
+  (it "removes the first item, byte-identical"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (setq a (vui-stream-open s (vui-text "A")))   ; first item
+            (vui-stream-open s (vui-text "B"))
+            (vui-stream-remove a)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("B") "n0")))
+        (vui-snode--kill))))
+
+  (it "removes down to empty, then re-grows"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (setq a (vui-stream-open s (vui-text "only")))
+            (vui-stream-remove a)
+            (expect (vui-snode--buffer) :to-equal (vui-snode--oracle '() "n0"))
+            (vui-stream-append s (vui-text "again"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("again") "n0")))
+        (vui-snode--kill)))))
+
+(describe "vui-stream nodes: out-of-order edits survive a wholesale re-render"
+  (it "re-emits insert/remove results in the right order"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-snode--mount s "n0")))
+        (unwind-protect
+            (let (a b)
+              (vui-stream-append s (vui-text "header"))
+              (setq a (vui-stream-open s (vui-text "A")))
+              (setq b (vui-stream-open s (vui-text "B")))
+              (vui-stream-after a (vui-text "X"))   ; header A X B
+              (vui-stream-remove b)                 ; header A X
+              (let ((vui-incremental-render nil))
+                (vui-rerender inst))
+              (expect (vui-snode--buffer)
+                      :to-equal (vui-snode--oracle '("header" "A" "X") "n0")))
+          (vui-snode--kill))))))
+
 (provide 'vui-stream-node-test)
 ;;; vui-stream-node-test.el ends here

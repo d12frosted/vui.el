@@ -56,7 +56,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   insert, so keeping the live set bounded by concurrency (finalize a message
   when its turn ends) keeps append flat for an unbounded transcript -
   measured ~1.9us from N=2000 to N=80000, vs O(N) (146us at N=80000) if
-  nothing is ever finalized. See docs/design/vui-stream-nodes.org (#82).
+  nothing is ever finalized. =vui-stream-before= / =vui-stream-after= insert
+  a new live node directly above / below an existing one (out-of-order: a
+  card that belongs above an item already on screen), and =vui-stream-remove=
+  deletes one - separators stay single, and emptying the stream re-lays like
+  the empty -> non-empty transition. See docs/design/vui-stream-nodes.org
+  (#82).
 - A re-render driven by a sibling's state change (the "box" below a stream
   - status, queue, an input field) no longer re-emits the whole transcript.
   When the root is a flat container whose first child is a live stream, the
