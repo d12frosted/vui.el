@@ -29,6 +29,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   vs ~21ms and rising for the declarative rebuild (~950x at N=4000, the gap
   widening with size). Items are content vnodes (text/fragment, drawn
   however you like per item) for now (#82).
+- A =vui-stream= item may be a =vui-component=, mounted as a stateful ROW:
+  it gets its own region and re-renders only that region when its state
+  changes - a collapsible tool card, a copy button - independent of how
+  many items are above it (~0.15ms whether 200 or 4000 items precede it).
+  =vui-stream-append= mounts a component vnode inline at the tail (its
+  region-end is shared as the stream's, so the row growing on its own
+  re-render keeps the box below correct); =vui-stream-update-last= on a row
+  updates its props in place, preserving the row's state. Content and rows
+  interleave. A row needs the stream live and non-empty first (a component
+  appended to an empty stream falls back to a plain child render), and
+  relies on the always-on stream-tail patch to survive box updates; rows
+  unmount with the buffer (#82).
 - A re-render driven by a sibling's state change (the "box" below a stream
   - status, queue, an input field) no longer re-emits the whole transcript.
   When the root is a flat container whose first child is a live stream, the
