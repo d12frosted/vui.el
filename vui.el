@@ -662,6 +662,14 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   on-error          ; Optional (lambda (error)) callback when error caught
   id)               ; Unique identifier for this boundary (for state tracking)
 
+;; Stream vnode - anchors an append-only region (see "Streaming" below)
+(cl-defstruct (vui-vnode-stream (:include vui-vnode)
+                                (:constructor vui-vnode-stream--create))
+  "Virtual node that anchors a `vui-stream' handle's managed region.
+The handle owns the region's markers and item list; rendering this
+vnode (re-)emits the items and binds the region around them."
+  handle)           ; The vui-stream-handle this node anchors
+
 ;; Error boundary state lives on the root instance of a mounted tree
 ;; (see `vui-instance-boundary-errors').  This buffer-local table is
 ;; the fallback for static `vui-render' trees, which have no instance.
@@ -3870,6 +3878,173 @@ function of the root `vui--render-instance' call."
       (setf (vui-instance-render-record instance)
             (list :kind 'wholesale :vnode vtree))))))
 
+;;; Streaming - imperative append-only regions (issue #82)
+;;
+;; A `vui-stream' is an escape hatch from "re-render the whole tree from
+;; state" for the one shape where that is fundamentally too expensive: an
+;; append-only log that grows without bound (a chat transcript, a build
+;; log).  The declarative path rebuilds all N items on every append, so a
+;; stream of N is O(N^2); a stream owns its buffer region and appends ONE
+;; item in O(1), never touching the existing N.
+;;
+;; The handle (a `vui-stream-handle') holds the region markers and the
+;; item list.  Place it in the render tree with `(vui-stream handle)' so
+;; it gets a region and participates in layout; drive it imperatively
+;; with `(vui-stream-append handle vnode)'.  The item list is the source
+;; of truth: append writes one region in O(1) when the stream is live,
+;; and a full re-render (e.g. a sibling's state change) re-emits the list
+;; so the buffer stays identical to what a plain list would render.
+
+(cl-defstruct (vui-stream-handle (:constructor vui--stream-handle-create)
+                                 (:copier nil))
+  "State for a `vui-stream': its buffer region and items.
+ITEMS-REV holds the appended vnodes in REVERSE order, so append is O(1)
+\(a `push'); render reverses once.  BUFFER and the REGION-* markers are
+bound when the stream is first rendered, and are nil until then."
+  buffer
+  region-start
+  region-end
+  last-start        ; Marker at the start of the last item (for update-last)
+  (items-rev nil)
+  (separator "\n"))
+
+(defun vui-make-stream (&optional separator)
+  "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
+Prefer `vui-use-stream' inside a component; use this directly only when
+you manage the handle's lifetime yourself."
+  (vui--stream-handle-create :separator (or separator "\n")))
+
+(defun vui-use-stream (&optional separator)
+  "Return a stable `vui-stream-handle' for the current component.
+Like the other hooks, call it unconditionally in render; the same handle
+is returned across re-renders.  Place it with `(vui-stream HANDLE)' and
+append to it with `(vui-stream-append HANDLE VNODE)'.  SEPARATOR (the
+string between items, default a newline) is used only on first creation."
+  (let ((ref (vui--get-or-create-ref nil)))
+    (or (car ref)
+        (setcar ref (vui-make-stream separator)))))
+
+(defun vui-stream (handle &rest props)
+  "Create a stream vnode that anchors HANDLE's region in the render tree.
+PROPS may carry :key for reconciliation."
+  (vui-vnode-stream--create :handle handle :key (plist-get props :key)))
+
+(defun vui--stream-bind-region (handle buffer start end)
+  "Point HANDLE's markers at BUFFER region [START, END) after a render.
+START stays put (top boundary); END stays before text inserted at its
+position too, so the separator the parent container inserts right after
+the stream does not get pulled into the region - `vui-stream-append'
+repositions END explicitly instead."
+  (setf (vui-stream-handle-buffer handle) buffer)
+  (let ((s (or (vui-stream-handle-region-start handle) (make-marker)))
+        (e (or (vui-stream-handle-region-end handle) (make-marker))))
+    (set-marker s start buffer)
+    (set-marker e end buffer)
+    (set-marker-insertion-type s nil)
+    (set-marker-insertion-type e nil)
+    (setf (vui-stream-handle-region-start handle) s
+          (vui-stream-handle-region-end handle) e)))
+
+(defun vui--stream-set-last-start (handle pos buffer)
+  "Record POS in BUFFER as the start of HANDLE's last item."
+  (let ((m (or (vui-stream-handle-last-start handle) (make-marker))))
+    (set-marker m pos buffer)
+    (set-marker-insertion-type m nil)
+    (setf (vui-stream-handle-last-start handle) m)))
+
+(defun vui--stream-render (handle)
+  "Render HANDLE's items at point and bind its region around them.
+Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
+  (let ((sep (vui-stream-handle-separator handle))
+        (start (point))
+        (first t)
+        (last-start nil))
+    (dolist (item (reverse (vui-stream-handle-items-rev handle)))
+      (unless first (insert sep))
+      (setq first nil)
+      (setq last-start (point))
+      (vui--render-vnode item))
+    (vui--stream-bind-region handle (current-buffer) start (point))
+    (when last-start
+      (vui--stream-set-last-start handle last-start (current-buffer)))))
+
+(defun vui--stream-request-rerender (handle)
+  "Re-render the root of HANDLE's buffer so the layout reflects new items."
+  (let ((buf (vui-stream-handle-buffer handle)))
+    (when (and buf (buffer-live-p buf))
+      (when-let* ((root (vui-get-instance buf)))
+        (vui-rerender root)))))
+
+(defun vui-stream-append (handle vnode)
+  "Append VNODE to HANDLE's stream and return HANDLE.
+When the stream is live and already non-empty, this writes exactly one
+region in O(1) - it never re-renders or walks the existing items - and
+content below the region shifts down with it.
+
+The one exception is the empty -> non-empty transition: a container that
+lays the stream out (a `vui-vstack', say) drops an empty child and the
+separator that would follow it, so the first item changes the surrounding
+layout.  That first append therefore triggers a single full re-render;
+every subsequent append is O(1).  When the stream is not yet live the
+item is just recorded and emitted on the next render.
+
+VNODE must be a content vnode (text/fragment); component items are not
+supported yet."
+  (push vnode (vui-stream-handle-items-rev handle))
+  (let ((buf (vui-stream-handle-buffer handle))
+        (start (vui-stream-handle-region-start handle))
+        (end (vui-stream-handle-region-end handle)))
+    (cond
+     ;; Not live yet: emitted on the next render.
+     ((not (and buf (buffer-live-p buf) end (marker-position end)))
+      nil)
+     ;; Empty -> non-empty: the surrounding separators change, so re-lay
+     ;; the whole tree once.  (Only the very first item pays this.)
+     ((= (marker-position start) (marker-position end))
+      (vui--stream-request-rerender handle))
+     ;; Live and non-empty: O(1) imperative insert at the region end.
+     (t
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              ;; Stream text is ephemeral UI, not document history.
+              (buffer-undo-list t))
+          (save-excursion
+            (goto-char (marker-position end))
+            ;; There is already at least one item, so separate from it.
+            (insert (vui-stream-handle-separator handle))
+            (vui--stream-set-last-start handle (point) buf)
+            (vui--render-vnode vnode)
+            ;; END stays put on insert (so the parent's separator below is
+            ;; never captured); move it explicitly past what we inserted.
+            (set-marker end (point))))))))
+  handle)
+
+(defun vui-stream-update-last (handle vnode)
+  "Replace HANDLE's last item with VNODE, re-rendering only its region.
+This is the in-progress message in a streaming agent UI: as tokens
+arrive, update the last item with the message-so-far.  The cost depends
+on that one item's size, not on the number of items above it, so the
+transcript can be arbitrarily long.  A no-op when the stream is empty or
+not yet live.  VNODE must be a content vnode (text/fragment)."
+  (when (vui-stream-handle-items-rev handle)
+    (setcar (vui-stream-handle-items-rev handle) vnode)
+    (let ((buf (vui-stream-handle-buffer handle))
+          (ls (vui-stream-handle-last-start handle))
+          (end (vui-stream-handle-region-end handle)))
+      (when (and buf (buffer-live-p buf)
+                 ls (marker-position ls) end (marker-position end))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t))
+            (save-excursion
+              (delete-region (marker-position ls) (marker-position end))
+              (goto-char (marker-position ls))
+              (vui--render-vnode vnode)
+              (set-marker end (point))))))))
+  handle)
+
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
   (cond
@@ -4348,6 +4523,10 @@ function of the root `vui--render-instance' call."
             (vui--render-instance instance)
             (setf (vui-instance-r-len instance) (- (point) start)))
         (vui--render-instance instance))))
+
+   ;; Stream - (re-)emit the handle's items and bind its region
+   ((vui-vnode-stream-p vnode)
+    (vui--stream-render (vui-vnode-stream-handle vnode)))
 
    ;; Context provider - push context and render children
    ((vui-vnode-provider-p vnode)

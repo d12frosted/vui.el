@@ -45,6 +45,11 @@
 (require 'benchmark)
 (require 'cl-lib)
 
+;; The agent-chat seam example (a transcript growing above a persistent
+;; box) drives the streaming-seam benchmarks (`vui-bench-agent-*' and the
+;; `vui-stream' ones).  The Eldev file puts docs/examples on `load-path'.
+(require '13-agent-chat)
+
 ;;; Harness
 
 (defun vui-bench--ms (seconds)
@@ -422,6 +427,155 @@ thus O(n^2) to stream N (does not).  Reported wholesale vs incremental."
         (vui-unmount inst)
         (when (get-buffer buf) (kill-buffer buf))))))
 
+;;; Agent-chat streaming seam (issue #82, dir 5: vui-stream)
+;;
+;; The pi.el-shaped case WITH the hard part: a transcript that grows
+;; above a persistent declarative box (status + input field).  Two costs
+;; matter, both O(n) today and both targets for `vui-stream':
+;;
+;;   append-growth  (Path 1): cost of appending one message vs size S.
+;;     The stream owns its region and should append in O(1) -> FLAT
+;;     slope.  Today the transcript is a plain vstack rebuilt every
+;;     render -> rising slope (O(n) per append, O(n^2) to stream N).
+;;
+;;   box-update     (Path 2): cost of a box-only state change (status)
+;;     vs size S.  Once the stream node is opaque to reconcile this
+;;     should be O(box), independent of S -> FLAT.  Today a box change
+;;     re-renders the whole transcript too -> rising slope.
+;;
+;; These establish the "before" numbers.  When `vui-stream' lands, both
+;; slopes must flatten while the buffer stays byte-identical to the
+;; wholesale baseline (the oracle in test/vui-agent-chat-test.el).
+
+(defun vui-bench--agent-messages (n)
+  "Return N agent-chat messages cycling through the three roles."
+  (cl-loop for i from 1 to n
+           collect (list :id i
+                         :role (nth (mod i 3) '(user agent tool))
+                         :text (format "message %d content" i))))
+
+(defun vui-bench--agent-teardown (inst buf)
+  "Unmount INST and kill BUF, tolerating the field-widget unmount caveat."
+  (let ((inhibit-modification-hooks t))
+    (ignore-errors (vui-unmount inst)))
+  (when (get-buffer buf)
+    (let ((inhibit-modification-hooks t)) (kill-buffer buf))))
+
+(defun vui-bench-agent-append-growth ()
+  "Cost of appending ONE message as the agent-chat transcript grows.
+The chat box (status + input field) sits BELOW the transcript, so this
+measures the real seam, not a bare append-only log.  A flat slope means
+O(1) append (the `vui-stream' target); a rising slope means O(n) per
+append.  Reported wholesale vs incremental."
+  (vui-bench--header "Agent-chat append: +1 msg at transcript size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (dolist (flag '((nil . "wholesale") (t . "incremental")))
+      (let* ((vui-incremental-render (car flag))
+             (base (vui-bench--agent-messages s))
+             (plus (append base (list (list :id (1+ s) :role 'agent
+                                            :text "freshly streamed line"))))
+             (buf "*vui-bench-agent-sg*")
+             (inst (vui-mount (vui-component 'vui-agent-chat
+                               :messages base :queue 0 :status "idle")
+                              buf))
+             (tog nil))
+        (vui-update inst (list :messages base :queue 0 :status "idle"))
+        (vui-bench--result-row
+         (format "%d %s" s (cdr flag))
+         (vui-bench--measure
+          5 (lambda () (setq tog (not tog))
+              (vui-update inst (list :messages (if tog plus base)
+                                     :queue 0 :status "idle")))))
+        (vui-bench--agent-teardown inst buf)))))
+
+(defun vui-bench-agent-box-update ()
+  "Cost of a BOX-ONLY state change as the transcript grows.
+Toggles the box status while the transcript stays fixed at size S.  The
+box change costs O(box), but today it re-renders the whole transcript
+too, so the slope rises; with `vui-stream' the transcript is opaque to
+this re-render and the slope should go flat.  Wholesale vs incremental."
+  (vui-bench--header "Agent-chat box update: toggle status at transcript size S")
+  (dolist (s '(200 500 1000 2000 4000))
+    (dolist (flag '((nil . "wholesale") (t . "incremental")))
+      (let* ((vui-incremental-render (car flag))
+             (msgs (vui-bench--agent-messages s))
+             (buf "*vui-bench-agent-box*")
+             (inst (vui-mount (vui-component 'vui-agent-chat
+                               :messages msgs :queue 0 :status "idle")
+                              buf))
+             (tog nil))
+        (vui-update inst (list :messages msgs :queue 0 :status "idle"))
+        (vui-bench--result-row
+         (format "%d %s" s (cdr flag))
+         (vui-bench--measure
+          5 (lambda () (setq tog (not tog))
+              (vui-update inst (list :messages msgs :queue (if tog 1 0)
+                                     :status (if tog "busy" "idle"))))))
+        (vui-bench--agent-teardown inst buf)))))
+
+;; The imperative counterpart: a `vui-stream' above a box line.  Appends
+;; go through `vui-stream-append', which owns the region and writes one
+;; spot in O(1) - so this slope should be FLAT where the declarative
+;; agent-append-growth above rises.
+(vui-defcomponent vui-bench-stream-app (stream)
+  :render (vui-vstack (vui-stream stream)
+                      (vui-text "---- input box ----")))
+
+(defun vui-bench-stream-append-growth ()
+  "Cost of ONE `vui-stream-append' as the stream grows, box below.
+The pass/fail metric for vui-stream (#82): a FLAT slope means O(1)
+append, independent of stream size - contrast the rising slope of
+`vui-bench-agent-append-growth', which rebuilds the transcript."
+  (vui-bench--header "Stream append: +1 item at stream size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (let* ((handle (vui-make-stream))
+           (buf "*vui-bench-stream*")
+           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf)))
+      ;; pre-fill (the first item pays a one-time re-render, the rest O(1))
+      (dotimes (i s)
+        (vui-stream-append handle (vui-text (format "message %d content" i))))
+      (vui-bench--result-row
+       (format "%d stream" s)
+       (vui-bench--measure
+        8 (lambda () (vui-stream-append handle (vui-text "freshly streamed line")))))
+      (vui-bench--agent-teardown inst buf))))
+
+(defun vui-bench-stream-update-last-growth ()
+  "Cost of one `vui-stream-update-last' as the stream grows, box below.
+The per-token path of a streaming agent UI (the in-progress message grows
+word by word).  A FLAT slope means the update is independent of transcript
+size - only the last item's region is rewritten."
+  (vui-bench--header "Stream update-last: grow last item at stream size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (let* ((handle (vui-make-stream))
+           (buf "*vui-bench-stream-ul*")
+           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf))
+           (k 0))
+      (dotimes (i s)
+        (vui-stream-append handle (vui-text (format "message %d content" i))))
+      (vui-stream-append handle (vui-text "in progress"))
+      (vui-bench--result-row
+       (format "%d stream" s)
+       (vui-bench--measure
+        8 (lambda () (setq k (1+ k))
+            (vui-stream-update-last
+             handle (vui-text (format "growing message token %d here" k))))))
+      (vui-bench--agent-teardown inst buf))))
+
+(defun vui-bench-agent-run ()
+  "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
+  (interactive)
+  (let ((vui-render-delay nil)
+        (vui-timing-enabled nil)
+        (vui-debug-enabled nil))
+    (message "VUI streaming seam (Emacs %s)" emacs-version)
+    (vui-bench-agent-append-growth)
+    (vui-bench-agent-box-update)
+    (vui-bench-stream-append-growth)
+    (vui-bench-stream-update-last-growth)
+    (message "")
+    (message "done.")))
+
 ;;; Cross-version / cross-flag comparison
 ;;
 ;; Answers three questions with one matrix, on whatever build is loaded
@@ -656,6 +810,10 @@ machine-readable CMPDATA lines."
     (vui-bench-widgets)
     (vui-bench-component-bailout)
     (vui-bench-streaming-growth)
+    (vui-bench-agent-append-growth)
+    (vui-bench-agent-box-update)
+    (vui-bench-stream-append-growth)
+    (vui-bench-stream-update-last-growth)
     (message "")
     (message "done.")))
 
