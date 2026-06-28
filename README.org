@@ -18,17 +18,42 @@ Build reactive UIs in Emacs using familiar patterns from React and other modern 
 The API is stable and used in [[#built-with-vui][real-world projects]].
 #+end_quote
 
-The [[file:docs/examples/11-dashboard.el][CI Pipeline dashboard]] example — colored status, live progress bars, and reactive updates, all from declarative components:
+See it in action (click any demo to enlarge):
 
-[[file:docs/images/11-dashboard.gif]]
+#+begin_html
+<table>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/15-ci-dashboard.el"><strong>CI Dashboard</strong></a> <sub>(real, over <code>gh</code>)</sub><br/>
+      <sub>live GitHub Actions runs, drill into jobs and steps, stream logs</sub>
+      <br/><br/>
+      <a href="docs/images/15-ci-dashboard.gif"><img src="docs/images/15-ci-dashboard.gif" alt="CI dashboard demo" width="400"/></a>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/14-claude-chat.el"><strong>Claude Chat</strong></a><br/>
+      <sub>live chat against <code>claude -p</code>, streamed through <code>vui-stream</code></sub>
+      <br/><br/>
+      <a href="docs/images/14-claude-chat.gif"><img src="docs/images/14-claude-chat.gif" alt="Claude Chat demo" width="400"/></a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/11-dashboard.el"><strong>CI Pipeline Dashboard</strong></a> <sub>(simulated)</sub><br/>
+      <sub>colored status and live progress gauges</sub>
+      <br/><br/>
+      <a href="docs/images/11-dashboard.gif"><img src="docs/images/11-dashboard.gif" alt="CI pipeline dashboard demo" width="400"/></a>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/10-pomodoro.el"><strong>Pomodoro Timer</strong></a><br/>
+      <sub>a countdown driven by a timer effect</sub>
+      <br/><br/>
+      <a href="docs/images/10-pomodoro.png"><img src="docs/images/10-pomodoro.png" alt="Pomodoro timer" width="400"/></a>
+    </td>
+  </tr>
+</table>
+#+end_html
 
-The [[file:docs/examples/15-ci-dashboard.el][CI dashboard]] example — the same idea, but *real*: a live GitHub Actions dashboard over the =gh= CLI. An auto-refreshing run table, drill into a run's jobs and steps, trigger =workflow_dispatch= runs from Emacs, and stream a run's log with =vui-stream= — all without ever blocking the UI:
-
-[[file:docs/images/15-ci-dashboard.gif]]
-
-The [[file:docs/examples/14-claude-chat.el][Claude chat]] example — a live chat against the =claude -p= CLI, streamed entirely through =vui-stream=: the reply grows token by token, per-turn cost and reasoning collapse into expandable rows, and the input box below stays editable the whole time — every token and every row toggle stays O(1) no matter how long the conversation runs:
-
-[[file:docs/images/14-claude-chat.gif]]
+More runnable examples are listed [[#examples][below]].
 
 * Features
 
@@ -188,34 +213,29 @@ Videos:
 - [[https://www.youtube.com/watch?v=7H3Lvo9LCvs][Declarative UIs in Emacs with vui.el]] — System Crafters Live! stream exploring vui.el
 
 * Examples
+:PROPERTIES:
+:CUSTOM_ID: examples
+:END:
 
 See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 
-- [[file:docs/examples/01-hello-world.el][Hello World]] — Basic examples from the getting started guide
-- [[file:docs/examples/02-todo-app.el][Todo App]] — Full todo application with add/remove/filter
-- [[file:docs/examples/03-forms.el][Forms]] — Form validation, multi-step wizards, settings
-- [[file:docs/examples/04-file-browser.el][File Browser]] — Directory navigation with sorting and search
-- [[file:docs/examples/05-wine-tasting.el][Wine Tasting]] — Dynamic tables with interactive cells, computed statistics
-- [[file:docs/examples/06-collapsible.el][Collapsible]] — Expandable/collapsible sections, FAQ style, nested sections
-- [[file:docs/examples/07-semantic-text.el][Semantic Text]] — Headings, emphasis, status messages with customizable faces
-- [[file:docs/examples/08-typed-fields.el][Typed Fields]] — Integer/float/symbol input with validation, shopping cart, forms
-- [[file:docs/examples/09-inline-form.el][Inline Forms]] — Ephemeral, validated forms expanding at point in existing buffers
-- [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]] — Countdown driven by a timer effect, work/break sessions, functional state updates
-- [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] — Live table dashboard with colored status, progress gauges, concurrency, and a timer-driven effect
-- [[file:docs/examples/12-flex-layout.el][Flex Layout]] — Fields that stretch to fill the window, :justify modes, and proportional :grow panels with vui-flex
-- [[file:docs/examples/13-agent-chat.el][Agent Chat]] — A transcript that streams above a persistent input box with =vui-stream=: O(1) appends, token-by-token message growth, and collapsible tool-call rows
-- [[file:docs/examples/14-claude-chat.el][Claude Chat]] — A real chat against the =claude -p= CLI: streaming JSON parsed into a live =vui-stream= transcript (responses grow token by token, reasoning and per-turn details as collapsible rows), with conversation continuity
-- [[file:docs/examples/15-ci-dashboard.el][CI Dashboard]] — A *real* GitHub Actions dashboard over the =gh= CLI (not simulated): a live, auto-refreshing run table color-coded by status, drill into a run's jobs and steps, trigger =workflow_dispatch= runs from Emacs, and stream a run's log into the buffer with =vui-stream=. All =gh= calls are async, so the UI never blocks
-
-The [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] example in action:
-
-#+caption: CI Pipeline Dashboard example
-[[file:docs/images/11-dashboard.gif]]
-
-The [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]] example in action:
-
-#+caption: Pomodoro Timer example
-[[file:docs/images/10-pomodoro.png]]
+|  # | Example               | What it shows                                                                           |
+|----+-----------------------+-----------------------------------------------------------------------------------------|
+| 01 | [[file:docs/examples/01-hello-world.el][Hello World]]           | Basics from the getting started guide                                                   |
+| 02 | [[file:docs/examples/02-todo-app.el][Todo App]]              | Add, remove, and filter items                                                           |
+| 03 | [[file:docs/examples/03-forms.el][Forms]]                 | Form validation, multi-step wizards, settings                                           |
+| 04 | [[file:docs/examples/04-file-browser.el][File Browser]]          | Directory navigation with sorting and search                                            |
+| 05 | [[file:docs/examples/05-wine-tasting.el][Wine Tasting]]          | Dynamic tables with interactive cells and computed statistics                           |
+| 06 | [[file:docs/examples/06-collapsible.el][Collapsible]]           | Expandable/collapsible sections, FAQ style, nesting                                     |
+| 07 | [[file:docs/examples/07-semantic-text.el][Semantic Text]]         | Headings, emphasis, and status messages with customizable faces                         |
+| 08 | [[file:docs/examples/08-typed-fields.el][Typed Fields]]          | Integer/float/symbol input with validation                                              |
+| 09 | [[file:docs/examples/09-inline-form.el][Inline Forms]]          | Ephemeral, validated forms that expand at point                                         |
+| 10 | [[file:docs/examples/10-pomodoro.el][Pomodoro Timer]]        | Countdown driven by a timer effect, work/break sessions                                 |
+| 11 | [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] | Live table with colored status and progress gauges (simulated)                          |
+| 12 | [[file:docs/examples/12-flex-layout.el][Flex Layout]]           | Window-filling fields, =:justify= modes, and =:grow= panels with vui-flex               |
+| 13 | [[file:docs/examples/13-agent-chat.el][Agent Chat]]            | A transcript that streams above a persistent input box with =vui-stream=                |
+| 14 | [[file:docs/examples/14-claude-chat.el][Claude Chat]]           | A live chat against the =claude -p= CLI, streamed through =vui-stream=                  |
+| 15 | [[file:docs/examples/15-ci-dashboard.el][CI Dashboard]]          | A *real* GitHub Actions dashboard over =gh=: async run table, drill-down, log streaming |
 
 * Available Components
 
