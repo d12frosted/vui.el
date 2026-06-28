@@ -3,9 +3,15 @@
 
 * Status
 
-Design note, de-risked with measurements; not yet implemented. The risky
+First increment implemented: =vui-stream-open=, =vui-stream-append-to=,
+=vui-stream-update=, and =vui-stream-finalize= ship with differential tests
+(=test/vui-stream-node-test.el=) - out-of-order edits stay byte-identical to
+a wholesale render, the model is kept in sync so a full re-render re-emits
+the streamed content, and =finalize= releases the node's markers. The risky
 question ("does a ref-based node API throw away vui-stream's O(1) append?")
-is answered below: no, *if* finalized nodes drop their markers.
+is answered below and borne out in the build: no, *if* finalized nodes drop
+their markers. Still to come: out-of-order =before= / =after= / =remove=,
+component nodes via =open=, node-owned separators, and the section tree.
 
 * Problem
 
