@@ -121,6 +121,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   collapsible component rows (=vui-stream-append= of a component), the input
   box stays editable throughout, and =--resume= keeps conversation context
   across turns. Requires the =claude= CLI on PATH.
+- Added a real GitHub Actions dashboard example
+  (=docs/examples/15-ci-dashboard.el=) backed by the =gh= CLI - not a
+  simulation. It shows a live, auto-refreshing table of recent runs
+  color-coded by status, drills into a run's jobs and steps, triggers
+  =workflow_dispatch= runs from inside Emacs, and streams a run's log into
+  the buffer with =vui-stream=. Every GitHub call is an async =gh=
+  subprocess whose JSON is parsed on exit, so the UI never blocks while it
+  polls. Point it at the companion =d12frosted/vui-ci-demo= repo or any
+  repo reachable with =gh=. Requires the =gh= CLI on PATH, authenticated.
 
 * v1.2.0 - 2026-06-24
 

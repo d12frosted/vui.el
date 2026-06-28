@@ -22,6 +22,10 @@ The [[file:docs/examples/11-dashboard.el][CI Pipeline dashboard]] example — co
 
 [[file:docs/images/11-dashboard.gif]]
 
+The [[file:docs/examples/15-ci-dashboard.el][CI dashboard]] example — the same idea, but *real*: a live GitHub Actions dashboard over the =gh= CLI. An auto-refreshing run table, drill into a run's jobs and steps, trigger =workflow_dispatch= runs from Emacs, and stream a run's log with =vui-stream= — all without ever blocking the UI:
+
+[[file:docs/images/15-ci-dashboard.gif]]
+
 The [[file:docs/examples/14-claude-chat.el][Claude chat]] example — a live chat against the =claude -p= CLI, streamed entirely through =vui-stream=: the reply grows token by token, per-turn cost and reasoning collapse into expandable rows, and the input box below stays editable the whole time — every token and every row toggle stays O(1) no matter how long the conversation runs:
 
 [[file:docs/images/14-claude-chat.gif]]
@@ -201,6 +205,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 - [[file:docs/examples/12-flex-layout.el][Flex Layout]] — Fields that stretch to fill the window, :justify modes, and proportional :grow panels with vui-flex
 - [[file:docs/examples/13-agent-chat.el][Agent Chat]] — A transcript that streams above a persistent input box with =vui-stream=: O(1) appends, token-by-token message growth, and collapsible tool-call rows
 - [[file:docs/examples/14-claude-chat.el][Claude Chat]] — A real chat against the =claude -p= CLI: streaming JSON parsed into a live =vui-stream= transcript (responses grow token by token, reasoning and per-turn details as collapsible rows), with conversation continuity
+- [[file:docs/examples/15-ci-dashboard.el][CI Dashboard]] — A *real* GitHub Actions dashboard over the =gh= CLI (not simulated): a live, auto-refreshing run table color-coded by status, drill into a run's jobs and steps, trigger =workflow_dispatch= runs from Emacs, and stream a run's log into the buffer with =vui-stream=. All =gh= calls are async, so the UI never blocks
 
 The [[file:docs/examples/11-dashboard.el][CI Pipeline Dashboard]] example in action:
 
