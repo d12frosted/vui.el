@@ -63,8 +63,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the empty -> non-empty transition. =vui-stream-update-last= is now sugar
   over the node API: when the last item is a live node it updates that node
   in place (keeping its markers valid for further appends), otherwise it
-  rewrites the last region as before. See docs/design/vui-stream-nodes.org
-  (#82).
+  rewrites the last region as before. =vui-stream-open= also accepts a
+  =vui-component=, mounting it as a stateful inline ROW addressable by ref:
+  =vui-stream-update= refreshes its props OUT OF ORDER (state preserved)
+  wherever it has drifted to - the random-access counterpart of
+  =vui-stream-update-last= on a row - and =finalize= stops tracking it while
+  the row stays interactive. See docs/design/vui-stream-nodes.org (#82).
 - A re-render driven by a sibling's state change (the "box" below a stream
   - status, queue, an input field) no longer re-emits the whole transcript.
   When the root is a flat container whose first child is a live stream, the

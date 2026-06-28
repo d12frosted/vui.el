@@ -13,8 +13,11 @@ insert/remove keep separators single (emptying the stream re-lays, the
 mirror of the empty -> non-empty transition). The risky question ("does a
 ref-based node API throw away vui-stream's O(1) append?") is answered below
 and borne out in the build: no, *if* finalized nodes drop their markers.
-Still to come: component nodes via =open=, node-owned separators, and the
-section tree.
+=vui-stream-open= also accepts a =vui-component= - a stateful inline ROW
+addressable by ref, updated out of order with =vui-stream-update= (props
+refresh, state preserved); such a node carries no markers of its own (the
+row owns them), so =finalize= just stops tracking it and the row stays
+interactive. Still to come: node-owned separators and the section tree.
 
 * Problem
 
@@ -197,10 +200,13 @@ the natural behaviour of =append-to=.
   that /must/ keep a region to stay interactive, so each costs one marker for
   its life: append is O(interactive rows). Fine for a chat (tens-hundreds of
   rows = tens of us); not for 100k live widgets - that is virtualization, a
-  separate problem. =finalize= on a component freezes it into static text if
-  you ever need to reclaim the marker. (Today's component-rows code already
-  has this latent O(rows)-per-append cost; the node model makes it explicit and
-  gives you the escape hatch.)
+  separate problem. As implemented, =vui-stream-open= of a component returns a
+  node that wraps the inline row; =vui-stream-update= refreshes its props out
+  of order (state preserved); =finalize= just stops tracking the node (the row
+  keeps its own markers and stays interactive). =append-to= / =before= /
+  =after= / =remove= are content-only for now and no-op on a component node.
+  (Today's component-rows code already has the latent O(rows)-per-append cost;
+  the node model makes it addressable.)
 
 * Implementation sketch
 
