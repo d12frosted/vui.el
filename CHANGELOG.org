@@ -29,6 +29,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   vs ~21ms and rising for the declarative rebuild (~950x at N=4000, the gap
   widening with size). Items are content vnodes (text/fragment, drawn
   however you like per item) for now (#82).
+- With =vui-incremental-render= on, a re-render driven by a sibling's state
+  change (the "box" below a stream - status, queue, an input field) no
+  longer re-emits the whole transcript. When the root is a flat container
+  whose first child is a live stream, the stream's region is left untouched
+  (appends keep it current) and only the content after it is re-rendered,
+  so a box update is O(box) instead of O(N): ~0.18ms flat regardless of
+  stream size, vs ~5.7ms and rising at N=4000 (32x). Anything else (content
+  before the stream, more than one stream, an indented or faced container)
+  falls back to a wholesale rebuild, which is byte-identical. (#82)
 - =:memo= keyword for =vui-defcomponent=: =:memo t= is a shorthand for the
   most common =:should-update= - skip the re-render while props are
   shallow-equal (=equal= on each value) and state is unchanged, like

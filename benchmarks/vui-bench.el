@@ -562,6 +562,32 @@ size - only the last item's region is rewritten."
              handle (vui-text (format "growing message token %d here" k))))))
       (vui-bench--agent-teardown inst buf))))
 
+(defun vui-bench-stream-box-update-growth ()
+  "Cost of a box-only state change on the stream UI, flag off vs on.
+Off rebuilds the whole transcript (O(N)); on leaves the stream region
+untouched and re-renders only the box (the stream-tail patch), so the
+slope should be FLAT - a box update is independent of transcript size."
+  (vui-bench--header "Stream box update: toggle box state at stream size S")
+  (dolist (s '(200 500 1000 2000 4000))
+    (dolist (flag '((nil . "off") (t . "on")))
+      (let* ((vui-incremental-render (car flag))
+             (handle (vui-make-stream))
+             (buf "*vui-bench-stream-box*")
+             (inst (vui-mount (vui-component 'vui-agent-chat-stream
+                                             :stream handle :queue 0 :status "idle")
+                              buf))
+             (tog nil))
+        (dotimes (i s)
+          (vui-stream-append handle (vui-text (format "message %d" i))))
+        (vui-update inst (list :stream handle :queue 0 :status "idle"))
+        (vui-bench--result-row
+         (format "%d %s" s (cdr flag))
+         (vui-bench--measure
+          6 (lambda () (setq tog (not tog))
+              (vui-update inst (list :stream handle :queue (if tog 1 0)
+                                     :status (if tog "busy" "idle"))))))
+        (vui-bench--agent-teardown inst buf)))))
+
 (defun vui-bench-agent-run ()
   "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
   (interactive)
@@ -573,6 +599,7 @@ size - only the last item's region is rewritten."
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
+    (vui-bench-stream-box-update-growth)
     (message "")
     (message "done.")))
 
@@ -814,6 +841,7 @@ machine-readable CMPDATA lines."
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
+    (vui-bench-stream-box-update-growth)
     (message "")
     (message "done.")))
 

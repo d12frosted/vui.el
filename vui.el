@@ -3824,6 +3824,17 @@ function of the root `vui--render-instance' call."
      ;; experimental `vui-incremental-render' flag.
      ((and record (eq vtree (plist-get record :vnode)))
       nil)
+     ;; Stream-tail patch: a flat container whose first child is a live
+     ;; stream.  The stream's region is already current (append /
+     ;; update-last keep the buffer in sync), so leave it untouched and
+     ;; re-render only the content after it - O(content), not O(N items).
+     ((and vui-incremental-render
+           (eq (plist-get record :kind) 'stream-tail)
+           (vui--stream-tail-eligible vtree))
+      (let ((elig (vui--stream-tail-eligible vtree)))
+        (vui--patch-stream-tail vtree (nth 0 elig) (nth 1 elig)))
+      (setf (vui-instance-render-record instance)
+            (list :kind 'stream-tail :vnode vtree)))
      ;; Content patch: flat content container, reuse unchanged segments.
      ((and vui-incremental-render
            (eq (plist-get record :kind) 'content)
@@ -3875,8 +3886,13 @@ function of the root `vui--render-instance' call."
       (vui--remove-widget-overlays)
       (erase-buffer)
       (vui--render-vnode vtree)
+      ;; If a stream just became live in this render, mark the record so
+      ;; the next commit can patch around it instead of re-emitting it.
       (setf (vui-instance-render-record instance)
-            (list :kind 'wholesale :vnode vtree))))))
+            (list :kind (if (and vui-incremental-render
+                                  (vui--stream-tail-eligible vtree))
+                            'stream-tail 'wholesale)
+                  :vnode vtree))))))
 
 ;;; Streaming - imperative append-only regions (issue #82)
 ;;
@@ -4044,6 +4060,78 @@ not yet live.  VNODE must be a content vnode (text/fragment)."
               (vui--render-vnode vnode)
               (set-marker end (point))))))))
   handle)
+
+;; --- Box-update independence: re-render around a live stream, not it ---
+;;
+;; A re-render driven by a sibling's state change (the "box" below the
+;; stream) would erase the whole buffer and re-emit every stream item,
+;; making that update O(N).  When the root is a flat container whose FIRST
+;; child is a live stream, the stream's region is already current (appends
+;; and update-last keep the buffer in sync), so we can leave it untouched
+;; and re-render only the content after it - O(content), independent of N.
+;; Anything else (a child before the stream, more than one stream, an
+;; indented/faced vstack) falls back to a wholesale rebuild, which is
+;; always correct.  Gated behind `vui-incremental-render'.
+
+(defun vui--stream-live-p (handle)
+  "Non-nil if HANDLE is a stream rendered live in the current buffer."
+  (and (vui-stream-handle-p handle)
+       (eq (vui-stream-handle-buffer handle) (current-buffer))
+       (let ((s (vui-stream-handle-region-start handle))
+             (e (vui-stream-handle-region-end handle)))
+         (and s (marker-position s) e (marker-position e)))))
+
+(defun vui--stream-tail-eligible (vtree)
+  "Return (HANDLE SUFFIX) when VTREE is a flat container whose first child
+is a live stream and no other child is a stream; else nil.  SUFFIX is the
+list of vnodes after the stream.  Only plain (indent 0, no face/keymap)
+vstacks and fragments qualify."
+  (let ((children
+         (cond ((vui-vnode-fragment-p vtree) (vui-vnode-fragment-children vtree))
+               ((and (vui-vnode-vstack-p vtree)
+                     (= 0 (or (vui-vnode-vstack-indent vtree) 0))
+                     (null (vui-vnode-vstack-face vtree))
+                     (null (vui-vnode-vstack-keymap vtree)))
+                (vui-vnode-vstack-children vtree))
+               (t :no))))
+    (when (listp children)
+      (let ((cs (remq nil children)))
+        (when (and cs
+                   (vui-vnode-stream-p (car cs))
+                   (vui--stream-live-p (vui-vnode-stream-handle (car cs)))
+                   (not (cl-some #'vui-vnode-stream-p (cdr cs))))
+          (list (vui-vnode-stream-handle (car cs)) (cdr cs)))))))
+
+(defun vui--render-children-as (vtree children)
+  "Render CHILDREN as a container shaped like VTREE; return chars written.
+Reuses the real renderer so inter-child separators, empty-drop, and
+component reconciliation all match a wholesale render exactly."
+  (let ((start (point)))
+    (vui--render-vnode
+     (if (vui-vnode-fragment-p vtree)
+         (vui-vnode-fragment--create :children children)
+       (vui-vnode-vstack--create
+        :children children
+        :spacing (vui-vnode-vstack-spacing vtree)
+        :indent 0)))
+    (- (point) start)))
+
+(defun vui--patch-stream-tail (vtree handle suffix)
+  "Re-render only the content after HANDLE's region, leaving the region.
+SUFFIX is the list of vnodes after the stream in VTREE.  The stream is
+non-empty (live), so the suffix is separated from it by one container
+separator, which we drop if the suffix renders to nothing (matching a
+wholesale render's empty-child handling)."
+  (let* ((sep (vui--incremental-separator vtree))
+         (from (marker-position (vui-stream-handle-region-end handle))))
+    (vui--forget-region-fields from (point-max))
+    (vui--remove-widget-overlays from (point-max))
+    (delete-region from (point-max))
+    (goto-char from)
+    (let ((p (point)))
+      (insert sep)
+      (when (= 0 (vui--render-children-as vtree suffix))
+        (delete-region p (point))))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
