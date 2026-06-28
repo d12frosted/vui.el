@@ -3978,10 +3978,15 @@ Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
         (first t)
         (last-start nil))
     (dolist (item (reverse (vui-stream-handle-items-rev handle)))
-      (unless first (insert sep))
-      (setq first nil)
-      (setq last-start (point))
-      (vui--render-vnode item))
+      ;; Component rows are inline instances that render and persist on
+      ;; their own; a full re-emit cannot reproduce them, and (because the
+      ;; stream-tail patch leaves the region intact) does not run once rows
+      ;; exist.  Skip them defensively here.
+      (unless (vui-instance-p item)
+        (unless first (insert sep))
+        (setq first nil)
+        (setq last-start (point))
+        (vui--render-vnode item)))
     (vui--stream-bind-region handle (current-buffer) start (point))
     (when last-start
       (vui--stream-set-last-start handle last-start (current-buffer)))))
@@ -3999,19 +4004,25 @@ When the stream is live and already non-empty, this writes exactly one
 region in O(1) - it never re-renders or walks the existing items - and
 content below the region shifts down with it.
 
-The one exception is the empty -> non-empty transition: a container that
-lays the stream out (a `vui-vstack', say) drops an empty child and the
-separator that would follow it, so the first item changes the surrounding
-layout.  That first append therefore triggers a single full re-render;
-every subsequent append is O(1).  When the stream is not yet live the
-item is just recorded and emitted on the next render.
+VNODE may be a content vnode (text/fragment) or a `vui-component'.  A
+component is mounted as a STATEFUL ROW: it gets its own region and
+re-renders only that region when its state changes (a collapsible tool
+card, say), independent of how many items are above it.  A component row
+requires the stream to be live and non-empty first (the empty -> non-empty
+transition does a full re-render, which cannot re-emit an inline row); a
+component appended to an empty stream falls back to a plain child render."
+  (if (vui-vnode-component-p vnode)
+      (vui--stream-append-row handle vnode)
+    (vui--stream-append-content handle vnode))
+  handle)
 
-VNODE must be a content vnode (text/fragment); component items are not
-supported yet."
-  (push vnode (vui-stream-handle-items-rev handle))
-  (let ((buf (vui-stream-handle-buffer handle))
+(defun vui--stream-append-content (handle vnode)
+  "Append content VNODE (text/fragment) to HANDLE's stream."
+  (let ((prev-last (car (vui-stream-handle-items-rev handle)))
+        (buf (vui-stream-handle-buffer handle))
         (start (vui-stream-handle-region-start handle))
         (end (vui-stream-handle-region-end handle)))
+    (push vnode (vui-stream-handle-items-rev handle))
     (cond
      ;; Not live yet: emitted on the next render.
      ((not (and buf (buffer-live-p buf) end (marker-position end)))
@@ -4029,38 +4040,95 @@ supported yet."
               (buffer-undo-list t))
           (save-excursion
             (goto-char (marker-position end))
-            ;; There is already at least one item, so separate from it.
             (insert (vui-stream-handle-separator handle))
             (vui--stream-set-last-start handle (point) buf)
             (vui--render-vnode vnode)
-            ;; END stays put on insert (so the parent's separator below is
-            ;; never captured); move it explicitly past what we inserted.
-            (set-marker end (point))))))))
-  handle)
+            ;; If the previous last item was a component row, END is that
+            ;; row's own marker - do NOT move it (that would corrupt the
+            ;; row's region); install a fresh marker.  Otherwise reuse the
+            ;; stream's own END marker.
+            (if (vui-instance-p prev-last)
+                (setf (vui-stream-handle-region-end handle)
+                      (copy-marker (point) nil))
+              (set-marker end (point))))))))))
+
+(defun vui--stream-append-row (handle vnode)
+  "Append component VNODE as a stateful inline row at HANDLE's tail."
+  (let ((buf (vui-stream-handle-buffer handle))
+        (start (vui-stream-handle-region-start handle))
+        (end (vui-stream-handle-region-end handle))
+        (sep (vui-stream-handle-separator handle)))
+    (cond
+     ;; Not live, or still empty: a row needs a live, non-empty stream.
+     ;; Record the vnode and lay it out with a full render (it renders as a
+     ;; plain child component, not a scoped row - the documented fallback).
+     ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
+          (= (marker-position start) (marker-position end)))
+      (push vnode (vui-stream-handle-items-rev handle))
+      (when (and buf (buffer-live-p buf))
+        (vui--stream-request-rerender handle)))
+     (t
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              (buffer-undo-list t))
+          (save-excursion
+            (goto-char (marker-position end))
+            (insert sep)
+            (let* ((row-start (point))
+                   (row (vui-mount-inline vnode (point))))
+              (vui--stream-set-last-start handle row-start buf)
+              ;; Share the row's region-end as the stream's end: when the
+              ;; row re-renders on its own (grows/shrinks), its marker moves
+              ;; and the stream end - and the box below - stay correct.
+              (setf (vui-stream-handle-region-end handle)
+                    (vui-instance-region-end row))
+              (push row (vui-stream-handle-items-rev handle))))))))))
 
 (defun vui-stream-update-last (handle vnode)
   "Replace HANDLE's last item with VNODE, re-rendering only its region.
 This is the in-progress message in a streaming agent UI: as tokens
 arrive, update the last item with the message-so-far.  The cost depends
-on that one item's size, not on the number of items above it, so the
-transcript can be arbitrarily long.  A no-op when the stream is empty or
-not yet live.  VNODE must be a content vnode (text/fragment)."
-  (when (vui-stream-handle-items-rev handle)
-    (setcar (vui-stream-handle-items-rev handle) vnode)
-    (let ((buf (vui-stream-handle-buffer handle))
-          (ls (vui-stream-handle-last-start handle))
-          (end (vui-stream-handle-region-end handle)))
-      (when (and buf (buffer-live-p buf)
-                 ls (marker-position ls) end (marker-position end))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t))
-            (save-excursion
-              (delete-region (marker-position ls) (marker-position end))
-              (goto-char (marker-position ls))
-              (vui--render-vnode vnode)
-              (set-marker end (point))))))))
+on that one item, not on the number of items above it, so the transcript
+can be arbitrarily long.  A no-op when the stream is empty or not live.
+
+For a content last item VNODE must be a content vnode (text/fragment).
+For a component ROW, pass a `vui-component' of the same type: the row's
+props are updated in place and the row re-renders only its own region,
+keeping its state."
+  (let ((last (car (vui-stream-handle-items-rev handle))))
+    (cond
+     ((null last) nil)
+     ;; Component row: update its props in place (state preserved); the row
+     ;; re-renders only its region and its END marker (shared as the
+     ;; stream's) follows.
+     ((vui-instance-p last)
+      (when (and (vui-vnode-component-p vnode)
+                 (eq (vui-vnode-component-type vnode)
+                     (vui-component-def-name (vui-instance-def last))))
+        (let* ((props (vui-vnode-component-props vnode))
+               (children (vui-vnode-component-children vnode))
+               (props-wc (if children
+                             (plist-put (copy-sequence props) :children children)
+                           props)))
+          (vui-update last props-wc))))
+     ;; Content: rewrite just that item's region.
+     (t
+      (setcar (vui-stream-handle-items-rev handle) vnode)
+      (let ((buf (vui-stream-handle-buffer handle))
+            (ls (vui-stream-handle-last-start handle))
+            (end (vui-stream-handle-region-end handle)))
+        (when (and buf (buffer-live-p buf)
+                   ls (marker-position ls) end (marker-position end))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (buffer-undo-list t))
+              (save-excursion
+                (delete-region (marker-position ls) (marker-position end))
+                (goto-char (marker-position ls))
+                (vui--render-vnode vnode)
+                (set-marker end (point))))))))))
   handle)
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
