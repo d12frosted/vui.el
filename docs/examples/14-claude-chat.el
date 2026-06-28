@@ -58,20 +58,24 @@ only this row, no matter how long the transcript is."
 ;;; The input box (status line + field)
 
 (vui-defcomponent vui-claude-box (status on-send)
-  "Bottom box: a STATUS line and an input field; RET calls ON-SEND."
-  :state ((draft ""))
+  "Bottom box: a STATUS line and a window-wide input field; RET calls ON-SEND.
+The field is UNCONTROLLED (no :value / :on-change), so typing a long prompt
+does not re-render on every keystroke - it stays smooth no matter how long
+the prompt gets.  Sending re-renders the box, which recreates the field
+empty (clearing it)."
   :render
   (vui-vstack
-   (vui-text (make-string 56 ?-) :face 'shadow)
+   (vui-text (make-string 60 ?-) :face 'shadow)
    (vui-text (format "claude: %s" status) :face 'font-lock-comment-face)
-   (vui-field :value draft :size 56
-              :placeholder "Ask Claude, then RET to send..."
-              :on-change (lambda (v) (vui-set-state :draft v))
-              :on-submit (lambda (v)
-                           (let ((m (string-trim v)))
-                             (unless (string-empty-p m)
-                               (vui-set-state :draft "")
-                               (funcall on-send m)))))))
+   (vui-flex :width 'window
+     (vui-flex-item :grow 1
+       (lambda (w)
+         (vui-field :size (max 10 w)
+                    :placeholder "Ask Claude, then RET to send..."
+                    :on-submit (lambda (v)
+                                 (let ((m (string-trim v)))
+                                   (unless (string-empty-p m)
+                                     (funcall on-send m))))))))))
 
 ;;; The streaming engine - claude -p -> vui-stream
 
