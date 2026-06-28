@@ -3828,8 +3828,11 @@ function of the root `vui--render-instance' call."
      ;; stream.  The stream's region is already current (append /
      ;; update-last keep the buffer in sync), so leave it untouched and
      ;; re-render only the content after it - O(content), not O(N items).
-     ((and vui-incremental-render
-           (eq (plist-get record :kind) 'stream-tail)
+     ;; Always on: it only ever reproduces what a wholesale rebuild would
+     ;; (byte-identical), and falls back below for any other shape, so it
+     ;; needs no opt-in - and stateful stream rows depend on it leaving the
+     ;; region intact regardless of the experimental flag.
+     ((and (eq (plist-get record :kind) 'stream-tail)
            (vui--stream-tail-eligible vtree))
       (let ((elig (vui--stream-tail-eligible vtree)))
         (vui--patch-stream-tail vtree (nth 0 elig) (nth 1 elig)))
@@ -3889,8 +3892,7 @@ function of the root `vui--render-instance' call."
       ;; If a stream just became live in this render, mark the record so
       ;; the next commit can patch around it instead of re-emitting it.
       (setf (vui-instance-render-record instance)
-            (list :kind (if (and vui-incremental-render
-                                  (vui--stream-tail-eligible vtree))
+            (list :kind (if (vui--stream-tail-eligible vtree)
                             'stream-tail 'wholesale)
                   :vnode vtree))))))
 
