@@ -207,6 +207,34 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
           (vui-st--kill))))))
 
+(describe "vui-stream: update-last appends only the delta when text grows"
+  (it "grows the last text item incrementally, matching a full render"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "line 1"))
+              (vui-stream-append s (vui-text "Hel"))         ; in-progress msg
+              (vui-stream-update-last s (vui-text "Hello"))         ; extend
+              (vui-stream-update-last s (vui-text "Hello there")) ; extend more
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("line 1" "Hello there") "n0")))
+          (vui-st--kill)))))
+
+  (it "falls back to a full re-render when the new text is not an extension"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "Hello world"))
+              (vui-stream-update-last s (vui-text "Goodbye"))   ; not a prefix
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("Goodbye") "n0")))
+          (vui-st--kill))))))
+
 (describe "vui-stream: first append after the empty stream was re-rendered"
   ;; Regression: a re-render of the still-EMPTY stream (e.g. a sibling box
   ;; state change) used to record the stream as stream-tail; the first

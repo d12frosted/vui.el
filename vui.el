@@ -4114,10 +4114,27 @@ keeping its state."
           (vui-update last props-wc))))
      ;; Content: rewrite just that item's region.
      (t
-      (setcar (vui-stream-handle-items-rev handle) vnode)
-      (let ((buf (vui-stream-handle-buffer handle))
-            (ls (vui-stream-handle-last-start handle))
-            (end (vui-stream-handle-region-end handle)))
+      (let* ((old (car (vui-stream-handle-items-rev handle)))
+             (buf (vui-stream-handle-buffer handle))
+             (ls (vui-stream-handle-last-start handle))
+             (end (vui-stream-handle-region-end handle))
+             ;; Fast path: the new text simply EXTENDS the old one (a
+             ;; message streaming in token by token).  Append only the new
+             ;; suffix instead of deleting and re-rendering the whole item.
+             ;; The win is redisplay - only the freshly inserted text is
+             ;; marked dirty and redrawn, instead of the entire (growing)
+             ;; message getting torn down and redrawn on every token, which
+             ;; is what makes a long streaming reply feel laggy.
+             (suffix (and (vui-vnode-text-p old) (vui-vnode-text-p vnode)
+                          (equal (vui-vnode-text-face old) (vui-vnode-text-face vnode))
+                          (equal (vui-vnode-text-properties old)
+                                 (vui-vnode-text-properties vnode))
+                          (let ((o (vui-vnode-text-content old))
+                                (n (vui-vnode-text-content vnode)))
+                            (and (> (length n) (length o))
+                                 (string-prefix-p o n)
+                                 (substring n (length o)))))))
+        (setcar (vui-stream-handle-items-rev handle) vnode)
         (when (and buf (buffer-live-p buf)
                    ls (marker-position ls) end (marker-position end))
           (with-current-buffer buf
@@ -4125,10 +4142,19 @@ keeping its state."
                   (inhibit-modification-hooks t)
                   (buffer-undo-list t))
               (save-excursion
-                (delete-region (marker-position ls) (marker-position end))
-                (goto-char (marker-position ls))
-                (vui--render-vnode vnode)
-                (set-marker end (point))))))))))
+                (if suffix
+                    (progn
+                      (goto-char (marker-position end))
+                      (vui--render-vnode
+                       (vui-vnode-text--create
+                        :content suffix
+                        :face (vui-vnode-text-face vnode)
+                        :properties (vui-vnode-text-properties vnode)))
+                      (set-marker end (point)))
+                  (delete-region (marker-position ls) (marker-position end))
+                  (goto-char (marker-position ls))
+                  (vui--render-vnode vnode)
+                  (set-marker end (point)))))))))))
   handle)
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
