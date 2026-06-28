@@ -51,6 +51,19 @@ transcript, so a message renders identically whichever path emits it."
   "One transcript message, rendered differently depending on ROLE."
   :render (vui-chat-message-vnode role text))
 
+(vui-defcomponent vui-chat-tool-card (name output)
+  "A collapsible tool-call card: the header toggles the output.
+Appended as a stateful stream ROW - clicking it re-renders only this
+card's region, no matter how long the transcript is."
+  :state ((open nil))
+  :render
+  (vui-vstack
+   (vui-button (format "  [tool] %s  %s" name (if open "(hide)" "(show)"))
+     :face 'shadow
+     :on-click (lambda () (vui-set-state :open (not open))))
+   (when open
+     (vui-text (format "      -> %s" output) :face 'shadow))))
+
 ;;; Transcript - the O(n) part vui-stream will replace
 
 (vui-defcomponent vui-chat-transcript (messages)
@@ -171,18 +184,27 @@ INTERVAL defaults to 0.25."
                    (let* ((msg (nth mi script))
                           (role (car msg))
                           (words (split-string (cdr msg) " ")))
-                     (if (= wi 0)
-                         ;; first word: append a new message
-                         (vui-stream-append
-                          stream (vui-chat-message-vnode role (car words)))
-                       ;; later words: grow the in-progress message in place
+                     (cond
+                      ;; A tool call lands as a collapsible component ROW
+                      ;; (one tick); click it later to expand its output.
+                      ((eq role 'tool)
+                       (vui-stream-append
+                        stream (vui-component 'vui-chat-tool-card
+                                 :name (cdr msg) :output "ok - exit 0"))
+                       (setq mi (1+ mi) wi 0))
+                      ;; Text messages type out word by word, in place.
+                      ((= wi 0)
+                       (vui-stream-append
+                        stream (vui-chat-message-vnode role (car words)))
+                       (setq wi (1+ wi))
+                       (when (>= wi (length words)) (setq mi (1+ mi) wi 0)))
+                      (t
                        (vui-stream-update-last
                         stream
                         (vui-chat-message-vnode
-                         role (string-join (cl-subseq words 0 (1+ wi)) " "))))
-                     (setq wi (1+ wi))
-                     (when (>= wi (length words))
-                       (setq mi (1+ mi) wi 0))))))))
+                         role (string-join (cl-subseq words 0 (1+ wi)) " ")))
+                       (setq wi (1+ wi))
+                       (when (>= wi (length words)) (setq mi (1+ mi) wi 0))))))))))
           (lambda () (cancel-timer timer)))))
     (vui-component 'vui-agent-chat-stream
       :stream stream :queue queue :status status)))

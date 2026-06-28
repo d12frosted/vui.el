@@ -588,6 +588,37 @@ slope should be FLAT - a box update is independent of transcript size."
                                      :status (if tog "busy" "idle"))))))
         (vui-bench--agent-teardown inst buf)))))
 
+(vui-defcomponent vui-bench-stream-row (id)
+  :state ((open nil))
+  :render (vui-vstack
+           (vui-button (format "row %d %s" id (if open "v" ">"))
+             :on-click (lambda () (vui-set-state :open (not open))))
+           (when open (vui-text (format "detail for row %d, a few words here" id)))))
+
+(defun vui-bench-stream-row-rerender-growth ()
+  "Cost of toggling ONE stateful component row vs the items above it.
+A row is an inline instance, so its state change re-renders only its own
+region - this should be FLAT, independent of stream size, unlike walking
+or rebuilding the transcript."
+  (vui-bench--header "Stream row re-render: toggle 1 row at stream size S (box below)")
+  (dolist (s '(200 500 1000 2000 4000))
+    (let* ((handle (vui-make-stream))
+           (buf "*vui-bench-stream-row*")
+           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf)))
+      (dotimes (i s)
+        (vui-stream-append handle (vui-text (format "message %d content" i))))
+      (vui-stream-append handle (vui-component 'vui-bench-stream-row :id 9999))
+      (vui-bench--result-row
+       (format "%d row" s)
+       (vui-bench--measure
+        8 (lambda ()
+            (with-current-buffer buf
+              (goto-char (point-min))
+              (when (search-forward "row 9999" nil t)
+                (let ((w (widget-at (match-beginning 0))))
+                  (when w (widget-apply w :action))))))))
+      (vui-bench--agent-teardown inst buf))))
+
 (defun vui-bench-agent-run ()
   "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
   (interactive)
@@ -600,6 +631,7 @@ slope should be FLAT - a box update is independent of transcript size."
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
     (vui-bench-stream-box-update-growth)
+    (vui-bench-stream-row-rerender-growth)
     (message "")
     (message "done.")))
 
@@ -842,6 +874,7 @@ machine-readable CMPDATA lines."
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
     (vui-bench-stream-box-update-growth)
+    (vui-bench-stream-row-rerender-growth)
     (message "")
     (message "done.")))
 
