@@ -4334,6 +4334,120 @@ message's turn ends.  Idempotent."
           (delq node (vui-stream-handle-nodes handle))))
   node)
 
+(defun vui-stream-before (node vnode)
+  "Insert VNODE as a new live node directly above NODE; return the new node.
+The new node is itself a stable ref (`vui-stream-append-to' /
+`vui-stream-update' / `vui-stream-finalize' it).  This is the out-of-order
+insert: a card or notification that belongs above an item already on
+screen.  A no-op returning nil if NODE is not live."
+  (let* ((handle (vui--stream-node-handle node))
+         (cell (vui--stream-node-cell node))
+         (buf (vui-stream-handle-buffer handle))
+         (sep (vui-stream-handle-separator handle))
+         (start (vui--stream-node-start node)))
+    (when (and buf (buffer-live-p buf) start (marker-position start))
+      (let ((new (vui--stream-node-create :handle handle)))
+        ;; items-rev is reverse render order, so an item ABOVE NODE is OLDER
+        ;; and sits just after NODE's cell.
+        (setcdr cell (cons vnode (cdr cell)))
+        (setf (vui--stream-node-cell new) (cdr cell))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t))
+            (save-excursion
+              (goto-char (marker-position start))
+              (let ((x-start (point)))
+                (vui--render-vnode vnode)
+                (let ((x-end (point)))
+                  (insert sep)
+                  ;; NODE's content now begins after the inserted separator.
+                  (set-marker start (point))
+                  (vui--stream-node-bind new x-start x-end buf))))))
+        (push new (vui-stream-handle-nodes handle))
+        new))))
+
+(defun vui-stream-after (node vnode)
+  "Insert VNODE as a new live node directly below NODE; return the new node.
+Like `vui-stream-before' on the other side of NODE.  A no-op returning nil
+if NODE is not live."
+  (let* ((handle (vui--stream-node-handle node))
+         (cell (vui--stream-node-cell node))
+         (buf (vui-stream-handle-buffer handle))
+         (sep (vui-stream-handle-separator handle))
+         (end (vui--stream-node-end node)))
+    (when (and buf (buffer-live-p buf) end (marker-position end))
+      (let ((new (vui--stream-node-create :handle handle))
+            (head (vui-stream-handle-items-rev handle)))
+        ;; An item BELOW NODE is NEWER and sits just before NODE's cell.
+        (if (eq cell head)
+            (progn
+              (setf (vui-stream-handle-items-rev handle) (cons vnode head))
+              (setf (vui--stream-node-cell new)
+                    (vui-stream-handle-items-rev handle)))
+          (let ((prev head))
+            (while (and (cdr prev) (not (eq (cdr prev) cell)))
+              (setq prev (cdr prev)))
+            (setcdr prev (cons vnode cell))
+            (setf (vui--stream-node-cell new) (cdr prev))))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t))
+            (save-excursion
+              (goto-char (marker-position end))
+              (insert sep)
+              (let ((x-start (point)))
+                (vui--render-vnode vnode)
+                (let ((x-end (point)))
+                  (vui--stream-node-bind new x-start x-end buf)
+                  (vui--stream-sync-end handle x-end))))))
+        (push new (vui-stream-handle-nodes handle))
+        new))))
+
+(defun vui-stream-remove (node)
+  "Remove NODE: delete its region and one adjoining separator, then drop it.
+For an ephemeral item that should disappear (a transient notification).
+Releases NODE's marker like `vui-stream-finalize'.  A no-op returning nil
+if NODE is not live."
+  (let* ((handle (vui--stream-node-handle node))
+         (cell (vui--stream-node-cell node))
+         (buf (vui-stream-handle-buffer handle))
+         (seplen (length (vui-stream-handle-separator handle)))
+         (start (vui--stream-node-start node))
+         (end (vui--stream-node-end node))
+         (head (vui-stream-handle-items-rev handle)))
+    (when (and buf (buffer-live-p buf)
+               start (marker-position start) end (marker-position end))
+      (with-current-buffer buf
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              (buffer-undo-list t)
+              (s (marker-position start))
+              (e (marker-position end)))
+          ;; Swallow exactly one separator so the survivors stay singly
+          ;; separated: the one before NODE if anything renders above it,
+          ;; else the one after, else (the only item) none.
+          (cond
+           ((cdr cell) (delete-region (max (point-min) (- s seplen)) e))
+           ((not (eq cell head)) (delete-region s (min (point-max) (+ e seplen))))
+           (t (delete-region s e)))))
+      ;; splice NODE's cell out of items-rev
+      (if (eq cell head)
+          (setf (vui-stream-handle-items-rev handle) (cdr cell))
+        (let ((prev head))
+          (while (and (cdr prev) (not (eq (cdr prev) cell)))
+            (setq prev (cdr prev)))
+          (when (cdr prev) (setcdr prev (cdr cell)))))
+      (vui-stream-finalize node)
+      ;; Emptying the stream changes the surrounding layout (the container
+      ;; drops the now-empty child and its separator), the mirror of the
+      ;; empty -> non-empty transition - re-lay once so the buffer matches a
+      ;; plain render.
+      (when (null (vui-stream-handle-items-rev handle))
+        (vui--stream-request-rerender handle)))
+    nil))
+
 ;; --- Box-update independence: re-render around a live stream, not it ---
 ;;
 ;; A re-render driven by a sibling's state change (the "box" below the
