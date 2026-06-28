@@ -364,5 +364,110 @@
                     :to-equal (vui-snode--oracle '("header" "A" "X") "n0")))
         (vui-snode--kill)))))
 
+(vui-defcomponent vui-snode-row (label)
+  "A trivial row that renders its LABEL, for component-node tests."
+  :render (vui-text (format "[%s]" label)))
+
+(describe "vui-stream nodes: component nodes (open a row)"
+  (it "opens a component vnode as a live row node"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (node)
+            (vui-stream-append s (vui-text "header"))
+            (setq node (vui-stream-open
+                        s (vui-component 'vui-snode-row :label "a")))
+            (expect (vui--stream-node-instance node) :not :to-be nil)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
+        (vui-snode--kill))))
+
+  (it "updates a component node OUT OF ORDER (row no longer last)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (row)
+            (vui-stream-append s (vui-text "header"))
+            (setq row (vui-stream-open
+                       s (vui-component 'vui-snode-row :label "a")))
+            (vui-stream-append s (vui-text "below"))   ; row is no longer last
+            (vui-stream-update row (vui-component 'vui-snode-row :label "AA"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "[AA]" "below") "n0")))
+        (vui-snode--kill))))
+
+  (it "finalize stops tracking a component node but leaves the row live"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (row)
+            (vui-stream-append s (vui-text "header"))
+            (setq row (vui-stream-open
+                       s (vui-component 'vui-snode-row :label "a")))
+            (expect (length (vui-stream-handle-nodes s)) :to-equal 1)
+            (vui-stream-finalize row)
+            (expect (vui-stream-handle-nodes s) :to-equal nil)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
+        (vui-snode--kill))))
+
+  ;; append-to is content-only: on a component node it must be a clean no-op,
+  ;; NOT setcar a fragment over the live instance (which would crash a re-emit).
+  (it "append-to on a component node is a clean no-op (items-rev stays sane)"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (row)
+            (vui-stream-append s (vui-text "header"))
+            (setq row (vui-stream-open
+                       s (vui-component 'vui-snode-row :label "a")))
+            (vui-stream-append-to row (vui-text "IGNORED"))
+            ;; the live instance is still the items-rev head, not wrapped
+            (expect (vui-instance-p (car (vui-stream-handle-items-rev s)))
+                    :to-be t)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
+        (vui-snode--kill))))
+
+  ;; Opening a component on an EMPTY stream takes the row fallback (no inline
+  ;; instance): the node must NOT capture the root instance, and a later
+  ;; update must not hijack the buffer.
+  (it "open of a component on an empty stream does not capture the root"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (node)
+            (setq node (vui-stream-open
+                        s (vui-component 'vui-snode-row :label "solo")))
+            (expect (vui--stream-node-instance node) :to-be nil)
+            (vui-stream-update node (vui-component 'vui-snode-row :label "X"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("[solo]") "n0")))
+        (vui-snode--kill))))
+
+  ;; After finalize the node is inert: update must not setcar a vnode over the
+  ;; still-live row instance in items-rev.
+  (it "update after finalize on a component node is a clean no-op"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (row)
+            (vui-stream-append s (vui-text "header"))
+            (setq row (vui-stream-open
+                       s (vui-component 'vui-snode-row :label "a")))
+            (vui-stream-finalize row)
+            (vui-stream-update row (vui-component 'vui-snode-row :label "ZZ"))
+            (expect (vui-instance-p (car (vui-stream-handle-items-rev s)))
+                    :to-be t)
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
+        (vui-snode--kill)))))
+
 (provide 'vui-stream-node-test)
 ;;; vui-stream-node-test.el ends here
