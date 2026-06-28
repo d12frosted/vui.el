@@ -63,6 +63,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream='s first appended item no longer vanishes when the stream
+  was re-rendered while still empty. An empty live stream was wrongly
+  treated as eligible for the stream-tail patch, so a re-render of the
+  empty stream (for instance a sibling input field clearing its draft on
+  submit) recorded the root as patchable; the first =vui-stream-append= then
+  re-rendered through that patch, which leaves the stream region untouched,
+  and the item - though recorded - was never emitted. An empty stream now
+  re-renders wholesale until it has content.
 - =:should-update= and =:on-update= now actually bind the raw =props= and
   =state= plists, as the documentation has always promised. Previously only
   the named prop/state variables, =prev-props=, and =prev-state= were bound,
@@ -103,6 +111,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 ** Documentation
 
 - Added a runnable =vui-flex= example (=docs/examples/12-flex-layout.el=): a form whose fields stretch to fill the window, the four =:justify= modes, and proportional =:grow= panels.
+- Added two =vui-stream= examples. =docs/examples/13-agent-chat.el= is a
+  scripted agent chat (a transcript streaming above a persistent input box,
+  messages typed out token by token, collapsible tool-call rows).
+  =docs/examples/14-claude-chat.el= is a real, working chat against the
+  =claude -p= CLI: it parses Claude Code's streaming JSON into a live
+  =vui-stream= transcript - the reply grows token by token
+  (=vui-stream-update-last=), reasoning and per-turn details render as
+  collapsible component rows (=vui-stream-append= of a component), the input
+  box stays editable throughout, and =--resume= keeps conversation context
+  across turns. Requires the =claude= CLI on PATH.
 
 * v1.2.0 - 2026-06-24
 

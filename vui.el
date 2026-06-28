@@ -4166,11 +4166,18 @@ vstacks and fragments qualify."
                (t :no))))
     (when (listp children)
       (let ((cs (remq nil children)))
-        (when (and cs
-                   (vui-vnode-stream-p (car cs))
-                   (vui--stream-live-p (vui-vnode-stream-handle (car cs)))
+        (when (and cs (vui-vnode-stream-p (car cs))
                    (not (cl-some #'vui-vnode-stream-p (cdr cs))))
-          (list (vui-vnode-stream-handle (car cs)) (cdr cs)))))))
+          (let ((h (vui-vnode-stream-handle (car cs))))
+            (when (and (vui--stream-live-p h)
+                       ;; The stream must be NON-EMPTY.  The patch leaves the
+                       ;; stream region untouched; for an empty stream that
+                       ;; means the first appended item (which re-renders via
+                       ;; this path) would never be emitted.  Stay wholesale
+                       ;; until there is content; then patch.
+                       (/= (marker-position (vui-stream-handle-region-start h))
+                           (marker-position (vui-stream-handle-region-end h))))
+              (list h (cdr cs)))))))))
 
 (defun vui--render-children-as (vtree children)
   "Render CHILDREN as a container shaped like VTREE; return chars written.

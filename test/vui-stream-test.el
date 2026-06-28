@@ -207,5 +207,23 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
           (vui-st--kill))))))
 
+(describe "vui-stream: first append after the empty stream was re-rendered"
+  ;; Regression: a re-render of the still-EMPTY stream (e.g. a sibling box
+  ;; state change) used to record the stream as stream-tail; the first
+  ;; append then re-rendered via the stream-tail patch, which leaves the
+  ;; (empty) region untouched, so the first item was never emitted.
+  (it "still renders the first item"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "n0")))
+        (unwind-protect
+            (progn
+              ;; re-render while the stream is still empty
+              (vui-update inst (list :stream s :note "n1"))
+              ;; the very first append must actually appear
+              (vui-stream-append s (vui-text "first"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("first") "n1")))
+          (vui-st--kill))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
