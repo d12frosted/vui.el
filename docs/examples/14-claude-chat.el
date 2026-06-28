@@ -8,7 +8,10 @@
 ;; shells out to `claude -p' (Claude Code in print mode) with streaming
 ;; JSON; the response renders live in the transcript:
 ;;
-;;   - the agent's reply grows token by token (`vui-stream-update-last');
+;;   - the agent's reply is a live NODE: `vui-stream-open' returns a ref and
+;;     each token is appended to it with `vui-stream-append-to' (O(delta));
+;;     when the block ends the node is `vui-stream-finalize'd to static text,
+;;     so its marker is released and later appends stay O(1);
 ;;   - its reasoning and tool calls appear as COLLAPSIBLE rows that you can
 ;;     expand/collapse independently (`vui-stream-append' of a component);
 ;;   - the input box below stays put and editable the whole time.
@@ -89,7 +92,7 @@ context-restoring callbacks (see `vui-async-callback')."
                       (when session (list "--resume" session))
                       (list msg)))
         (line-buf "")          ; partial-line accumulator across filter calls
-        (text "")              ; current text block, accumulated
+        (reply nil)            ; live `vui-stream-node' for the current text block
         (think "")             ; current thinking block, accumulated
         (think-row nil)        ; whether a (non-empty) thinking row exists yet
         (finished nil))        ; guard so the turn finishes exactly once
@@ -117,6 +120,10 @@ context-restoring callbacks (see `vui-async-callback')."
                 (let* ((ev (alist-get 'event obj)))
                   (pcase (alist-get 'type ev)
                     ("content_block_start"
+                     ;; A new block ends the previous text reply: finalize it
+                     ;; (drop its marker -> static text) so the live set stays
+                     ;; bounded by concurrency, not by transcript length.
+                     (when reply (vui-stream-finalize reply) (setq reply nil))
                      (let* ((cb (alist-get 'content_block ev)))
                        (pcase (alist-get 'type cb)
                          ("thinking"
@@ -124,8 +131,10 @@ context-restoring callbacks (see `vui-async-callback')."
                           ;; thinking blocks are often empty.
                           (setq think "" think-row nil))
                          ("text"
-                          (setq text "")
-                          (vui-stream-append stream (vui-claude--msg 'agent "")))
+                          ;; Open a live node for the reply; its prefix is the
+                          ;; node's first content and tokens stream in below.
+                          (setq reply (vui-stream-open
+                                       stream (vui-claude--msg 'agent ""))))
                          ("tool_use"
                           (vui-stream-append
                            stream (vui-component 'vui-claude-detail
@@ -135,8 +144,11 @@ context-restoring callbacks (see `vui-async-callback')."
                      (let* ((d (alist-get 'delta ev)))
                        (pcase (alist-get 'type d)
                          ("text_delta"
-                          (setq text (concat text (alist-get 'text d)))
-                          (vui-stream-update-last stream (vui-claude--msg 'agent text)))
+                          ;; The streaming primitive: append only the freshly
+                          ;; arrived tokens to the node, O(delta).
+                          (when reply
+                            (vui-stream-append-to
+                             reply (vui-text (alist-get 'text d)))))
                          ("thinking_delta"
                           (setq think (concat think (alist-get 'thinking d)))
                           (unless (string-empty-p think)
@@ -163,11 +175,17 @@ context-restoring callbacks (see `vui-async-callback')."
                                              (/ ms 1000.0) cost out)
                               :body (format "duration: %s ms\noutput tokens: %s\ncost: $%.4f"
                                             ms out cost)))))
-                (unless finished (setq finished t) (funcall on-done))))))))
+                (unless finished
+                  (setq finished t)
+                  (when reply (vui-stream-finalize reply) (setq reply nil))
+                  (funcall on-done))))))))
      :sentinel
      (vui-async-callback (proc _event)
        (unless (process-live-p proc)
-         (unless finished (setq finished t) (funcall on-done)))))))
+         (unless finished
+           (setq finished t)
+           (when reply (vui-stream-finalize reply) (setq reply nil))
+           (funcall on-done)))))))
 
 ;;; The chat root
 
