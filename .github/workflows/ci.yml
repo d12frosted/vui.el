@@ -13,8 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         emacs_version:
-          - '29.4'
           - '30.2'
+          - snapshot
 
     steps:
       - name: Checkout
