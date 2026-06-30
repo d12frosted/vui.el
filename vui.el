@@ -2675,8 +2675,11 @@ For editable fields, returns the actual text area, not widget decoration."
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
-Returns plist with :path, :index, :identity, :offset for widgets,
-or :line, :column for non-widget positions.
+Returns plist with :path, :index, :identity, :label, :offset for
+widgets, or :line, :column for non-widget positions.  :label is the
+widget's `:tag', kept alongside :identity so a key shared across the
+buffer can be disambiguated on restore (see
+`vui--find-widget-by-identity').
 When START and END are given, widget indexing is scoped to that
 region (used by inline instances, which only manage a region)."
   (let ((widget (widget-at (point)))
@@ -2687,8 +2690,10 @@ region (used by inline instances, which only manage a region)."
                (offset (if widget-start (- pos widget-start) 0))
                (path (widget-get widget :vui-path))
                (index (vui--widget-index widget start end))
-               (identity (vui--widget-identity widget)))
-          (list :path path :index index :identity identity :offset offset))
+               (identity (vui--widget-identity widget))
+               (label (widget-get widget :tag)))
+          (list :path path :index index :identity identity
+                :label label :offset offset))
       ;; No widget at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
@@ -2741,27 +2746,49 @@ tree.  Bounds default to the whole buffer.  Returns nil if not found."
 
 (defun vui--widget-identity (widget)
   "Return a stable identity for WIDGET across re-renders, or nil.
-Uses an explicit field key when present, otherwise the button or
-select label.  Unlike `:vui-path' and the ordinal index, this does
-not change when content is inserted or removed above WIDGET, so it
-lets cursor restoration track the same logical widget after the
-surrounding rows shift."
+Prefers WIDGET's reconciliation key (`:vui-key', set on fields,
+buttons, checkboxes and selects that carry a :key), falling back to
+its label (`:tag').  Unlike `:vui-path' and the ordinal index, neither
+changes when content is inserted or removed above WIDGET, so this lets
+cursor restoration track the same logical widget after the surrounding
+rows shift.  The key wins over the label because it stays stable even
+when the displayed text changes (a counter button, a select showing
+its current choice), and it tells same-label widgets apart.  Keys are
+only unique among siblings, so two lists can reuse one; restoration
+pairs this identity with the saved label to break such ties (see
+`vui--find-widget-by-identity'), so a shared key does not collapse two
+distinct rows.  Returns nil when WIDGET has neither key nor label, so
+an identity-less widget falls back to ordinal position as before."
   (or (widget-get widget :vui-key)
       (widget-get widget :tag)))
 
-(defun vui--find-widget-by-identity (identity &optional start end)
-  "Return the unique widget between START and END whose identity is IDENTITY.
-Identity is computed with `vui--widget-identity'.  Bounds default to
-the whole buffer.  Returns nil when IDENTITY is nil, when nothing
-matches, or when the match is ambiguous (more than one widget shares
-IDENTITY), so callers never guess between look-alikes."
+(defun vui--find-widget-by-identity (identity label &optional start end)
+  "Return the widget between START and END identified by IDENTITY and LABEL.
+IDENTITY is computed with `vui--widget-identity' (the reconciliation
+key, or the label when unkeyed); LABEL is the saved `:tag'.  The key is
+matched first, so a keyed widget is found even when its label changed.
+Keys are only unique among siblings, so a key can repeat across the
+buffer; when more than one widget shares IDENTITY, LABEL breaks the tie
+(the one in another list with a different label is rejected).  Bounds
+default to the whole buffer.  Returns nil when IDENTITY is nil, nothing
+matches, or the choice stays ambiguous, so callers never guess between
+true look-alikes."
   (when identity
     (let ((matches nil))
       (dolist (w (vui--collect-widgets start end))
         (when (equal (vui--widget-identity w) identity)
           (push w matches)))
-      (when (and matches (null (cdr matches)))
-        (car matches)))))
+      (cond
+       ((null matches) nil)
+       ;; Unique by identity: trust it even if the label changed.
+       ((null (cdr matches)) (car matches))
+       ;; Identity collides (a key reused across lists): keep only the
+       ;; widget whose label also matches, and only if that is unique.
+       (t (let ((by-label (seq-filter
+                           (lambda (w) (equal (widget-get w :tag) label))
+                           matches)))
+            (when (and by-label (null (cdr by-label)))
+              (car by-label))))))))
 
 (defun vui--goto-widget-offset (widget offset)
   "Move point into WIDGET, OFFSET characters past its start.
@@ -2783,6 +2810,7 @@ region and fallbacks move to START instead of the buffer beginning."
          (index (plist-get cursor-info :index))
          (offset (plist-get cursor-info :offset))
          (identity (plist-get cursor-info :identity))
+         (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
          (home (or start (point-min)))
@@ -2791,15 +2819,19 @@ region and fallbacks move to START instead of the buffer beginning."
          ;; The path is an ordinal position in the tree, so content
          ;; inserted or removed above point shifts it onto a neighbour.
          ;; When a stable identity was captured, only trust the path if
-         ;; the widget there still matches it; otherwise re-find the
-         ;; widget by identity so point tracks the same logical row.
+         ;; the widget there still matches it (both key and label, so a
+         ;; same-key sibling that slid into the slot is rejected);
+         ;; otherwise re-find the widget by identity so point tracks the
+         ;; same logical row.
          (path-ok (and path-widget
                        (or (null identity)
-                           (equal identity
-                                  (vui--widget-identity path-widget)))))
+                           (and (equal identity
+                                       (vui--widget-identity path-widget))
+                                (equal label
+                                       (widget-get path-widget :tag))))))
          (identity-widget (and (not path-ok)
                                (vui--find-widget-by-identity
-                                identity start end))))
+                                identity label start end))))
     (cond
      ;; Path still resolves to the saved widget (most common, fast path)
      (path-ok
@@ -4778,7 +4810,11 @@ wholesale render's empty-child handling)."
                        (when keymap
                          (list :keymap keymap))))))
         ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path))))
+        (widget-put w :vui-path captured-path)
+        ;; Store reconciliation key so cursor identity can tell
+        ;; same-label buttons apart (see `vui--widget-identity')
+        (when-let* ((key (vui-vnode-button-key vnode)))
+          (widget-put w :vui-key key)))))
 
    ;; Checkbox
    ((vui-vnode-checkbox-p vnode)
@@ -4799,7 +4835,11 @@ wholesale render's empty-child handling)."
                                                 (vui--root-instance captured-root))
                                             (funcall wrapped-change (widget-value widget))))))))
         ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path))
+        (widget-put w :vui-path captured-path)
+        ;; A checkbox has no label, so its :key is its only stable
+        ;; cursor identity (see `vui--widget-identity')
+        (when-let* ((key (vui-vnode-checkbox-key vnode)))
+          (widget-put w :vui-key key)))
       (when label
         (insert " " label))))
 
@@ -4841,7 +4881,12 @@ wholesale render's empty-child handling)."
                                             (funcall wrapped-change (cdr chosen)))))
                               (format "%s" (or current-label "Select...")))))
         ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path))))
+        (widget-put w :vui-path captured-path)
+        ;; Store reconciliation key for cursor identity, since the
+        ;; button label reflects the current selection (see
+        ;; `vui--widget-identity')
+        (when-let* ((key (vui-vnode-select-key vnode)))
+          (widget-put w :vui-key key)))))
 
    ;; Horizontal stack
    ;; Children that render to nothing (e.g., components returning nil)

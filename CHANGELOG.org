@@ -104,16 +104,30 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   a stable identity (a field's =:key=, otherwise the button or select label)
   and, when the saved path resolves to a widget that no longer matches,
   re-finds the original by that identity so point tracks the same logical
-  row. A row with no stable identity (say a checkbox, or a label that
-  encodes state) still falls back to its position, as before. While I was
-  there I fixed the matching viewport bug: =window-start= was restored to
-  its old absolute line, which is wrong once the number of lines above it
-  changed, so the window holding point now restores =window-start= relative
-  to point and the cursor's row stays where it visually was. Only that
-  window follows the cursor; other windows showing the buffer keep their own
-  scroll, so a background re-render does not yank a window the cursor does
-  not live in. Both live in the full-rebuild path and help every consumer,
-  independent of the experimental =vui-incremental-render= flag.
+  row. A row with no stable identity still falls back to its position, as
+  before. While I was there I fixed the matching viewport bug: =window-start=
+  was restored to its old absolute line, which is wrong once the number of
+  lines above it changed, so the window holding point now restores
+  =window-start= relative to point and the cursor's row stays where it
+  visually was. Only that window follows the cursor; other windows showing
+  the buffer keep their own scroll, so a background re-render does not yank a
+  window the cursor does not live in. Both live in the full-rebuild path and
+  help every consumer, independent of the experimental =vui-incremental-render=
+  flag.
+- Cursor tracking across a re-render now follows a widget's =:key=, not just
+  its label, which covers the cases the first pass left on the table.
+  =vui-button=, =vui-checkbox= and =vui-select= already accept a =:key= for
+  reconciliation; that key now also rides on the widget, and
+  =vui--widget-identity= prefers it over the label. So a checkbox (no label
+  to match on) holds the cursor when rows shift above it, two buttons sharing
+  a label are told apart by their keys, and a keyed button or select whose
+  text changes in the same re-render (a counter, a select showing its current
+  choice) is still found by its key instead of drifting off. The key wins
+  because it is the stable identity, and since keys are only unique among
+  siblings (two lists can reuse one), restoration pairs the key with the
+  saved label to break ties, so a shared key no longer drifts the cursor
+  onto a same-key row in another list. Unkeyed widgets are unchanged, matched
+  by label and then position.
 - A =vui-stream='s first appended item no longer vanishes when the stream
   was re-rendered while still empty. An empty live stream was wrongly
   treated as eligible for the stream-tail patch, so a re-render of the
