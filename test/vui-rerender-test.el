@@ -353,5 +353,166 @@
               (expect (point) :to-equal 4))
           (kill-buffer "*rr-noop*"))))))
 
+;;; Cursor identity across a re-render that shifts content above point
+
+(describe "re-render preserves cursor identity"
+  (it "keeps point on the same widget when a row is inserted above it"
+    ;; A dashboard-style root: a fixed head row, an optional row, and a
+    ;; target row.  Expanding inserts the optional row ABOVE target,
+    ;; shifting target's buffer position and its :vui-path/ordinal index.
+    ;; Point must track the SAME logical widget, not drift onto the
+    ;; newly inserted neighbour that now occupies the old path.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-insert ()
+        :state ((expanded nil))
+        :render (vui-vstack
+                  (vui-button "head")
+                  (when expanded (vui-button "extra"))
+                  (vui-button "target")))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-insert) "*rr-ci*")))
+        (unwind-protect
+            (with-current-buffer "*rr-ci*"
+              (expect (buffer-string) :to-equal "[head]\n[target]")
+              ;; Park point on the "target" button (collapsed path (1)).
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(1)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (let ((vui--current-instance inst)) (vui-set-state :expanded t))
+              (expect (buffer-string) :to-equal "[head]\n[extra]\n[target]")
+              ;; The old path (1) now resolves to "extra"; without stable
+              ;; identity point drifts there.
+              (expect (widget-get (widget-at (point)) :tag)
+                      :to-equal "target"))
+          (kill-buffer "*rr-ci*")))))
+
+  (it "keeps point on the same widget when a row is removed above it"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-remove ()
+        :state ((expanded t))
+        :render (vui-vstack
+                  (vui-button "head")
+                  (when expanded (vui-button "extra"))
+                  (vui-button "target")))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-remove) "*rr-cr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cr*"
+              (expect (buffer-string) :to-equal "[head]\n[extra]\n[target]")
+              ;; Park point on "target" (expanded path (2)).
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(2)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (let ((vui--current-instance inst)) (vui-set-state :expanded nil))
+              (expect (buffer-string) :to-equal "[head]\n[target]")
+              ;; The old path (2)/index 2 no longer exists; point must find
+              ;; "target" by identity rather than falling back to the head.
+              (expect (widget-get (widget-at (point)) :tag)
+                      :to-equal "target"))
+          (kill-buffer "*rr-cr*")))))
+
+  (it "keeps point on the same field when a row is inserted above it"
+    ;; Same shift, but the parked widget is an editable field, so the
+    ;; identity comes from its :key rather than a button label.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-field ()
+        :state ((expanded nil))
+        :render (vui-vstack
+                  (when expanded (vui-button "extra"))
+                  (vui-field :key 'target :value "abc" :size 6)))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-field) "*rr-cf2*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cf2*"
+              (let ((field (vui--find-widget-by-path '(0))))
+                (goto-char (1+ (widget-field-start field))))
+              (let ((vui--current-instance inst)) (vui-set-state :expanded t))
+              ;; Point must sit inside the target field, not on "extra".
+              (let ((w (widget-at (point))))
+                (expect (widget-get w :vui-key) :to-equal 'target)))
+          (kill-buffer "*rr-cf2*"))))))
+
+;;; Viewport stays put when rows shift above point
+
+(describe "re-render preserves the viewport"
+  (it "keeps the cursor on the same screen row when rows shift above it"
+    ;; window-start is restored relative to point, so inserting rows
+    ;; above the cursor scrolls the viewport by the same amount: the
+    ;; cursor's widget keeps the screen row it had, no visible jump.
+    ;; Needs a live window, so the buffer is shown in the selected one.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-viewport ()
+        :state ((expanded nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (when expanded
+                          (list (vui-button "x1")
+                                (vui-button "x2")
+                                (vui-button "x3")))
+                        (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                                (number-sequence 1 40)))))
+      (let ((inst (vui-mount (vui-component 'rr-viewport) "*rr-vp*")))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-vp*"))
+                (with-current-buffer "*rr-vp*"
+                  ;; Scroll down ten lines, then park point on "row20".
+                  (set-window-start
+                   win (save-excursion (goto-char (point-min))
+                                       (forward-line 9)
+                                       (point)))
+                  (goto-char (point-min))
+                  (search-forward "[row20]")
+                  (goto-char (match-beginning 0))
+                  (let ((screen-row (- (line-number-at-pos (point))
+                                       (line-number-at-pos
+                                        (window-start win)))))
+                    (expect (widget-get (widget-at (point)) :tag)
+                            :to-equal "row20")
+                    ;; Expand: three rows appear above both the viewport
+                    ;; and the cursor.
+                    (let ((vui--current-instance inst))
+                      (vui-set-state :expanded t))
+                    ;; Point still on row20 (identity), and the viewport
+                    ;; scrolled with it so the screen row is unchanged.
+                    (expect (widget-get (widget-at (point)) :tag)
+                            :to-equal "row20")
+                    (expect (- (line-number-at-pos (point))
+                               (line-number-at-pos (window-start win)))
+                            :to-equal screen-row)))))
+          (kill-buffer "*rr-vp*")))))
+
+  (it "leaves an unfocused window's scroll alone on re-render"
+    ;; Only the window holding point follows the cursor; a second window
+    ;; showing the same buffer (scrolled elsewhere, e.g. one a background
+    ;; re-render is not focused on) keeps its own window-start.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-viewport-mw ()
+        :state ((n 0))
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (i) (vui-button (format "row%d-%d" i n)))
+                               (number-sequence 1 80))))
+      (let ((inst (vui-mount (vui-component 'rr-viewport-mw) "*rr-vpm*")))
+        (unwind-protect
+            (save-window-excursion
+              (let* ((w1 (selected-window)))
+                (set-window-buffer w1 (get-buffer "*rr-vpm*"))
+                (let ((w2 (split-window w1)))
+                  (with-current-buffer "*rr-vpm*"
+                    ;; Focused window scrolled near the top; unfocused
+                    ;; window scrolled far down.
+                    (set-window-start
+                     w1 (save-excursion (goto-char (point-min))
+                                        (forward-line 9) (point)))
+                    (goto-char (point-min))
+                    (set-window-point w1 (point))
+                    (set-window-start
+                     w2 (save-excursion (goto-char (point-min))
+                                        (forward-line 54) (point)))
+                    (let ((w2-before (line-number-at-pos (window-start w2))))
+                      (vui-rerender inst)
+                      ;; The unfocused window did not get yanked to point.
+                      (expect (line-number-at-pos (window-start w2))
+                              :to-equal w2-before))))))
+          (kill-buffer "*rr-vpm*"))))))
+
 (provide 'vui-rerender-test)
 ;;; vui-rerender-test.el ends here

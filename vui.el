@@ -2400,27 +2400,53 @@ Returns a plist with :status, :data, and :error."
       (clrhash cache))))
 
 (defun vui--save-window-starts (buffer)
-  "Save `window-start' line numbers for all windows showing BUFFER.
-Returns alist of (WINDOW . LINE-NUMBER)."
-  (let ((result nil))
+  "Save viewport restoration data for all windows showing BUFFER.
+Returns an alist of (WINDOW . SPEC).  The window that holds point (the
+selected window when it shows BUFFER) gets (relative . DELTA), where
+DELTA is how many lines `window-start' sits above point; restoring by
+this delta keeps the cursor on the same screen row even when the
+re-render changes how many lines precede it, so the viewport does not
+visibly jump.  Every other window gets (absolute . LINE), its own
+`window-start' line, so a window the cursor does not live in (for
+instance one a background re-render is not focused on) keeps its own
+scroll position instead of being yanked to point.  See
+`vui--restore-window-starts'."
+  (let* ((selected (selected-window))
+         (cursor-window (and (eq (window-buffer selected) buffer) selected))
+         (point-line (line-number-at-pos (point)))
+         (result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
-      (with-selected-window window
-        (let ((line (line-number-at-pos (window-start window))))
-          (push (cons window line) result))))
+      (let ((start-line (line-number-at-pos (window-start window))))
+        (push (cons window
+                    (if (eq window cursor-window)
+                        (cons 'relative (max 0 (- point-line start-line)))
+                      (cons 'absolute start-line)))
+              result)))
     result))
 
 (defun vui--restore-window-starts (window-info)
-  "Restore `window-start' positions from WINDOW-INFO.
-WINDOW-INFO is alist of (WINDOW . LINE-NUMBER)."
+  "Restore viewports saved by `vui--save-window-starts'.
+WINDOW-INFO is an alist of (WINDOW . SPEC).  Point is assumed to be
+already restored to the cursor's widget.  A (relative . DELTA) spec
+places `window-start' DELTA lines above point, keeping the cursor on
+the screen row it had; an (absolute . LINE) spec restores that
+window's own `window-start' line unchanged."
   (dolist (entry window-info)
     (let ((window (car entry))
-          (line (cdr entry)))
+          (spec (cdr entry)))
       (when (window-live-p window)
-        (with-selected-window window
-          (save-excursion
-            (goto-char (point-min))
-            (forward-line (1- line))
-            (set-window-start window (point))))))))
+        (let ((start (pcase spec
+                       (`(relative . ,delta)
+                        (save-excursion
+                          (forward-line (- delta))
+                          (line-beginning-position)))
+                       (`(absolute . ,line)
+                        (save-excursion
+                          (goto-char (point-min))
+                          (forward-line (1- line))
+                          (point))))))
+          (when start
+            (set-window-start window start)))))))
 
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.
@@ -2649,7 +2675,7 @@ For editable fields, returns the actual text area, not widget decoration."
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
-Returns plist with :path, :index, :offset for widgets,
+Returns plist with :path, :index, :identity, :offset for widgets,
 or :line, :column for non-widget positions.
 When START and END are given, widget indexing is scoped to that
 region (used by inline instances, which only manage a region)."
@@ -2660,8 +2686,9 @@ region (used by inline instances, which only manage a region)."
                (widget-start (car bounds))
                (offset (if widget-start (- pos widget-start) 0))
                (path (widget-get widget :vui-path))
-               (index (vui--widget-index widget start end)))
-          (list :path path :index index :offset offset))
+               (index (vui--widget-index widget start end))
+               (identity (vui--widget-identity widget)))
+          (list :path path :index index :identity identity :offset offset))
       ;; No widget at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
@@ -2712,6 +2739,42 @@ tree.  Bounds default to the whole buffer.  Returns nil if not found."
           (throw 'found w)))
       nil)))
 
+(defun vui--widget-identity (widget)
+  "Return a stable identity for WIDGET across re-renders, or nil.
+Uses an explicit field key when present, otherwise the button or
+select label.  Unlike `:vui-path' and the ordinal index, this does
+not change when content is inserted or removed above WIDGET, so it
+lets cursor restoration track the same logical widget after the
+surrounding rows shift."
+  (or (widget-get widget :vui-key)
+      (widget-get widget :tag)))
+
+(defun vui--find-widget-by-identity (identity &optional start end)
+  "Return the unique widget between START and END whose identity is IDENTITY.
+Identity is computed with `vui--widget-identity'.  Bounds default to
+the whole buffer.  Returns nil when IDENTITY is nil, when nothing
+matches, or when the match is ambiguous (more than one widget shares
+IDENTITY), so callers never guess between look-alikes."
+  (when identity
+    (let ((matches nil))
+      (dolist (w (vui--collect-widgets start end))
+        (when (equal (vui--widget-identity w) identity)
+          (push w matches)))
+      (when (and matches (null (cdr matches)))
+        (car matches)))))
+
+(defun vui--goto-widget-offset (widget offset)
+  "Move point into WIDGET, OFFSET characters past its start.
+Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0."
+  (let* ((bounds (vui--widget-bounds widget))
+         (widget-start (car bounds))
+         (widget-end (cdr bounds)))
+    (when (and widget-start widget-end)
+      ;; Cap at (1- end) because bounds are exclusive on the right.
+      (goto-char (max widget-start
+                      (min (+ widget-start (or offset 0))
+                           (1- widget-end)))))))
+
 (defun vui--restore-cursor-position (cursor-info &optional start end)
   "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'.
 When START and END are given, widget lookups are scoped to that
@@ -2719,34 +2782,36 @@ region and fallbacks move to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
          (index (plist-get cursor-info :index))
          (offset (plist-get cursor-info :offset))
+         (identity (plist-get cursor-info :identity))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
          (home (or start (point-min)))
          ;; Single lookup for path-based matching
-         (path-widget (and path (vui--find-widget-by-path path start end))))
+         (path-widget (and path (vui--find-widget-by-path path start end)))
+         ;; The path is an ordinal position in the tree, so content
+         ;; inserted or removed above point shifts it onto a neighbour.
+         ;; When a stable identity was captured, only trust the path if
+         ;; the widget there still matches it; otherwise re-find the
+         ;; widget by identity so point tracks the same logical row.
+         (path-ok (and path-widget
+                       (or (null identity)
+                           (equal identity
+                                  (vui--widget-identity path-widget)))))
+         (identity-widget (and (not path-ok)
+                               (vui--find-widget-by-identity
+                                identity start end))))
     (cond
-     ;; Try path-based matching first (most robust)
-     (path-widget
-      (let* ((bounds (vui--widget-bounds path-widget))
-             (widget-start (car bounds))
-             (widget-end (cdr bounds)))
-        (when (and widget-start widget-end)
-          ;; Cap at (1- end) because bounds are exclusive on right
-          (goto-char (max widget-start
-                          (min (+ widget-start offset) (1- widget-end)))))))
+     ;; Path still resolves to the saved widget (most common, fast path)
+     (path-ok
+      (vui--goto-widget-offset path-widget offset))
+     ;; Path drifted: relocate the same widget by stable identity
+     (identity-widget
+      (vui--goto-widget-offset identity-widget offset))
      ;; Fall back to index-based matching
      (index
-      (let* ((widgets (vui--collect-widgets start end))
-             (widget (nth index widgets)))
+      (let ((widget (nth index (vui--collect-widgets start end))))
         (if widget
-            (let* ((bounds (vui--widget-bounds widget))
-                   (widget-start (car bounds))
-                   (widget-end (cdr bounds)))
-              (when (and widget-start widget-end)
-                ;; Cap at (1- end) because bounds are exclusive on right
-                (goto-char (max widget-start
-                                (min (+ widget-start offset)
-                                     (1- widget-end))))))
+            (vui--goto-widget-offset widget offset)
           (goto-char home))))
      ;; Fall back to line/column for non-widget positions
      ((and line column)
