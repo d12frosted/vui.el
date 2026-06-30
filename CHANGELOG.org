@@ -91,6 +91,29 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Full-buffer re-renders no longer drop point onto the wrong widget (and
+  scroll the window to chase it) when content shifts above the cursor. A
+  jump I kept hitting in a dashboard of buttons and collapsible sections:
+  expanding a section re-renders the whole root, and my cursor would land a
+  row or two off, sometimes off-screen so Emacs re-scrolled to find it. I
+  traced it to cursor restoration matching widgets by =:vui-path= (with an
+  ordinal index fallback), both of which are just positions in the tree;
+  =vui-vstack= drops nil children, so a conditional row turning on shifts
+  every following sibling's path and index by one, and restore parked point
+  on the neighbour that had slid into the old slot. Restore now also records
+  a stable identity (a field's =:key=, otherwise the button or select label)
+  and, when the saved path resolves to a widget that no longer matches,
+  re-finds the original by that identity so point tracks the same logical
+  row. A row with no stable identity (say a checkbox, or a label that
+  encodes state) still falls back to its position, as before. While I was
+  there I fixed the matching viewport bug: =window-start= was restored to
+  its old absolute line, which is wrong once the number of lines above it
+  changed, so the window holding point now restores =window-start= relative
+  to point and the cursor's row stays where it visually was. Only that
+  window follows the cursor; other windows showing the buffer keep their own
+  scroll, so a background re-render does not yank a window the cursor does
+  not live in. Both live in the full-rebuild path and help every consumer,
+  independent of the experimental =vui-incremental-render= flag.
 - A =vui-stream='s first appended item no longer vanishes when the stream
   was re-rendered while still empty. An empty live stream was wrongly
   treated as eligible for the stream-tail patch, so a re-render of the
