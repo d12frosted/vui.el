@@ -427,7 +427,125 @@
               ;; Point must sit inside the target field, not on "extra".
               (let ((w (widget-at (point))))
                 (expect (widget-get w :vui-key) :to-equal 'target)))
-          (kill-buffer "*rr-cf2*"))))))
+          (kill-buffer "*rr-cf2*")))))
+
+  (it "tells two same-label buttons apart by :key when a row shifts in"
+    ;; Both rows render the label "dup", so the label alone is ambiguous;
+    ;; only the reconciliation :key distinguishes them.  Point must stay
+    ;; on the keyed button it started on, not the same-label neighbour.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-dup-key ()
+        :state ((expanded nil))
+        :render (vui-vstack
+                  (when expanded (vui-button "x"))
+                  (vui-button "dup" :key 'b1)
+                  (vui-button "dup" :key 'b2)))
+      (let ((inst (vui-mount (vui-component 'rr-dup-key) "*rr-dk*")))
+        (unwind-protect
+            (with-current-buffer "*rr-dk*"
+              ;; Park on the SECOND "dup" (key b2, collapsed path (1)).
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(1)))))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b2)
+              (let ((vui--current-instance inst)) (vui-set-state :expanded t))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b2))
+          (kill-buffer "*rr-dk*")))))
+
+  (it "keeps point on a keyed button whose label changes as a row shifts in"
+    ;; ONE re-render both inserts the row above and rewrites the label, so
+    ;; the label the cursor was saved with no longer exists anywhere.  The
+    ;; :key wins over the label and tracks the button; matching on the
+    ;; label paired with the key (which would drift here) is what this
+    ;; pins down.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-counter-key ()
+        :state ((n 5))
+        :render (vui-vstack
+                  (when (> n 5) (vui-button "x"))
+                  (vui-button (format "count %d" n) :key 'counter)))
+      (let ((inst (vui-mount (vui-component 'rr-counter-key) "*rr-ck*")))
+        (unwind-protect
+            (with-current-buffer "*rr-ck*"
+              (expect (buffer-string) :to-equal "[count 5]")
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(0)))))
+              (expect (widget-get (widget-at (point)) :vui-key)
+                      :to-equal 'counter)
+              ;; Single state change: inserts "x" AND relabels the counter.
+              (let ((vui--current-instance inst)) (vui-set-state :n 6))
+              (expect (buffer-string) :to-equal "[x]\n[count 6]")
+              (expect (widget-get (widget-at (point)) :vui-key)
+                      :to-equal 'counter))
+          (kill-buffer "*rr-ck*")))))
+
+  (it "keeps point on a keyed checkbox when a row is inserted above it"
+    ;; A checkbox carries no label, so before keys reached the widget it
+    ;; had no stable identity and drifted; its :key now anchors it.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cb-key ()
+        :state ((expanded nil))
+        :render (vui-vstack
+                  (when expanded (vui-button "x"))
+                  (vui-checkbox :key 'agree :label "Agree")))
+      (let ((inst (vui-mount (vui-component 'rr-cb-key) "*rr-cbk*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cbk*"
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(0)))))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'agree)
+              (let ((vui--current-instance inst)) (vui-set-state :expanded t))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'agree))
+          (kill-buffer "*rr-cbk*")))))
+
+  (it "keeps point on a keyed select as its label shifts in a single render"
+    ;; A select's visible text is its current selection.  One state change
+    ;; inserts a row above and changes the selection, so the :key on the
+    ;; select widget is what keeps the cursor on it.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-sel-key ()
+        :state ((val "a"))
+        :render (vui-vstack
+                  (when (equal val "b") (vui-button "x"))
+                  (vui-select :key 'sel :value val
+                              :options '("a" "b"))))
+      (let ((inst (vui-mount (vui-component 'rr-sel-key) "*rr-sk2*")))
+        (unwind-protect
+            (with-current-buffer "*rr-sk2*"
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(0)))))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'sel)
+              (let ((vui--current-instance inst)) (vui-set-state :val "b"))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'sel))
+          (kill-buffer "*rr-sk2*")))))
+
+  (it "tells same-:key widgets in different lists apart by label"
+    ;; Keys are only unique among siblings, so two separate lists can reuse
+    ;; one key.  When a row shifts the saved path onto the same-key sibling,
+    ;; the key alone is ambiguous; the label breaks the tie so point stays
+    ;; on the row it started on instead of jumping to the other list.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cross-key ()
+        :state ((expanded nil))
+        :render (vui-vstack
+                  (when expanded (vui-button "top"))
+                  (vui-vstack (vui-button "Apple" :key 'item-1))
+                  (vui-vstack (vui-button "Banana" :key 'item-1))))
+      (let ((inst (vui-mount (vui-component 'rr-cross-key) "*rr-xk*")))
+        (unwind-protect
+            (with-current-buffer "*rr-xk*"
+              (expect (buffer-string) :to-equal "[Apple]\n[Banana]")
+              ;; Park on "Banana" (second list, path (1 0)); both buttons
+              ;; carry key item-1.
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(1 0)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "Banana")
+              (let ((vui--current-instance inst)) (vui-set-state :expanded t))
+              (expect (buffer-string) :to-equal "[top]\n[Apple]\n[Banana]")
+              ;; The old path (1 0) now resolves to "Apple" (same key); point
+              ;; must follow "Banana", not drift onto the look-alike.
+              (expect (widget-get (widget-at (point)) :tag)
+                      :to-equal "Banana"))
+          (kill-buffer "*rr-xk*"))))))
 
 ;;; Viewport stays put when rows shift above point
 
