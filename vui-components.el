@@ -185,7 +185,7 @@ Returns nil if valid, or an error message string if invalid."
 (vui-defcomponent vui-collapsible--internal
     (title expanded on-toggle title-face
      expanded-indicator collapsed-indicator indent initially-expanded
-     toggle-key)
+     toggle-key header-right header-width)
   "Internal component for collapsible sections.
 
 TITLE is the header text (required).
@@ -197,7 +197,11 @@ COLLAPSED-INDICATOR is shown when collapsed (default \"▶\").
 INDENT is the content indentation level (default 2).
 INITIALLY-EXPANDED sets initial state for uncontrolled mode.
 TOGGLE-KEY is the header toggle's cursor-identity key; it falls back
-to TITLE so the ▶/▼ indicator flip does not move point off the toggle."
+to TITLE so the ▶/▼ indicator flip does not move point off the toggle.
+HEADER-RIGHT is a vnode rendered right-aligned opposite the toggle; when
+set the header becomes a `vui-flex' with `:justify :space-between'.
+HEADER-WIDTH is the width for that alignment (see `vui-flex' `:width',
+default `fill-column'); it only matters when HEADER-RIGHT is set."
 
   :state ((internal-expanded :unset))
 
@@ -217,25 +221,43 @@ to TITLE so the ▶/▼ indicator flip does not move point off the toggle."
          ;; Indentation: own indent + accumulated from parent
          (own-indent (or indent 2))
          (parent-indent (vui-use-context vui-collapsible-indent-context))
-         (total-indent (+ parent-indent own-indent)))
+         (total-indent (+ parent-indent own-indent))
+         ;; The toggle - plain clickable text (no indent - inherits from
+         ;; parent).  The ▶/▼ indicator is baked into the label, so the
+         ;; label changes on every toggle.  Give the button a stable :key
+         ;; (the caller's key, or the title as a fallback) so cursor
+         ;; restoration keeps point on the toggle across expand/collapse
+         ;; instead of losing it when the label flips (see
+         ;; `vui--widget-identity').  Built here so it is byte-for-byte the
+         ;; same whether or not it ends up inside the rich-header flex.
+         (toggle (vui-button (format "%s %s" indicator title)
+                   :no-decoration t
+                   :face title-face
+                   :help-echo nil
+                   :key (or toggle-key title)
+                   :on-click (lambda ()
+                               (let ((new-state (not is-expanded)))
+                                 (unless is-controlled
+                                   (vui-set-state :internal-expanded new-state))
+                                 (when on-toggle
+                                   (funcall on-toggle new-state))))))
+         ;; With :header-right, the header is a space-between flex (toggle
+         ;; on the left, adornment on the right); without it, the header is
+         ;; exactly the toggle button, unchanged from before.  The header
+         ;; sits at PARENT-INDENT (the body goes deeper, at TOTAL-INDENT),
+         ;; so tell the flex to subtract PARENT-INDENT from its width: the
+         ;; right edge then lands at HEADER-WIDTH no matter how deeply the
+         ;; collapsible is nested, instead of drifting past it by the
+         ;; indent.
+         (header (if header-right
+                     (vui-flex :width (or header-width 'fill-column)
+                               :justify :space-between
+                               :indent parent-indent
+                       toggle
+                       header-right)
+                   toggle)))
     (vui-fragment
-     ;; Header - plain clickable text (no indent - inherits from parent)
-     ;; The ▶/▼ indicator is baked into the label, so the label changes on
-     ;; every toggle.  Give the button a stable :key (the caller's key, or
-     ;; the title as a fallback) so cursor restoration keeps point on the
-     ;; toggle across expand/collapse instead of losing it when the label
-     ;; flips (see `vui--widget-identity').
-     (vui-button (format "%s %s" indicator title)
-       :no-decoration t
-       :face title-face
-       :help-echo nil
-       :key (or toggle-key title)
-       :on-click (lambda ()
-                   (let ((new-state (not is-expanded)))
-                     (unless is-controlled
-                       (vui-set-state :internal-expanded new-state))
-                     (when on-toggle
-                       (funcall on-toggle new-state)))))
+     header
      ;; Content (indented, only when expanded)
      ;; Use total-indent directly so nested collapsibles render at correct level
      ;; Provide accumulated indent to nested collapsibles via context
@@ -268,6 +290,17 @@ Options:
              Pass an explicit KEY when several collapsibles share a
              title, otherwise their toggles stay ambiguous and cursor
              tracking falls back to position.
+  :header-right VNODE - content shown right-aligned in the header row,
+             opposite the toggle (a count, a badge, a status).  It is
+             header adornment, always visible, distinct from the body
+             children shown only when expanded, and it is presentational
+             (the toggle stays the clickable part).  When set the header
+             becomes a space-between `vui-flex'; when absent the header is
+             just the toggle, unchanged.
+  :header-width WIDTH - width for the header alignment, anything
+             `vui-flex' `:width' accepts (a number, a function, `window',
+             or `fill-column'); defaults to `fill-column'.  Only relevant
+             with :header-right.
 
 Usage:
   (vui-collapsible :title \"Section\" child1 child2)
@@ -281,6 +314,8 @@ Usage:
         (collapsed-indicator nil)
         (indent nil)
         (key nil)
+        (header-right nil)
+        (header-width nil)
         (children nil))
     ;; Parse keyword arguments
     (while (and args (keywordp (car args)))
@@ -293,7 +328,9 @@ Usage:
         (:expanded-indicator (setq expanded-indicator (pop args)))
         (:collapsed-indicator (setq collapsed-indicator (pop args)))
         (:indent (setq indent (pop args)))
-        (:key (setq key (pop args)))))
+        (:key (setq key (pop args)))
+        (:header-right (setq header-right (pop args)))
+        (:header-width (setq header-width (pop args)))))
     ;; Remaining args are children
     (setq children (remq nil (flatten-list args)))
     (vui-component 'vui-collapsible--internal
@@ -310,6 +347,8 @@ Usage:
       ;; inside the component) so its cursor identity survives the label
       ;; flip; this is separate from the reconciliation :key above.
       :toggle-key key
+      :header-right header-right
+      :header-width header-width
       :children children)))
 
 ;;; Semantic Text Faces
