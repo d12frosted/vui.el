@@ -409,6 +409,88 @@
                       :to-equal "target"))
           (kill-buffer "*rr-cr*")))))
 
+  (it "drops point onto the next widget when the one under it is removed"
+    ;; The re-render deletes the row point sits on together with a
+    ;; sibling (a fix that clears a note's last violation takes the whole
+    ;; note), so the saved ordinal index now overshoots the widget list.
+    ;; Point must land on the neighbour that took its place, not at the
+    ;; top of the buffer.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-self-remove ()
+        :state ((show t))
+        :render (apply #'vui-vstack
+                       (append (list (vui-button "head"))
+                               (when show (list (vui-button "t1")
+                                                (vui-button "t2")))
+                               (list (vui-button "tail")))))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-self-remove) "*rr-csr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-csr*"
+              (expect (buffer-string) :to-equal "[head]\n[t1]\n[t2]\n[tail]")
+              ;; Park point on t2 (the second row that will be removed).
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(2)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "t2")
+              (let ((vui--current-instance inst)) (vui-set-state :show nil))
+              (expect (buffer-string) :to-equal "[head]\n[tail]")
+              ;; t1 and t2 are gone; point rides to the row below them.
+              (expect (widget-at (point)) :not :to-be nil)
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "tail"))
+          (kill-buffer "*rr-csr*")))))
+
+  (it "drops point onto the previous widget when the last one is removed"
+    ;; Removing the final widget leaves nothing at or after the saved
+    ;; position, so point falls back to the previous widget.  Two leading
+    ;; rows keep that previous widget (second) distinct from point-min
+    ;; (first), so this fails if point drops to the top instead.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-last-remove ()
+        :state ((show t))
+        :render (vui-vstack
+                  (vui-button "first")
+                  (vui-button "second")
+                  (when show (vui-button "target"))))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-last-remove) "*rr-clr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-clr*"
+              (expect (buffer-string) :to-equal "[first]\n[second]\n[target]")
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(2)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (let ((vui--current-instance inst)) (vui-set-state :show nil))
+              (expect (buffer-string) :to-equal "[first]\n[second]")
+              ;; target was last; point falls back to the previous widget,
+              ;; not to point-min (which would be "first").
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "second"))
+          (kill-buffer "*rr-clr*")))))
+
+  (it "follows to the successor at the same path when a middle widget goes"
+    ;; The removed widget was not last, so a sibling slides up into its
+    ;; tree path and point lands on that successor.  This exercises the
+    ;; `path-widget' branch of restoration; for a single leaf removal it
+    ;; agrees with the position/index fallbacks, so it is coverage of that
+    ;; branch rather than a guard that fails without it (the multi-widget
+    ;; and last-widget removal specs above are the guards).
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-mid-remove ()
+        :state ((show t))
+        :render (vui-vstack
+                  (vui-button "head")
+                  (when show (vui-button "mid"))
+                  (vui-button "tail")))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-mid-remove) "*rr-cmr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cmr*"
+              (expect (buffer-string) :to-equal "[head]\n[mid]\n[tail]")
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(1)))))
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "mid")
+              (let ((vui--current-instance inst)) (vui-set-state :show nil))
+              (expect (buffer-string) :to-equal "[head]\n[tail]")
+              ;; tail slid into mid's path (1); point follows to it.
+              (expect (widget-get (widget-at (point)) :tag) :to-equal "tail"))
+          (kill-buffer "*rr-cmr*")))))
+
   (it "keeps point on the same field when a row is inserted above it"
     ;; Same shift, but the parked widget is an editable field, so the
     ;; identity comes from its :key rather than a button label.
@@ -546,6 +628,62 @@
               (expect (widget-get (widget-at (point)) :tag)
                       :to-equal "Banana"))
           (kill-buffer "*rr-xk*"))))))
+
+(describe "vui-goto-key"
+  (it "moves point onto the widget carrying KEY and returns its position"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent gk-comp ()
+        :render (vui-vstack
+                  (vui-button "one" :key 'a)
+                  (vui-button "two" :key 'b)
+                  (vui-button "three" :key 'c)))
+      (let ((inst (vui-mount (vui-component 'gk-comp) "*gk*")))
+        (ignore inst)
+        (unwind-protect
+            (with-current-buffer "*gk*"
+              (goto-char (point-min))
+              (let ((pos (vui-goto-key 'b)))
+                (expect pos :to-equal (point))
+                (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b))
+              ;; Unknown key: point stays put, returns nil.
+              (goto-char (point-max))
+              (let ((before (point)))
+                (expect (vui-goto-key 'missing) :to-be nil)
+                (expect (point) :to-equal before)))
+          (kill-buffer "*gk*")))))
+
+  (it "matches list keys with equal, not eq"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent gk-list ()
+        :render (vui-vstack
+                  (vui-button "x" :key (list 'note "id-1"))
+                  (vui-button "y" :key (list 'note "id-2"))))
+      (let ((inst (vui-mount (vui-component 'gk-list) "*gkl*")))
+        (ignore inst)
+        (unwind-protect
+            (with-current-buffer "*gkl*"
+              (expect (vui-goto-key (list 'note "id-2")) :to-be-truthy)
+              (expect (widget-get (widget-at (point)) :vui-key)
+                      :to-equal (list 'note "id-2")))
+          (kill-buffer "*gkl*")))))
+
+  (it "treats a nil key as a miss, not a match on unkeyed widgets"
+    ;; Unkeyed widgets store a nil :vui-key, so a nil KEY must match none
+    ;; of them rather than jumping to the first.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent gk-nil ()
+        :render (vui-vstack
+                  (vui-button "plain-1")
+                  (vui-button "plain-2")))
+      (let ((inst (vui-mount (vui-component 'gk-nil) "*gkn*")))
+        (ignore inst)
+        (unwind-protect
+            (with-current-buffer "*gkn*"
+              (goto-char (point-max))
+              (let ((before (point)))
+                (expect (vui-goto-key nil) :to-be nil)
+                (expect (point) :to-equal before)))
+          (kill-buffer "*gkn*"))))))
 
 ;;; Viewport stays put when rows shift above point
 

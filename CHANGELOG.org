@@ -9,6 +9,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-goto-key= moves point onto the widget carrying a given reconciliation
+  =:key= (matched with =equal=), returning its position or nil. Handy for
+  steering point to a known row, e.g. parking it on a stable anchor before a
+  refresh so cursor restoration has somewhere to return to.
+
 - =vui-collapsible= takes a rich header. =:header-right= puts a vnode (a
   count, a badge, a status) right-aligned in the header row opposite the
   toggle, and =:header-width= (anything =vui-flex='s =:width= accepts, default
@@ -106,6 +111,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Re-render no longer drops point to the top of the buffer when the row it was
+  on is removed. Cursor restoration first looks for the saved widget by tree
+  path and by =:key=/label; when both miss because the widget is genuinely gone
+  (a list item deleted, a fix that clears its own row), it used to fall through
+  to an ordinal index that overshoots after a deletion and, once that index
+  ran off the end of the now-shorter widget list, gave up at =point-min=. It
+  now follows the successor that slid up into the removed widget's tree path,
+  or, when nothing took that slot (the removed widget was last in its
+  container), lands on the nearest surviving widget by position. So point rides
+  to the next row instead of jumping home. Collapsible dashboards and lists
+  that delete a row under the cursor were the ones feeling this.
 - =vui-collapsible= now keeps point on its header toggle across expand and
   collapse, out of the box. The toggle bakes the ▶/▼ indicator into its
   label, so the label flips on every toggle, and the button carried no
