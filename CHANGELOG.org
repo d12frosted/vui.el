@@ -9,6 +9,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-collapsible= takes a rich header. =:header-right= puts a vnode (a
+  count, a badge, a status) right-aligned in the header row opposite the
+  toggle, and =:header-width= (anything =vui-flex='s =:width= accepts, default
+  =fill-column=) sets what it aligns to. I wanted a dashboard section that
+  reads "▶ SchemaName ............ 3 invalid", toggle on the left, count pinned
+  to the window edge, without hand-rolling the header and losing the toggle's
+  cursor identity to do it. With =:header-right= the header becomes a
+  space-between =vui-flex=; without it the header is exactly the toggle as
+  before, byte for byte, so nothing that does not ask for a right side changes.
+  The right content is adornment: always shown in the header row (not a body
+  child that hides when collapsed) and presentational (the toggle stays the
+  only clickable part). The toggle keeps the stable =:key= from #103 so point
+  rides it across expand and collapse, and a nested collapsible's header
+  subtracts its own indent so the right edge still lands at =:header-width=
+  however deep it sits.
 - =vui-stream= - an imperative, append-only region for unbounded streaming
   content (chat transcripts, build logs), the one shape the declarative
   "re-render from state" model is too slow for: it rebuilds all N items on

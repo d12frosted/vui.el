@@ -635,7 +635,132 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (expect (buffer-string) :to-match "inside-foo")
                 (expect (widget-get (widget-at (point)) :tag)
                         :to-equal "▶ Bar"))
-            (kill-buffer "*cc-sib*")))))))
+            (kill-buffer "*cc-sib*"))))))
+
+  (describe "rich header"
+    (it "right-aligns :header-right at :header-width via space-between"
+      (vui-defcomponent cc-rich-align ()
+        :render
+        (vui-collapsible :title "Schema"
+                         :header-width 20
+                         :header-right (vui-text "3 invalid")
+          (vui-text "body")))
+      (let ((instance (vui-mount (vui-component 'cc-rich-align)
+                                 "*cc-rich-align*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*cc-rich-align*"
+              (goto-char (point-min))
+              (let ((line (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position))))
+                ;; Toggle flush left, right content flush to header-width.
+                (expect line :to-match "\\`▶ Schema")
+                (expect line :to-match "3 invalid\\'")
+                (expect (string-width line) :to-equal 20)))
+          (kill-buffer "*cc-rich-align*"))))
+
+    (it "keeps :header-right visible in the header row when collapsed"
+      ;; It is header adornment, not a child: shown even while the body
+      ;; is hidden.
+      (vui-defcomponent cc-rich-collapsed ()
+        :render
+        (vui-collapsible :title "Schema"
+                         :header-width 30
+                         :header-right (vui-text "3 invalid")
+          (vui-text "secret-body")))
+      (let ((instance (vui-mount (vui-component 'cc-rich-collapsed)
+                                 "*cc-rich-collapsed*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*cc-rich-collapsed*"
+              (expect (buffer-string) :to-match "▶ Schema")
+              (expect (buffer-string) :to-match "3 invalid")
+              (expect (buffer-string) :not :to-match "secret-body"))
+          (kill-buffer "*cc-rich-collapsed*"))))
+
+    (it "toggles and keeps point on the toggle with a rich header"
+      (let ((vui-render-delay nil))
+        (vui-defcomponent cc-rich-toggle ()
+          :render
+          (vui-collapsible :title "Schema"
+                           :header-width 30
+                           :header-right (vui-text "3 invalid")
+            (vui-text "body")))
+        (let ((instance (vui-mount (vui-component 'cc-rich-toggle)
+                                   "*cc-rich-toggle*")))
+          (ignore instance)
+          (unwind-protect
+              (with-current-buffer "*cc-rich-toggle*"
+                (expect (buffer-string) :not :to-match "body")
+                (goto-char (car (vui--widget-bounds
+                                 (vui-components-test--widget-by-tag
+                                  "▶ Schema"))))
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▶ Schema")
+                (vui-components-test--click-button-at (point))
+                (vui-flush-sync)
+                ;; Expanded: body visible, right content still in the header.
+                (expect (buffer-string) :to-match "body")
+                (expect (buffer-string) :to-match "3 invalid")
+                ;; Point rode the toggle across the label flip (#103).
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▼ Schema"))
+            (kill-buffer "*cc-rich-toggle*")))))
+
+    (it "defaults :header-width to fill-column"
+      (vui-defcomponent cc-rich-default ()
+        :render
+        (vui-collapsible :title "Schema"
+                         :header-right (vui-text "9")
+          (vui-text "body")))
+      (let ((instance (vui-mount (vui-component 'cc-rich-default)
+                                 "*cc-rich-default*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*cc-rich-default*"
+              (goto-char (point-min))
+              (let ((line (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position))))
+                (expect (string-width line) :to-equal fill-column)))
+          (kill-buffer "*cc-rich-default*"))))
+
+    (it "leaves the header unchanged when :header-right is absent"
+      ;; No flex wrapper, no padding: the header is exactly the toggle.
+      (vui-defcomponent cc-plain-header ()
+        :render
+        (vui-collapsible :title "Section"
+          (vui-text "body")))
+      (let ((instance (vui-mount (vui-component 'cc-plain-header)
+                                 "*cc-plain-header*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*cc-plain-header*"
+              (expect (buffer-string) :to-equal "▶ Section"))
+          (kill-buffer "*cc-plain-header*"))))
+
+    (it "indents a nested collapsible's rich header correctly"
+      (vui-defcomponent cc-rich-nested ()
+        :render
+        (vui-collapsible :title "Outer" :initially-expanded t
+          (vui-collapsible :title "Inner" :initially-expanded t
+                           :header-width 20
+                           :header-right (vui-text "9")
+            (vui-text "deep"))))
+      (let ((instance (vui-mount (vui-component 'cc-rich-nested)
+                                 "*cc-rich-nested*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*cc-rich-nested*"
+              (goto-char (point-min))
+              (expect (looking-at "▼ Outer") :to-be-truthy)
+              (forward-line 1)
+              ;; Line 2 is the inner rich header, indented by 2.
+              (let ((line (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position))))
+                (expect line :to-match "\\`  ▼ Inner")
+                (expect line :to-match "9\\'")
+                (expect (string-width line) :to-equal 20)))
+          (kill-buffer "*cc-rich-nested*"))))))
 
 (defun vui-components-test--placeholder-overlays ()
   "Return all placeholder overlays in the current buffer."
