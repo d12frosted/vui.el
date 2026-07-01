@@ -2675,11 +2675,13 @@ For editable fields, returns the actual text area, not widget decoration."
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
-Returns plist with :path, :index, :identity, :label, :offset for
+Returns plist with :path, :index, :identity, :label, :offset, :pos for
 widgets, or :line, :column for non-widget positions.  :label is the
 widget's `:tag', kept alongside :identity so a key shared across the
 buffer can be disambiguated on restore (see
-`vui--find-widget-by-identity').
+`vui--find-widget-by-identity').  :pos is the absolute buffer position,
+used to land on the nearest surviving widget when the saved one is gone
+\(see `vui--restore-cursor-position').
 When START and END are given, widget indexing is scoped to that
 region (used by inline instances, which only manage a region)."
   (let ((widget (widget-at (point)))
@@ -2693,7 +2695,7 @@ region (used by inline instances, which only manage a region)."
                (identity (vui--widget-identity widget))
                (label (widget-get widget :tag)))
           (list :path path :index index :identity identity
-                :label label :offset offset))
+                :label label :offset offset :pos pos))
       ;; No widget at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
@@ -2802,6 +2804,21 @@ Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0."
                       (min (+ widget-start (or offset 0))
                            (1- widget-end)))))))
 
+(defun vui--nearest-widget (pos &optional start end)
+  "Return the collected widget nearest buffer position POS, or nil.
+Widgets are scanned in buffer order: the first one starting at or after
+POS wins, otherwise the last one before POS.  Used by
+`vui--restore-cursor-position' to drop point onto a neighbour when the
+widget it was on has been removed.  Bounds default to the whole buffer."
+  (let ((prev nil))
+    (catch 'found
+      (dolist (widget (vui--collect-widgets start end))
+        (let ((wstart (car (vui--widget-bounds widget))))
+          (cond ((null wstart) nil)
+                ((>= wstart pos) (throw 'found widget))
+                (t (setq prev widget)))))
+      prev)))
+
 (defun vui--restore-cursor-position (cursor-info &optional start end)
   "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'.
 When START and END are given, widget lookups are scoped to that
@@ -2813,6 +2830,7 @@ region and fallbacks move to START instead of the buffer beginning."
          (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
+         (pos (plist-get cursor-info :pos))
          (home (or start (point-min)))
          ;; Single lookup for path-based matching
          (path-widget (and path (vui--find-widget-by-path path start end)))
@@ -2839,20 +2857,56 @@ region and fallbacks move to START instead of the buffer beginning."
      ;; Path drifted: relocate the same widget by stable identity
      (identity-widget
       (vui--goto-widget-offset identity-widget offset))
-     ;; Fall back to index-based matching
-     (index
-      (let ((widget (nth index (vui--collect-widgets start end))))
-        (if widget
-            (vui--goto-widget-offset widget offset)
-          (goto-char home))))
-     ;; Fall back to line/column for non-widget positions
-     ((and line column)
-      (goto-char (point-min))
-      (forward-line (1- line))
-      (move-to-column column))
-     ;; Last resort
+     ;; The saved widget is gone (identity found nothing).  The widget now
+     ;; occupying its tree path is the successor that slid up into the
+     ;; vacated slot, so point follows to the next row.  PATH-OK already
+     ;; rejected this widget when the saved one had merely SURVIVED and a
+     ;; neighbour slid over it, so reaching here means it is truly gone.
+     (path-widget
+      (vui--goto-widget-offset path-widget 0))
      (t
-      (goto-char home)))))
+      ;; Nothing occupies that path either (the removed widget was last in
+      ;; its container), so land on the nearest surviving widget to where
+      ;; point was, rather than jumping to the top of the buffer.
+      (let ((near (and pos (vui--nearest-widget pos start end))))
+        (cond
+         (near
+          (vui--goto-widget-offset near 0))
+         ;; Fall back to index-based matching
+         (index
+          (let ((widget (nth index (vui--collect-widgets start end))))
+            (if widget
+                (vui--goto-widget-offset widget offset)
+              (goto-char home))))
+         ;; Fall back to line/column for non-widget positions
+         ((and line column)
+          (goto-char (point-min))
+          (forward-line (1- line))
+          (move-to-column column))
+         ;; Last resort
+         (t
+          (goto-char home))))))))
+
+(defun vui-goto-key (key &optional start end)
+  "Move point onto the widget whose reconciliation `:key' is KEY.
+Search the widgets between START and END (default: the whole buffer) in
+the current buffer, comparing keys with `equal'.  On a match, move point
+\(and the point of every window showing the buffer) to the widget's
+start and return that position; return nil when no widget carries KEY.
+
+Handy for steering point to a known row after a re-render, e.g. before
+refreshing so cursor restoration has a stable anchor to return to.  A nil
+KEY matches nothing and returns nil: unkeyed widgets carry a nil
+`:vui-key', so treating nil as a wildcard would jump to the first of
+them."
+  (when-let* ((widget (and key
+                           (seq-find (lambda (w) (equal (widget-get w :vui-key) key))
+                                     (vui--collect-widgets start end))))
+              (pos (car (vui--widget-bounds widget))))
+    (goto-char pos)
+    (dolist (win (get-buffer-window-list (current-buffer) nil t))
+      (set-window-point win pos))
+    pos))
 
 (defun vui--remove-widget-overlays (&optional start end)
   "Remove widget-related overlays between START and END.
