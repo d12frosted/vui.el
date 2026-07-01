@@ -91,6 +91,22 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-collapsible= now keeps point on its header toggle across expand and
+  collapse, out of the box. The toggle bakes the ▶/▼ indicator into its
+  label, so the label flips on every toggle, and the button carried no
+  =:key=, which left its label as the only cursor identity. On its own that
+  was masked by the position fallback, but the moment a re-render also shifts
+  the toggle (a sibling row appearing above it, another section expanding),
+  the path, the index and the now-changed label all miss at once and point
+  jumped off, to =point-min= in the worst case. It hit everything built on
+  the primitive, collapsible sidebars especially, and the =:key= a caller
+  passed was only used for reconciliation, never handed down to the toggle,
+  so there was no fixing it from outside either. The toggle now takes a
+  stable key (the caller's =:key=, or the title when none is given) so
+  =vui--widget-identity= re-finds it after the label flips. One honest gap:
+  two collapsibles that share a title and set no =:key= still have ambiguous
+  toggles and fall back to the old position-based behavior, no worse than
+  before; a unique title or an explicit =:key= now tracks correctly.
 - Full-buffer re-renders no longer drop point onto the wrong widget (and
   scroll the window to chase it) when content shifts above the cursor. A
   jump I kept hitting in a dashboard of buttons and collapsible sections:

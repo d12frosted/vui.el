@@ -184,7 +184,8 @@ Returns nil if valid, or an error message string if invalid."
 
 (vui-defcomponent vui-collapsible--internal
     (title expanded on-toggle title-face
-     expanded-indicator collapsed-indicator indent initially-expanded)
+     expanded-indicator collapsed-indicator indent initially-expanded
+     toggle-key)
   "Internal component for collapsible sections.
 
 TITLE is the header text (required).
@@ -194,7 +195,9 @@ TITLE-FACE is the face for the header text.
 EXPANDED-INDICATOR is shown when expanded (default \"▼\").
 COLLAPSED-INDICATOR is shown when collapsed (default \"▶\").
 INDENT is the content indentation level (default 2).
-INITIALLY-EXPANDED sets initial state for uncontrolled mode."
+INITIALLY-EXPANDED sets initial state for uncontrolled mode.
+TOGGLE-KEY is the header toggle's cursor-identity key; it falls back
+to TITLE so the ▶/▼ indicator flip does not move point off the toggle."
 
   :state ((internal-expanded :unset))
 
@@ -217,10 +220,16 @@ INITIALLY-EXPANDED sets initial state for uncontrolled mode."
          (total-indent (+ parent-indent own-indent)))
     (vui-fragment
      ;; Header - plain clickable text (no indent - inherits from parent)
+     ;; The ▶/▼ indicator is baked into the label, so the label changes on
+     ;; every toggle.  Give the button a stable :key (the caller's key, or
+     ;; the title as a fallback) so cursor restoration keeps point on the
+     ;; toggle across expand/collapse instead of losing it when the label
+     ;; flips (see `vui--widget-identity').
      (vui-button (format "%s %s" indicator title)
        :no-decoration t
        :face title-face
        :help-echo nil
+       :key (or toggle-key title)
        :on-click (lambda ()
                    (let ((new-state (not is-expanded)))
                      (unless is-controlled
@@ -252,7 +261,13 @@ Options:
   :expanded-indicator STRING - shown when expanded (default \"▼\")
   :collapsed-indicator STRING - shown when collapsed (default \"▶\")
   :indent N - content indentation (default 2)
-  :key KEY - for reconciliation
+  :key KEY - reconciliation key.  It also becomes the header toggle's
+             cursor identity, so point rides the toggle across
+             expand/collapse.  When omitted, only that toggle identity
+             falls back to the title (reconciliation stays unkeyed).
+             Pass an explicit KEY when several collapsibles share a
+             title, otherwise their toggles stay ambiguous and cursor
+             tracking falls back to position.
 
 Usage:
   (vui-collapsible :title \"Section\" child1 child2)
@@ -291,6 +306,10 @@ Usage:
       :collapsed-indicator collapsed-indicator
       :indent indent
       :key key
+      ;; Also hand the key to the toggle button (falls back to the title
+      ;; inside the component) so its cursor identity survives the label
+      ;; flip; this is separate from the reconciliation :key above.
+      :toggle-key key
       :children children)))
 
 ;;; Semantic Text Faces
