@@ -2675,41 +2675,26 @@ For editable fields, returns the actual text area, not widget decoration."
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
-Returns plist with :path, :index, :identity, :label, :offset, :pos for
-widgets, or :line, :column for non-widget positions.  :label is the
-widget's `:tag', kept alongside :identity so a key shared across the
-buffer can be disambiguated on restore (see
-`vui--find-widget-by-identity').  :pos is the absolute buffer position,
-used to land on the nearest surviving widget when the saved one is gone
-\(see `vui--restore-cursor-position').
-When START and END are given, widget indexing is scoped to that
-region (used by inline instances, which only manage a region)."
-  (let ((widget (widget-at (point)))
-        (pos (point)))
+Returns plist with :path, :identity, :label, :offset for widgets, or
+:line, :column for non-widget positions.  :path is the widget's ordinal
+tree path, used to relocate it (or, when it is gone, its nearest tree
+neighbour) on restore.  :label is the widget's `:tag', kept alongside
+:identity so a key shared across the buffer can be disambiguated on
+restore (see `vui--find-widget-by-identity').
+START and END are accepted for symmetry with `vui--restore-cursor-position'
+but are not needed here."
+  (ignore start end)
+  (let ((widget (widget-at (point))))
     (if widget
         (let* ((bounds (vui--widget-bounds widget))
                (widget-start (car bounds))
-               (offset (if widget-start (- pos widget-start) 0))
+               (offset (if widget-start (- (point) widget-start) 0))
                (path (widget-get widget :vui-path))
-               (index (vui--widget-index widget start end))
                (identity (vui--widget-identity widget))
                (label (widget-get widget :tag)))
-          (list :path path :index index :identity identity
-                :label label :offset offset :pos pos))
+          (list :path path :identity identity :label label :offset offset))
       ;; No widget at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
-
-(defun vui--widget-index (widget &optional start end)
-  "Get index of WIDGET among the widgets between START and END.
-Bounds default to the whole buffer."
-  (let ((widgets (vui--collect-widgets start end))
-        (idx 0))
-    (catch 'found
-      (dolist (w widgets)
-        (when (eq w widget)
-          (throw 'found idx))
-        (setq idx (1+ idx)))
-      nil)))
 
 (defun vui--collect-widgets (&optional start end)
   "Collect widgets between START and END in order of appearance.
@@ -2804,33 +2789,54 @@ Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0."
                       (min (+ widget-start (or offset 0))
                            (1- widget-end)))))))
 
-(defun vui--nearest-widget (pos &optional start end)
-  "Return the collected widget nearest buffer position POS, or nil.
-Widgets are scanned in buffer order: the first one starting at or after
-POS wins, otherwise the last one before POS.  Used by
-`vui--restore-cursor-position' to drop point onto a neighbour when the
-widget it was on has been removed.  Bounds default to the whole buffer."
-  (let ((prev nil))
-    (catch 'found
-      (dolist (widget (vui--collect-widgets start end))
-        (let ((wstart (car (vui--widget-bounds widget))))
-          (cond ((null wstart) nil)
-                ((>= wstart pos) (throw 'found widget))
-                (t (setq prev widget)))))
-      prev)))
+(defun vui--path-lt (a b)
+  "Non-nil when numeric key list A sorts before B lexicographically.
+A and B are the comparison keys built by `vui--path-nearest-widget'."
+  (catch 'done
+    (while (and a b)
+      (cond ((< (car a) (car b)) (throw 'done t))
+            ((> (car a) (car b)) (throw 'done nil)))
+      (setq a (cdr a) b (cdr b)))
+    nil))
+
+(defun vui--path-nearest-widget (path &optional start end)
+  "Return the surviving widget whose `:vui-path' is nearest PATH, or nil.
+Nearness is measured in the component tree, not by buffer position: a
+widget sharing a longer path prefix with PATH wins (so recovery stays
+inside the same container), and among those the one nearest at the first
+differing step wins, the successor that slid up into the vacated slot
+before the predecessor.  So when the widget PATH pointed at is removed,
+point recovers to a sibling of the removed node, or failing that to an
+ancestor, rather than to whatever merely sits nearby in the buffer.
+Bounds default to the whole buffer."
+  (let ((best nil) (best-key nil))
+    (dolist (widget (vui--collect-widgets start end) best)
+      (when-let* ((q (widget-get widget :vui-path)))
+        (let* ((shared (let ((n 0) (a path) (b q))
+                         (while (and a b (equal (car a) (car b)))
+                           (setq n (1+ n) a (cdr a) b (cdr b)))
+                         n))
+               (pe (nth shared path))
+               (qe (nth shared q))
+               ;; Smaller key = nearer.  Order the tuple so the tree
+               ;; semantics fall out of a plain lexicographic compare.
+               (key (list (- shared)                        ; longer prefix first
+                          (if (and pe qe) (abs (- pe qe)) 0) ; nearer sibling first
+                          (if (and pe qe (> qe pe)) 0 1)     ; successor before predecessor
+                          (length q))))                      ; shallower (nearer parent) first
+          (when (or (null best-key) (vui--path-lt key best-key))
+            (setq best widget best-key key)))))))
 
 (defun vui--restore-cursor-position (cursor-info &optional start end)
   "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'.
 When START and END are given, widget lookups are scoped to that
 region and fallbacks move to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
-         (index (plist-get cursor-info :index))
          (offset (plist-get cursor-info :offset))
          (identity (plist-get cursor-info :identity))
          (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
-         (pos (plist-get cursor-info :pos))
          (home (or start (point-min)))
          ;; Single lookup for path-based matching
          (path-widget (and path (vui--find-widget-by-path path start end)))
@@ -2857,33 +2863,21 @@ region and fallbacks move to START instead of the buffer beginning."
      ;; Path drifted: relocate the same widget by stable identity
      (identity-widget
       (vui--goto-widget-offset identity-widget offset))
-     ;; The saved widget is gone (identity found nothing).  The widget now
-     ;; occupying its tree path is the successor that slid up into the
-     ;; vacated slot, so point follows to the next row.  PATH-OK already
-     ;; rejected this widget when the saved one had merely SURVIVED and a
-     ;; neighbour slid over it, so reaching here means it is truly gone.
-     (path-widget
-      (vui--goto-widget-offset path-widget 0))
      (t
-      ;; Nothing occupies that path either (the removed widget was last in
-      ;; its container), so land on the nearest surviving widget to where
-      ;; point was, rather than jumping to the top of the buffer.
-      (let ((near (and pos (vui--nearest-widget pos start end))))
+      ;; The saved widget is gone.  Recover to the surviving widget nearest
+      ;; it in the component tree (`vui--path-nearest-widget'): the sibling
+      ;; that slid into its slot, the previous sibling when it was last in
+      ;; its container, or an ancestor, rather than whatever merely sits
+      ;; nearby in the buffer.  Falls back to line/column for a saved
+      ;; non-widget position, then to HOME.
+      (let ((near (and path (vui--path-nearest-widget path start end))))
         (cond
          (near
           (vui--goto-widget-offset near 0))
-         ;; Fall back to index-based matching
-         (index
-          (let ((widget (nth index (vui--collect-widgets start end))))
-            (if widget
-                (vui--goto-widget-offset widget offset)
-              (goto-char home))))
-         ;; Fall back to line/column for non-widget positions
          ((and line column)
           (goto-char (point-min))
           (forward-line (1- line))
           (move-to-column column))
-         ;; Last resort
          (t
           (goto-char home))))))))
 

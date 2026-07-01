@@ -466,11 +466,8 @@
 
   (it "follows to the successor at the same path when a middle widget goes"
     ;; The removed widget was not last, so a sibling slides up into its
-    ;; tree path and point lands on that successor.  This exercises the
-    ;; `path-widget' branch of restoration; for a single leaf removal it
-    ;; agrees with the position/index fallbacks, so it is coverage of that
-    ;; branch rather than a guard that fails without it (the multi-widget
-    ;; and last-widget removal specs above are the guards).
+    ;; tree path.  That sibling now shares the full path with the removed
+    ;; one, so tree-nearest recovery lands point on it.
     (let ((vui-render-delay nil))
       (vui-defcomponent rr-cursor-mid-remove ()
         :state ((show t))
@@ -490,6 +487,37 @@
               ;; tail slid into mid's path (1); point follows to it.
               (expect (widget-get (widget-at (point)) :tag) :to-equal "tail"))
           (kill-buffer "*rr-cmr*")))))
+
+  (it "recovers within the same container, not across a boundary by position"
+    ;; Two sibling groups.  Point is on the last leaf of the first group;
+    ;; removing it, the first leaf of the SECOND group slides up into that
+    ;; buffer line, so a position-based recovery would jump there.  The
+    ;; tree keeps point on the previous leaf of the SAME group, because it
+    ;; shares a longer path prefix.  This is the case a flat buffer-nearest
+    ;; fallback gets wrong.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-container ()
+        :state ((show t))
+        :render (vui-vstack
+                  (vui-vstack
+                    (vui-button "a1" :key 'a1)
+                    (when show (vui-button "a2" :key 'a2)))
+                  (vui-vstack
+                    (vui-button "b1" :key 'b1)
+                    (vui-button "b2" :key 'b2))))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-container) "*rr-cont*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cont*"
+              (expect (buffer-string) :to-equal "[a1]\n[a2]\n[b1]\n[b2]")
+              ;; Park on a2, the last leaf of the first group (path (0 1)).
+              (goto-char (car (vui--widget-bounds
+                               (vui--find-widget-by-path '(0 1)))))
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'a2)
+              (let ((vui--current-instance inst)) (vui-set-state :show nil))
+              (expect (buffer-string) :to-equal "[a1]\n[b1]\n[b2]")
+              ;; a2 gone; point stays on a1 (same group), not b1 (next group).
+              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'a1))
+          (kill-buffer "*rr-cont*")))))
 
   (it "keeps point on the same field when a row is inserted above it"
     ;; Same shift, but the parked widget is an editable field, so the
