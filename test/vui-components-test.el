@@ -21,6 +21,11 @@ Buttons are widget.el push-buttons, so we use widget-apply."
     (when widget
       (widget-apply widget :action))))
 
+(defun vui-components-test--widget-by-tag (tag)
+  "Return the first buffer widget whose :tag is TAG, or nil."
+  (seq-find (lambda (w) (equal (widget-get w :tag) tag))
+            (vui--collect-widgets)))
+
 (describe "vui type conversion functions"
   (describe "vui--field-value-to-string"
     (it "returns empty string for nil value with type"
@@ -532,7 +537,105 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (forward-line 1)
               ;; Line 4: "    Inner content" at column 4 (accumulated indent)
               (expect (looking-at "    Inner content") :to-be-truthy))
-          (kill-buffer "*test-collapsible-16*"))))))
+          (kill-buffer "*test-collapsible-16*")))))
+
+  (describe "cursor identity across expand and collapse"
+    ;; The header toggle bakes the ▶/▼ indicator into its label, so the
+    ;; label flips on every toggle.  When a re-render also shifts the
+    ;; toggle down (a row appears above it in the same render), neither the
+    ;; ordinal path nor the widget index still points at it, and the
+    ;; flipped label defeats label-based cursor identity: point drifts onto
+    ;; the new row.  A stable :key on the toggle, derived from the title or
+    ;; passed by the caller, keeps point on it.
+
+    (it "keeps point on the toggle when a row shifts in as it expands"
+      (let ((vui-render-delay nil))
+        (vui-defcomponent cc-toggle-shift ()
+          :state ((open nil))
+          :render
+          (vui-vstack
+           ;; Appears in the SAME render that expands the section, so the
+           ;; toggle both moves down and flips its indicator at once.
+           (when open (vui-button "banner"))
+           (vui-collapsible :title "Details" :expanded open
+             (vui-text "body"))))
+        (let ((inst (vui-mount (vui-component 'cc-toggle-shift) "*cc-ts*")))
+          (unwind-protect
+              (with-current-buffer "*cc-ts*"
+                (expect (buffer-string) :to-equal "▶ Details")
+                (goto-char (car (vui--widget-bounds
+                                 (vui-components-test--widget-by-tag
+                                  "▶ Details"))))
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▶ Details")
+                (let ((vui--current-instance inst)) (vui-set-state :open t))
+                ;; Row inserted above AND indicator flipped in one render;
+                ;; point must ride the toggle, not drift onto "banner".
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▼ Details"))
+            (kill-buffer "*cc-ts*")))))
+
+    (it "keeps point on the right toggle via :key when titles repeat"
+      (let ((vui-render-delay nil))
+        (vui-defcomponent cc-toggle-dup ()
+          :state ((open nil))
+          :render
+          (vui-vstack
+           (when open (vui-button "banner"))
+           (vui-collapsible :title "Item" :key 'a
+             (vui-text "a-body"))
+           (vui-collapsible :title "Item" :key 'b :expanded open
+             (vui-text "b-body"))))
+        (let ((inst (vui-mount (vui-component 'cc-toggle-dup) "*cc-dup*")))
+          (unwind-protect
+              (with-current-buffer "*cc-dup*"
+                ;; Park on the SECOND "Item" toggle (key b); the two share a
+                ;; title, so only the caller's :key tells them apart.
+                (let ((toggles (seq-filter
+                                (lambda (w)
+                                  (equal (widget-get w :tag) "▶ Item"))
+                                (vui--collect-widgets))))
+                  (goto-char (car (vui--widget-bounds (nth 1 toggles)))))
+                (let ((vui--current-instance inst)) (vui-set-state :open t))
+                ;; Banner shifts both toggles down and the second's indicator
+                ;; flips; without the caller's :key threaded to the toggle,
+                ;; point drifts onto the first "Item".
+                (expect (widget-get (widget-at (point)) :vui-key)
+                        :to-equal 'b)
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▼ Item"))
+            (kill-buffer "*cc-dup*")))))
+
+    (it "keeps point on a sibling toggle when the section above it expands"
+      ;; Regression guard: expanding the FIRST collapsible inserts content
+      ;; above the SECOND.  The second's label does not change, so this
+      ;; already works via the stable path; the toggle key must not
+      ;; regress it.
+      (let ((vui-render-delay nil))
+        (vui-defcomponent cc-sibling ()
+          :render
+          (vui-vstack
+           (vui-collapsible :title "Foo"
+             (vui-button "inside-foo"))
+           (vui-collapsible :title "Bar"
+             (vui-button "inside-bar"))))
+        (let ((inst (vui-mount (vui-component 'cc-sibling) "*cc-sib*")))
+          (ignore inst)
+          (unwind-protect
+              (with-current-buffer "*cc-sib*"
+                (goto-char (car (vui--widget-bounds
+                                 (vui-components-test--widget-by-tag
+                                  "▶ Bar"))))
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▶ Bar")
+                ;; Expand Foo by invoking its header toggle.
+                (widget-apply (vui-components-test--widget-by-tag "▶ Foo")
+                              :action)
+                (vui-flush-sync)
+                (expect (buffer-string) :to-match "inside-foo")
+                (expect (widget-get (widget-at (point)) :tag)
+                        :to-equal "▶ Bar"))
+            (kill-buffer "*cc-sib*")))))))
 
 (defun vui-components-test--placeholder-overlays ()
   "Return all placeholder overlays in the current buffer."
