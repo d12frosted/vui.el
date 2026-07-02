@@ -11,13 +11,12 @@
 (require 'buttercup)
 (require 'vui)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
-  "Invoke the button widget at POS.
-Buttons are widget.el push-buttons, so we use widget-apply."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (describe "vui-hstack"
   (it "creates an hstack vnode"
@@ -265,7 +264,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (goto-char (point-min))
               (skip-chars-forward " ")  ; Skip padding
               ;; Widget should exist at button position
-              (expect (widget-at (point)) :to-be-truthy)
+              (expect (vui--elt-at (point)) :to-be-truthy)
               ;; Click should work
               (vui-test--click-button-at (point))
               (expect clicked :to-be-truthy))
@@ -360,7 +359,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         ;; container binding
         (let ((map (get-char-property 2 'keymap)))
           (expect (lookup-key map (kbd "RET"))
-                  :to-be 'widget-button-press))))))
+                  :to-be 'push-button))))))
 
 (describe "container :face and :keymap"
   (it "vstack :face covers child text and its own indentation"
@@ -400,7 +399,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (expect (get-text-property 1 'keymap) :to-be row-km)
         ;; The button keeps RET, with the row map reachable underneath
         (let ((map (get-char-property 7 'keymap)))
-          (expect (lookup-key map (kbd "RET")) :to-be 'widget-button-press)
+          (expect (lookup-key map (kbd "RET")) :to-be 'push-button)
           (expect (lookup-key map (kbd "o")) :to-be 'forward-char)))))
 
   (it "box :face covers alignment and box padding"
@@ -777,12 +776,14 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (vui-render table)
           ;; Find the widget and check its properties
           (goto-char (point-min))
-          (let ((widget (widget-at (point))))
+          (let ((widget (vui--elt-at (point))))
             (expect widget :to-be-truthy)
-            ;; The widget should have tab-order -1 (non-tabbable)
-            (expect (widget-get widget :tab-order) :to-equal -1)
-            ;; The widget should have the custom keymap
-            (expect (widget-get widget :keymap) :to-equal custom-keymap))))))
+            ;; The button should keep tab-order -1 (non-tabbable)
+            (expect (vui--elt-get widget :vui-tab-order) :to-equal -1)
+            ;; The custom keymap should be reachable on the button (it is
+            ;; composed beneath `button-map')
+            (expect (lookup-key (get-char-property (point) 'keymap) (kbd "x"))
+                    :to-be 'ignore))))))
 
   (it "respects indent from parent vstack"
     (with-temp-buffer
@@ -1244,7 +1245,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                     (vui-text "Name:")
                     (vui-flex-item :grow 1
                       (lambda (width) (vui-field :size width :key 'flex-f)))))
-      (expect (widget-get (car widget-field-list) :size) :to-equal 14)))
+      (expect (vui--elt-get (car widget-field-list) :size) :to-equal 14)))
 
   (it "distributes leftover proportionally, remainder to the last grower"
     (with-temp-buffer

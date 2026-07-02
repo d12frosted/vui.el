@@ -111,6 +111,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Shift+Tab navigates reliably no matter how the platform encodes it. Shift+Tab
+  reaches Emacs as different events (=<backtab>=, =S-TAB=, =<S-tab>=,
+  =<S-iso-lefttab>=...); the ones vui had not bound leaked through
+  =widget-keymap= to =widget-backward=, which jumps to point-max when there are
+  no widgets and left point stranded there. Instead of chasing every
+  representation, vui now remaps =widget-forward=/=widget-backward= and
+  =forward-button=/=backward-button= to its own navigation, so any key that
+  would invoke them cycles through vui's elements the same way.
+- vui's TAB/S-TAB bindings are installed by a top-level form, not only inside
+  the =vui-mode-map= =defvar=, so reloading vui.el into a running session
+  re-applies them. =defvar= does not re-evaluate a keymap that is already
+  bound, so before this a reload left =vui-mode-map= without the navigation
+  keys: TAB still worked on a button (which carries its own keymap) but fell
+  through to =indent-for-tab-command= on plain text. Fresh installs were
+  unaffected; this bit reload-driven development.
 - =vui-typed-field= now signals recovery: its =:on-error= callback fires with
   nil when input becomes valid again, not only with a message on failure.
   Listeners that track validation errors - like the form examples, which gate
@@ -237,6 +252,24 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- Buttons, checkboxes and selects now render as =button.el= text buttons
+  instead of =widget.el= widgets. This finishes what #108 started for #107:
+  widget push-buttons each left two live markers in the buffer, and even after
+  #108 detached them the widget machinery still cost ~8us per button. Text
+  buttons carry no markers at all and render at a flat ~3us/row (the ~6000-row,
+  12000-button dashboard from #107 now builds in ~44ms). Editable fields stay
+  on =widget.el=, which has no text-input equivalent, and =widget-setup= still
+  runs so the buffer stays read-only outside fields. Navigation is now vui's
+  own: TAB and S-TAB (=vui-forward= / =vui-backward=) step across both text
+  buttons and fields in buffer order, replacing =widget-forward=; a button's
+  RET and mouse activation come from =button-map=, and =vui-mode= keeps
+  =widget-keymap= underneath for field editing. vui's buttons rebind TAB and
+  S-TAB on themselves too, so =button.el='s =button-buffer-map= (which
+  =button-map= inherits, binding TAB to =forward-button=) cannot hijack
+  navigation into a button-only walk that skips fields. Cursor tracking, =:key=
+  reconciliation, =:tab-order=, a custom =:keymap= and =vui-goto-key= all work
+  as before across the mixed set. The one externally visible change: a button's
+  binding for RET is =push-button= (button.el) rather than =widget-button-press=.
 - The whole-tree skip (commit-skip) is now always on, independent of the
   experimental =vui-incremental-render= flag. When a re-render produces the
   exact same vtree object as the previous commit - which =should-update=

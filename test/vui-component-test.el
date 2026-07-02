@@ -11,12 +11,12 @@
 (require 'buttercup)
 (require 'vui)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
-  "Invoke the button widget at POS."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (describe "defcomponent"
   (it "defines a component and registers it"
@@ -502,11 +502,11 @@
           (with-current-buffer "*test-cursor*"
             ;; Move to second field widget
             (goto-char (point-min))
-            (widget-forward 1)  ; first field
-            (widget-forward 1)  ; second field
+            (vui-forward 1)  ; first field
+            (vui-forward 1)  ; second field
             (let ((pos-before (point)))
               ;; Verify we're at a widget
-              (expect (widget-at (point)) :to-be-truthy)
+              (expect (vui--elt-at (point)) :to-be-truthy)
               ;; Trigger re-render via button click
               (save-excursion
                 (goto-char (point-min))
@@ -514,7 +514,7 @@
                 (backward-char 8)  ; position at start of "[Update]"
                 (vui-test--click-button-at (point)))
               ;; Cursor should still be at a widget (field)
-              (expect (widget-at (point)) :to-be-truthy)))
+              (expect (vui--elt-at (point)) :to-be-truthy)))
         (kill-buffer "*test-cursor*"))))
 
   (it "preserves cursor when content changes around widget"
@@ -535,8 +535,8 @@
           (with-current-buffer "*test-cursor2*"
             ;; Navigate to the field
             (goto-char (point-min))
-            (widget-forward 1)  ; to field
-            (let ((widget-before (widget-at (point))))
+            (vui-forward 1)  ; to field
+            (let ((widget-before (vui--elt-at (point))))
               (expect widget-before :to-be-truthy)
               ;; Change the prefix (content before widget changes length)
               (save-excursion
@@ -545,7 +545,7 @@
                 (backward-char 8)  ; position at start of "[Toggle]"
                 (vui-test--click-button-at (point)))
               ;; Cursor should still be on a field widget
-              (let ((widget-after (widget-at (point))))
+              (let ((widget-after (vui--elt-at (point))))
                 (expect widget-after :to-be-truthy)
                 (expect (widget-type widget-after) :to-equal 'editable-field))))
         (kill-buffer "*test-cursor2*"))))
@@ -576,17 +576,17 @@
             (goto-char (point-min))
             (search-forward "[Add]")
             (backward-char 4)
-            (let ((widget-before (widget-at (point))))
+            (let ((widget-before (vui--elt-at (point))))
               (expect widget-before :to-be-truthy)
               ;; Click [Add] - this adds a button BEFORE [Add]
               (vui-test--click-button-at (point))
               (vui-flush-sync)
               ;; Cursor should still be on [Add], not on [Button 1]
-              (let ((widget-after (widget-at (point))))
+              (let ((widget-after (vui--elt-at (point))))
                 (expect widget-after :to-be-truthy)
                 ;; The widget should still be the [Add] button
                 ;; Check :tag property (where vui stores button label)
-                (expect (widget-get widget-after :tag) :to-match "Add"))))
+                (expect (vui--elt-get widget-after :vui-tag) :to-match "Add"))))
         (kill-buffer "*test-cursor-shift*"))))
 
   (it "preserves cursor when widget type changes at same path"
@@ -608,8 +608,8 @@
             (goto-char (point-min))
             (search-forward "[Click me]")
             (backward-char 5)
-            (let* ((widget-before (widget-at (point)))
-                   (path-before (widget-get widget-before :vui-path)))
+            (let* ((widget-before (vui--elt-at (point)))
+                   (path-before (vui--elt-get widget-before :vui-path)))
               (expect widget-before :to-be-truthy)
               (expect path-before :to-equal '(1))
               ;; Change state with proper instance context (without moving cursor)
@@ -618,13 +618,18 @@
                 (vui-set-state :use-checkbox t))
               (vui-flush-sync)
               ;; Cursor should now be on the checkbox (same path)
-              (let* ((widget-after (widget-at (point)))
-                     (path-after (when widget-after (widget-get widget-after :vui-path))))
+              (let* ((widget-after (vui--elt-at (point)))
+                     (path-after (when widget-after (vui--elt-get widget-after :vui-path))))
                 (expect widget-after :to-be-truthy)
                 ;; Path should be the same
                 (expect path-after :to-equal '(1))
-                ;; Widget type should have changed to checkbox
-                (expect (widget-type widget-after) :to-equal 'checkbox))))
+                ;; The element at that path is now the checkbox: a text
+                ;; button (not a widget) rendering [ ]
+                (expect (widgetp widget-after) :to-be nil)
+                (let ((bounds (vui--widget-bounds widget-after)))
+                  (expect (buffer-substring-no-properties
+                           (car bounds) (cdr bounds))
+                          :to-equal "[ ]")))))
         (kill-buffer "*test-type-change*"))))
 
   (it "caps cursor offset when widget shrinks"
@@ -640,20 +645,20 @@
           (with-current-buffer "*test-shrink*"
             ;; Position cursor deep in the field (offset ~15 from start)
             (goto-char (point-min))
-            (let* ((widget-before (widget-at (point)))
+            (let* ((widget-before (vui--elt-at (point)))
                    (bounds-before (vui--widget-bounds widget-before))
                    (field-start (car bounds-before)))
               (expect widget-before :to-be-truthy)
               ;; Move to offset 15 within the field
               (goto-char (+ field-start 15))
-              (expect (widget-at (point)) :to-equal widget-before)
+              (expect (vui--elt-at (point)) :to-equal widget-before)
               ;; Shrink the field
               (let ((vui--current-instance instance)
                     (vui--root-instance instance))
                 (vui-set-state :large nil))
               (vui-flush-sync)
               ;; Cursor should be on the (smaller) field, capped to its bounds
-              (let* ((widget-after (widget-at (point)))
+              (let* ((widget-after (vui--elt-at (point)))
                      (bounds-after (vui--widget-bounds widget-after))
                      (new-start (car bounds-after))
                      (new-end (cdr bounds-after)))
@@ -909,10 +914,10 @@
           (with-current-buffer "*test-table-cursor*"
             ;; Navigate to the second field (row 2)
             (goto-char (point-min))
-            (widget-forward 1)  ; First field (row 1)
-            (widget-forward 1)  ; Second field (row 2)
-            (let* ((widget-before (widget-at (point)))
-                   (path-before (widget-get widget-before :vui-path)))
+            (vui-forward 1)  ; First field (row 1)
+            (vui-forward 1)  ; Second field (row 2)
+            (let* ((widget-before (vui--elt-at (point)))
+                   (path-before (vui--elt-get widget-before :vui-path)))
               (expect widget-before :to-be-truthy)
               (expect (widget-type widget-before) :to-equal 'editable-field)
               ;; Path should indicate row 1 (0-indexed), column 1
@@ -925,8 +930,8 @@
                                        (:id 3 :value "Z"))))
               (vui-flush-sync)
               ;; Cursor should still be on a field widget with the same path
-              (let* ((widget-after (widget-at (point)))
-                     (path-after (widget-get widget-after :vui-path)))
+              (let* ((widget-after (vui--elt-at (point)))
+                     (path-after (vui--elt-get widget-after :vui-path)))
                 (expect widget-after :to-be-truthy)
                 (expect (widget-type widget-after) :to-equal 'editable-field)
                 ;; Path should be the same - row 1, column 1

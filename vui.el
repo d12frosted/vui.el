@@ -35,6 +35,7 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'wid-edit)
+(require 'button)
 
 ;;; Forward Declarations
 
@@ -451,14 +452,108 @@ Triggers a re-render of the mounted component with current state."
     (when vui--root-instance
       (vui--schedule-render))))
 
-(defvar vui-mode-map
+(defun vui--tabable-positions ()
+  "Sorted start positions of interactive elements reachable by TAB.
+Elements whose `:vui-tab-order' is -1 are skipped (matching the old
+widget behaviour)."
+  (sort (delq nil
+              (mapcar (lambda (elt)
+                        (unless (eql (vui--elt-get elt :vui-tab-order) -1)
+                          (car (vui--widget-bounds elt))))
+                      (vui--collect-widgets)))
+        #'<))
+
+(defun vui-forward (&optional n)
+  "Move point to the Nth next interactive element (button or field).
+Movement wraps around the buffer, and a negative N moves backward.  This
+is vui's unified replacement for `widget-forward': it stops on text
+buttons (vui buttons, checkboxes, selects) as well as editable fields.
+Interactively, N is the prefix argument."
+  (interactive "p")
+  (let ((n (or n 1)))
+    (if (< n 0)
+        (vui-backward (- n))
+      (let ((positions (vui--tabable-positions)))
+        (when positions
+          (let* ((len (length positions))
+                 (i (or (seq-position positions (point)
+                                      (lambda (p pt) (> p pt)))
+                        len))
+                 (idx (mod (+ i (1- n)) len)))
+            (goto-char (nth idx positions))))))))
+
+(defun vui-backward (&optional n)
+  "Move point to the Nth previous interactive element (button or field).
+Movement wraps around the buffer, and a negative N moves forward.  See
+`vui-forward'.  Interactively, N is the prefix argument."
+  (interactive "p")
+  (let ((n (or n 1)))
+    (if (< n 0)
+        (vui-forward (- n))
+      (let ((positions (vui--tabable-positions)))
+        (when positions
+          (let* ((len (length positions))
+                 (pt (point))
+                 (below (seq-filter (lambda (p) (< p pt)) positions))
+                 (i (if below (1- (length below)) -1))
+                 (idx (mod (- i (1- n)) len)))
+            (goto-char (nth idx positions))))))))
+
+(defvar vui--field-nav-keymap (make-sparse-keymap)
+  "Keymap merged over `widget-field-keymap' on vui editable fields.
+It makes TAB and S-TAB use vui's unified navigation (which also stops on
+text buttons) from inside a field; field editing keys fall through to
+`widget-field-keymap'.  Bindings are installed by
+`vui--install-keymap-keys'.")
+
+(defvar vui--button-keymap
+  ;; `button-map' inherits `button-buffer-map', which binds TAB/backtab to
+  ;; `forward-button'/`backward-button' - a button-only walk that skips fields
+  ;; and ignores vui's tab-order.  This keymap rebinds them to vui's unified
+  ;; navigation (via `vui--install-keymap-keys') so TAB behaves the same on a
+  ;; button as anywhere else, while RET/mouse activation still comes from
+  ;; `button-map' underneath.
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "q") #'vui-quit)
-    (define-key map (kbd "g") #'vui-refresh)
+    (set-keymap-parent map button-map)
     map)
+  "Keymap for vui text buttons: `button-map' with TAB/S-TAB rebound to
+vui's unified navigation.")
+
+(defvar vui-mode-map (make-sparse-keymap)
   "Keymap for `vui-mode'.
 This keymap is active in all VUI buffers.  Users and packages can
-add bindings here for functionality like `ace-link'.")
+add bindings here for functionality like `ace-link'.  Its bindings are
+installed by `vui--install-keymap-keys'.")
+
+(defun vui--install-keymap-keys ()
+  "Install vui's key bindings on its keymaps.
+Run as a top-level form (below), not inside the `defvar's above, so that
+reloading vui.el re-installs the bindings: `defvar' does not re-evaluate
+a keymap once the variable is bound, which would otherwise leave a stale
+`vui-mode-map' without TAB/S-TAB after a reload."
+  (define-key vui-mode-map (kbd "q") #'vui-quit)
+  (define-key vui-mode-map (kbd "g") #'vui-refresh)
+  ;; Unified navigation across text buttons and editable fields.  On
+  ;; `vui-mode-map' it shadows `widget-keymap's widget-only TAB/S-TAB; on the
+  ;; button/field keymaps it shadows button.el's `button-buffer-map'.
+  (dolist (map (list vui-mode-map vui--field-nav-keymap vui--button-keymap))
+    (define-key map (kbd "TAB") #'vui-forward)
+    (define-key map (kbd "<tab>") #'vui-forward)
+    (define-key map (kbd "<backtab>") #'vui-backward)
+    (define-key map (kbd "S-TAB") #'vui-backward)
+    ;; Shift+Tab (and Tab) reach Emacs as different events per platform
+    ;; (<backtab>, S-TAB, <S-tab>, <S-iso-lefttab>...).  Rather than bind every
+    ;; representation, remap widget.el's and button.el's own navigation
+    ;; commands to vui's, so ANY key that would invoke them (via a keymap in
+    ;; the parent chain - `widget-keymap', `button-buffer-map') navigates the
+    ;; vui way instead.  This matters because e.g. `widget-backward' jumps to
+    ;; point-max when it finds no widgets, stranding point.
+    (define-key map [remap widget-forward] #'vui-forward)
+    (define-key map [remap widget-backward] #'vui-backward)
+    (define-key map [remap forward-button] #'vui-forward)
+    (define-key map [remap backward-button] #'vui-backward)))
+
+(vui--install-keymap-keys)
 
 (define-derived-mode vui-mode special-mode "VUI"
   "Major mode for VUI buffers.
@@ -468,8 +563,10 @@ keybindings while preserving VUI and widget functionality.
 
 \\{vui-mode-map}"
   :group 'vui
-  ;; Compose widget-keymap and special-mode-map so we get both widget
-  ;; navigation (TAB, S-TAB) and special-mode bindings (h for help, etc.)
+  ;; Parent: widget-keymap (editable-field editing keys and mouse
+  ;; activation) beneath special-mode-map (h for help, etc.).  vui-mode-map
+  ;; itself rebinds TAB/S-TAB to vui's unified navigation, shadowing
+  ;; widget-keymap's widget-only `widget-forward'/`widget-backward'.
   (set-keymap-parent vui-mode-map
                      (make-composed-keymap widget-keymap special-mode-map))
   ;; Disable buffer-read-only; widget-setup installs before-change-functions
@@ -2675,47 +2772,62 @@ BUFFER defaults to the current buffer.  Undoes
     (remove-hook 'window-size-change-functions
                  #'vui--on-window-size-change t)))
 
-(defun vui--detach-widget-bounds-markers (widget)
-  "Detach WIDGET's :from/:to bounds markers from the buffer.
+;;; Interactive elements: text buttons and editable fields
+;;
+;; vui renders buttons, checkboxes and selects as `button.el' text
+;; buttons (cheap and marker-free, see issue #107) and editable fields as
+;; `widget.el' widgets (they need real in-buffer editing).  Cursor
+;; tracking and navigation treat the two uniformly through the
+;; `vui--elt-*' helpers, which dispatch on `widgetp': an editable field is
+;; a widget, a text button is not.
 
-`widget-create' leaves two live markers per widget (its :from/:to
-bounds).  Emacs adjusts every live marker on each insert, so a buffer of
-N such widgets makes rendering O(N^2) and, at tens of thousands of
-widgets, can crash Emacs (issue #107).  Buttons, checkboxes and selects
-do not need those markers after creation - their bounds are recoverable
-from the button overlay (see `vui--widget-bounds') - so detaching them
-keeps rendering linear.  Editable fields are left untouched: they rely on
-their own field overlay and are never numerous enough to matter."
-  (let ((from (widget-get widget :from))
-        (to (widget-get widget :to)))
-    (when (markerp from) (set-marker from nil))
-    (when (markerp to) (set-marker to nil))))
+(defun vui--elt-at (&optional pos)
+  "Return the interactive element at POS, or nil.
+The element is a `button.el' text button (vui buttons, checkboxes and
+selects) or a `widget.el' editable field."
+  (let ((pos (or pos (point))))
+    (or (button-at pos)
+        (widget-field-at pos))))
 
-(defun vui--widget-bounds (widget)
-  "Get (START . END) bounds for WIDGET's editable area.
-For editable fields, returns the actual text area, not widget
-decoration.  For buttons and other overlay-based widgets, reads the
-button overlay, whose bounds survive `vui--detach-widget-bounds-markers'
-\(issue #107); falls back to the :from/:to markers when no overlay is
-present."
-  (let ((field-start (widget-field-start widget))
-        (field-end (widget-field-end widget)))
-    (if (and field-start field-end)
-        ;; Editable field - use field bounds
-        (cons field-start field-end)
-      (let ((overlay (widget-get widget :button-overlay)))
-        (if (and (overlayp overlay) (overlay-buffer overlay))
-            ;; Button/checkbox/select - overlay tracks bounds without the
-            ;; per-insert marker cost the :from/:to markers would add
-            (cons (overlay-start overlay) (overlay-end overlay))
-          ;; Fallback - widget bounds via :from/:to (markers or ints)
-          (let ((from (widget-get widget :from))
-                (to (widget-get widget :to)))
-            (when (and from to)
-              (let ((fp (if (markerp from) (marker-position from) from))
-                    (tp (if (markerp to) (marker-position to) to)))
-                (when (and fp tp)
-                  (cons fp tp))))))))))
+(defun vui--elt-get (elt prop)
+  "Get PROP of interactive element ELT (a text button or a widget field)."
+  (if (widgetp elt) (widget-get elt prop) (button-get elt prop)))
+
+(defun vui--widget-bounds (elt)
+  "Return (START . END) bounds of interactive element ELT, or nil.
+For an editable field, the editable text area (not decoration); for a
+text button, the button's extent.  ELT may be a text button or a
+widget (the name is kept for history)."
+  (if (widgetp elt)
+      (let ((field-start (widget-field-start elt))
+            (field-end (widget-field-end elt)))
+        (when (and field-start field-end)
+          (cons field-start field-end)))
+    (let ((start (button-start elt))
+          (end (button-end elt)))
+      (when (and start end)
+        (cons start end)))))
+
+(defun vui--insert-text-button (text action &rest props)
+  "Insert a vui text button showing TEXT, running ACTION when pushed.
+ACTION is called with the button as its single argument.  PROPS is a
+plist of extra button properties (e.g. `face', `help-echo', `keymap',
+and vui's own :vui-path/:vui-key/:vui-tag/:vui-tab-order).  Returns the
+inserted button.  Text buttons carry no markers, so a bufferful of them
+renders in linear time (issue #107).
+
+PROPS may override the defaults: unless it sets its own `keymap' the
+button gets `vui--button-keymap' (so TAB/S-TAB use vui navigation, not
+button.el's button-only walk), and unless it sets `follow-link' /
+`mouse-face' the button gets the clickable-affordance defaults (a
+disabled button passes nil for both so it does not look clickable)."
+  (unless (plist-member props 'keymap)
+    (setq props (plist-put props 'keymap vui--button-keymap)))
+  (unless (plist-member props 'follow-link)
+    (setq props (plist-put props 'follow-link t)))
+  (unless (plist-member props 'mouse-face)
+    (setq props (plist-put props 'mouse-face 'highlight)))
+  (apply #'insert-text-button text 'action action props))
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
@@ -2728,41 +2840,49 @@ restore (see `vui--find-widget-by-identity').
 START and END are accepted for symmetry with `vui--restore-cursor-position'
 but are not needed here."
   (ignore start end)
-  (let ((widget (widget-at (point))))
-    (if widget
-        (let* ((bounds (vui--widget-bounds widget))
-               (widget-start (car bounds))
-               (offset (if widget-start (- (point) widget-start) 0))
-               (path (widget-get widget :vui-path))
-               (identity (vui--widget-identity widget))
-               (label (widget-get widget :tag)))
+  (let ((elt (vui--elt-at (point))))
+    (if elt
+        (let* ((bounds (vui--widget-bounds elt))
+               (elt-start (car bounds))
+               (offset (if elt-start (- (point) elt-start) 0))
+               (path (vui--elt-get elt :vui-path))
+               (identity (vui--widget-identity elt))
+               (label (vui--elt-get elt :vui-tag)))
           (list :path path :identity identity :label label :offset offset))
-      ;; No widget at point - save line/column as fallback
+      ;; No element at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
 (defun vui--collect-widgets (&optional start end)
-  "Collect widgets between START and END in order of appearance.
-Bounds default to the whole buffer.  Buttons (and other
-overlay-based widgets) are collected from their overlays and
-editable fields from `widget-field-list', instead of inspecting
-every buffer position."
+  "Collect interactive elements between START and END, in buffer order.
+Bounds default to the whole buffer.  Text buttons (vui buttons,
+checkboxes and selects) are found by walking `button-at'; editable
+fields come from `widget-field-list'."
   (let ((from (or start (point-min)))
         (to (or end (point-max)))
         (entries nil))
-    ;; Overlay-based widgets: buttons, checkboxes, selects
-    (dolist (overlay (overlays-in from to))
-      (when-let* ((widget (overlay-get overlay 'button)))
-        (push (cons (overlay-start overlay) widget) entries)))
+    ;; Text buttons.  Walk position by position with `button-at' rather than
+    ;; `next-button': two buttons that abut with no separating text (e.g. an
+    ;; hstack with :spacing 0) share one contiguous `button' text-property
+    ;; span, and `next-button' skips the second one.  `button-at' at each
+    ;; position catches every button.  The `< to' loop guard bounds each
+    ;; button's start (which is <= pos), matching the field branch below.
+    (let ((pos from))
+      (catch 'done
+        (while (< pos to)
+          (let ((b (button-at pos)))
+            (cond
+             (b
+              (when (>= (button-start b) from)
+                (push (cons (button-start b) b) entries))
+              (setq pos (button-end b)))
+             ((setq pos (next-button pos)))     ; skip a gap to the next button
+             (t (throw 'done nil)))))))          ; no more buttons
     ;; Editable fields
     (dolist (widget widget-field-list)
       (when-let* ((pos (widget-field-start widget)))
         (when (and (>= pos from) (< pos to))
           (push (cons pos widget) entries))))
-    (let ((widgets nil))
-      (dolist (entry (sort entries #'car-less-than-car))
-        (unless (memq (cdr entry) widgets)
-          (push (cdr entry) widgets)))
-      (nreverse widgets))))
+    (mapcar #'cdr (sort entries #'car-less-than-car))))
 
 (defun vui--find-widget-by-path (path &optional start end)
   "Find widget with matching :vui-path between START and END.
@@ -2771,7 +2891,7 @@ tree.  Bounds default to the whole buffer.  Returns nil if not found."
   (when path
     (catch 'found
       (dolist (w (vui--collect-widgets start end))
-        (when (equal (widget-get w :vui-path) path)
+        (when (equal (vui--elt-get w :vui-path) path)
           (throw 'found w)))
       nil)))
 
@@ -2790,8 +2910,8 @@ pairs this identity with the saved label to break such ties (see
 `vui--find-widget-by-identity'), so a shared key does not collapse two
 distinct rows.  Returns nil when WIDGET has neither key nor label, so
 an identity-less widget falls back to ordinal position as before."
-  (or (widget-get widget :vui-key)
-      (widget-get widget :tag)))
+  (or (vui--elt-get widget :vui-key)
+      (vui--elt-get widget :vui-tag)))
 
 (defun vui--find-widget-by-identity (identity label &optional start end)
   "Return the widget between START and END identified by IDENTITY and LABEL.
@@ -2816,7 +2936,7 @@ true look-alikes."
        ;; Identity collides (a key reused across lists): keep only the
        ;; widget whose label also matches, and only if that is unique.
        (t (let ((by-label (seq-filter
-                           (lambda (w) (equal (widget-get w :tag) label))
+                           (lambda (w) (equal (vui--elt-get w :vui-tag) label))
                            matches)))
             (when (and by-label (null (cdr by-label)))
               (car by-label))))))))
@@ -2855,7 +2975,7 @@ ancestor, rather than to whatever merely sits nearby in the buffer.
 Bounds default to the whole buffer."
   (let ((best nil) (best-key nil))
     (dolist (widget (vui--collect-widgets start end) best)
-      (when-let* ((q (widget-get widget :vui-path)))
+      (when-let* ((q (vui--elt-get widget :vui-path)))
         (let* ((shared (let ((n 0) (a path) (b q))
                          (while (and a b (equal (car a) (car b)))
                            (setq n (1+ n) a (cdr a) b (cdr b)))
@@ -2896,7 +3016,7 @@ region and fallbacks move to START instead of the buffer beginning."
                            (and (equal identity
                                        (vui--widget-identity path-widget))
                                 (equal label
-                                       (widget-get path-widget :tag))))))
+                                       (vui--elt-get path-widget :vui-tag))))))
          (identity-widget (and (not path-ok)
                                (vui--find-widget-by-identity
                                 identity label start end))))
@@ -2938,7 +3058,7 @@ KEY matches nothing and returns nil: unkeyed widgets carry a nil
 `:vui-key', so treating nil as a wildcard would jump to the first of
 them."
   (when-let* ((widget (and key
-                           (seq-find (lambda (w) (equal (widget-get w :vui-key) key))
+                           (seq-find (lambda (w) (equal (vui--elt-get w :vui-key) key))
                                      (vui--collect-widgets start end))))
               (pos (car (vui--widget-bounds widget))))
     (goto-char pos)
@@ -2967,34 +3087,37 @@ indentation) is covered as well.
 KEYMAP cascades beneath the children's own keymaps: plain text that
 already carries a keymap (from a nested styled region) gets a
 composed keymap where the existing map wins and unbound keys fall
-through to KEYMAP.  Buttons compose KEYMAP beneath their own keymap
-on their overlay (`widget-keymap' for buttons without a custom one),
-so button keys keep working.  Input fields are untouched: their
-overlay keymap shadows text properties."
+through to KEYMAP.  Text buttons compose KEYMAP beneath their own
+keymap (`button-map' for buttons without a custom one) so button keys
+keep working.  Input fields are untouched: their field keymap shadows
+text properties."
   (when (< start end)
     (when face
       (add-face-text-property start end face t))
     (when keymap
       (let ((pos start))
         (while (< pos end)
-          (let ((next (min (next-single-char-property-change pos 'button nil end)
-                           (or (next-property-change pos nil end) end))))
-            (if (get-char-property pos 'button)
-                ;; Button: compose on its overlay so its own keys win
-                (dolist (overlay (overlays-at pos))
-                  (when (overlay-get overlay 'button)
-                    (overlay-put overlay 'keymap
-                                 (make-composed-keymap
-                                  (or (overlay-get overlay 'keymap)
-                                      widget-keymap)
-                                  keymap))))
-              ;; Plain text: compose under any nested region's keymap
-              (let ((existing (get-text-property pos 'keymap)))
-                (put-text-property pos next 'keymap
-                                   (if existing
-                                       (make-composed-keymap existing keymap)
-                                     keymap))))
-            (setq pos next)))))))
+          (if (get-char-property pos 'button)
+              ;; Text button: compose KEYMAP beneath the button's own
+              ;; keymap (a custom one, else `button-map') over its whole
+              ;; extent, so the button's keys win and KEYMAP stays
+              ;; reachable for keys the button leaves unbound
+              (let ((bend (or (next-single-char-property-change
+                               pos 'button nil end)
+                              end))
+                    (own (get-text-property pos 'keymap)))
+                (put-text-property pos bend 'keymap
+                                   (make-composed-keymap
+                                    (or own vui--button-keymap) keymap))
+                (setq pos bend))
+            ;; Plain text: compose under any nested region's keymap
+            (let ((next (or (next-property-change pos nil end) end))
+                  (existing (get-text-property pos 'keymap)))
+              (put-text-property pos next 'keymap
+                                 (if existing
+                                     (make-composed-keymap existing keymap)
+                                   keymap))
+              (setq pos next))))))))
 
 (defun vui--inline-p (instance)
   "Return non-nil if INSTANCE was mounted inline (owns a region)."
@@ -4851,7 +4974,7 @@ wholesale render's empty-child handling)."
    ((vui-vnode-space-p vnode)
     (insert (make-string (vui-vnode-space-width vnode) ?\s)))
 
-   ;; Button - uses widget.el push-button for proper TAB navigation
+   ;; Button - a button.el text button (marker-free; see issue #107)
    ((vui-vnode-button-p vnode)
     (let* ((label (vui-vnode-button-label vnode))
            (on-click (vui-vnode-button-on-click vnode))
@@ -4862,8 +4985,7 @@ wholesale render's empty-child handling)."
            (help-echo (vui-vnode-button-help-echo vnode))
            (tab-order (vui-vnode-button-tab-order vnode))
            (keymap (vui-vnode-button-keymap vnode))
-           ;; Pre-truncate label before passing to widget
-           ;; Widget adds brackets (2 chars) unless no-decoration
+           ;; Brackets add 2 chars around the label unless :no-decoration
            (bracket-width (if no-decoration 0 2))
            (display-label
             (if (and max-width (> (+ (string-width label) bracket-width) max-width))
@@ -4873,45 +4995,45 @@ wholesale render's empty-child handling)."
                       "..."  ; Just show [...] or ... for very small widths
                     (concat (substring label 0 (min available (length label))) "...")))
               label))
+           (text (if no-decoration display-label (concat "[" display-label "]")))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
            ;; Capture current path for cursor tracking (reverse stack to get root-first order)
            (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
-           (wrapped-click (vui--wrap-event-callback "on-click" on-click captured-instance))
-           ;; Temporarily override bracket variables for no-decoration buttons
-           (widget-push-button-prefix (if no-decoration "" widget-push-button-prefix))
-           (widget-push-button-suffix (if no-decoration "" widget-push-button-suffix)))
-      (let ((w (apply #'widget-create 'push-button
-                      :tag display-label
-                      :button-face (if disabled 'widget-inactive (or face 'link))
-                      :inactive (when disabled t)
-                      :action (lambda (_widget &optional _event)
-                                (when wrapped-click
-                                  (let ((vui--current-instance captured-instance)
-                                        (vui--root-instance captured-root))
-                                    (funcall wrapped-click))))
-                      ;; Only pass :help-echo when explicitly set (not :default)
-                      ;; nil disables tooltip (performance), string sets custom tooltip
-                      (append
-                       (unless (eq help-echo :default)
-                         (list :help-echo help-echo))
-                       (when tab-order
-                         (list :tab-order tab-order))
-                       (when keymap
-                         (list :keymap keymap))))))
-        ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path)
-        ;; Store reconciliation key so cursor identity can tell
-        ;; same-label buttons apart (see `vui--widget-identity')
-        (when-let* ((key (vui-vnode-button-key vnode)))
-          (widget-put w :vui-key key))
-        ;; Detach :from/:to bounds markers so later inserts stay O(1)
-        ;; (see issue #107); bounds come from the button overlay
-        (vui--detach-widget-bounds-markers w))))
+           (wrapped-click (vui--wrap-event-callback "on-click" on-click captured-instance)))
+      (apply #'vui--insert-text-button text
+             ;; A disabled button stays tabbable but inert
+             (lambda (_button)
+               (when (and wrapped-click (not disabled))
+                 (let ((vui--current-instance captured-instance)
+                       (vui--root-instance captured-root))
+                   (funcall wrapped-click))))
+             'face (if disabled 'widget-inactive (or face 'link))
+             ;; A disabled button should not advertise clickability: no hover
+             ;; highlight and no follow-link cursor (it is inert)
+             'mouse-face (unless disabled 'highlight)
+             'follow-link (not disabled)
+             ;; Store path and label for cursor tracking; a reconciliation
+             ;; key tells same-label buttons apart (see `vui--widget-identity')
+             :vui-path captured-path
+             :vui-tag label
+             (append
+              ;; Only pass help-echo when explicitly set (not :default);
+              ;; nil disables the tooltip, a string sets a custom one
+              (unless (eq help-echo :default)
+                (list 'help-echo help-echo))
+              (when tab-order
+                (list :vui-tab-order tab-order))
+              ;; A custom keymap composes over `vui--button-keymap' so vui
+              ;; nav (TAB/S-TAB) and RET/mouse activation still work
+              (when keymap
+                (list 'keymap (make-composed-keymap keymap vui--button-keymap)))
+              (when-let* ((key (vui-vnode-button-key vnode)))
+                (list :vui-key key))))))
 
-   ;; Checkbox
+   ;; Checkbox - a button.el text button toggling [ ]/[X]
    ((vui-vnode-checkbox-p vnode)
     (let* ((checked (vui-vnode-checkbox-checked-p vnode))
            (on-change (vui-vnode-checkbox-on-change vnode))
@@ -4922,21 +5044,19 @@ wholesale render's empty-child handling)."
            (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance)))
-      (let ((w (widget-create 'checkbox
-                              :value checked
-                              :notify (lambda (widget &rest _)
-                                        (when wrapped-change
-                                          (let ((vui--current-instance captured-instance)
-                                                (vui--root-instance captured-root))
-                                            (funcall wrapped-change (widget-value widget))))))))
-        ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path)
-        ;; A checkbox has no label, so its :key is its only stable
-        ;; cursor identity (see `vui--widget-identity')
-        (when-let* ((key (vui-vnode-checkbox-key vnode)))
-          (widget-put w :vui-key key))
-        ;; Detach :from/:to bounds markers (see issue #107)
-        (vui--detach-widget-bounds-markers w))
+      (apply #'vui--insert-text-button (if checked "[X]" "[ ]")
+             (lambda (_button)
+               (when wrapped-change
+                 (let ((vui--current-instance captured-instance)
+                       (vui--root-instance captured-root))
+                   ;; Toggling flips the current state
+                   (funcall wrapped-change (not checked)))))
+             'face 'link
+             :vui-path captured-path
+             ;; A checkbox has no label, so its :key is its only stable
+             ;; cursor identity (see `vui--widget-identity')
+             (when-let* ((key (vui-vnode-checkbox-key vnode)))
+               (list :vui-key key)))
       (when label
         (insert " " label))))
 
@@ -4964,28 +5084,28 @@ wholesale render's empty-child handling)."
            (captured-path (reverse vui--render-path))
            ;; Wrap callback with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance)))
-      (let ((w (widget-create 'push-button
-                              :notify (lambda (&rest _)
-                                        (let* ((vui--current-instance captured-instance)
-                                               (vui--root-instance captured-root)
-                                               (choice (completing-read prompt
-                                                                        (mapcar #'car normalized)
-                                                                        nil t nil nil
-                                                                        current-label))
-                                               (chosen (assoc choice normalized)))
-                                          (when (and wrapped-change chosen)
-                                            ;; Pass the option's VALUE, not its label
-                                            (funcall wrapped-change (cdr chosen)))))
-                              (format "%s" (or current-label "Select...")))))
-        ;; Store path for cursor tracking
-        (widget-put w :vui-path captured-path)
-        ;; Store reconciliation key for cursor identity, since the
-        ;; button label reflects the current selection (see
-        ;; `vui--widget-identity')
-        (when-let* ((key (vui-vnode-select-key vnode)))
-          (widget-put w :vui-key key))
-        ;; Detach :from/:to bounds markers (see issue #107)
-        (vui--detach-widget-bounds-markers w))))
+      ;; The label is bracketed like a button; :vui-tag keeps the bare
+      ;; label so cursor identity is stable as the selection changes
+      (let ((label (format "%s" (or current-label "Select..."))))
+        (apply #'vui--insert-text-button (concat "[" label "]")
+               (lambda (_button)
+                 (let* ((vui--current-instance captured-instance)
+                        (vui--root-instance captured-root)
+                        (choice (completing-read prompt
+                                                 (mapcar #'car normalized)
+                                                 nil t nil nil
+                                                 current-label))
+                        (chosen (assoc choice normalized)))
+                   (when (and wrapped-change chosen)
+                     ;; Pass the option's VALUE, not its label
+                     (funcall wrapped-change (cdr chosen)))))
+               'face 'link
+               :vui-path captured-path
+               ;; The label reflects the current selection, so cursor
+               ;; identity leans on :vui-key (see `vui--widget-identity')
+               :vui-tag label
+               (when-let* ((key (vui-vnode-select-key vnode)))
+                 (list :vui-key key))))))
 
    ;; Horizontal stack
    ;; Children that render to nothing (e.g., components returning nil)
@@ -5256,6 +5376,11 @@ wholesale render's empty-child handling)."
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance))
            (wrapped-submit (vui--wrap-event-callback "on-submit" on-submit captured-instance)))
       (let ((w (widget-create 'editable-field
+                              ;; TAB/S-TAB in a field use vui's unified nav
+                              ;; (which also stops on text buttons); editing
+                              ;; keys fall through to `widget-field-keymap'
+                              :keymap (make-composed-keymap
+                                       vui--field-nav-keymap widget-field-keymap)
                               :size (or size 20)
                               :value value
                               :secret (when secret-p ?*)

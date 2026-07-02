@@ -11,12 +11,12 @@
 (require 'buttercup)
 (require 'vui)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
-  "Invoke the button widget at POS."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (describe "vui-error-boundary"
   (it "creates an error boundary vnode"
@@ -324,8 +324,8 @@
         (vui-render (vui-checkbox
                      :checked nil
                      :on-change (lambda (_) (error "Checkbox error"))))
-        ;; Simulate checkbox toggle (checkboxes are still widgets)
-        (widget-apply (widget-at (point-min)) :notify nil))
+        ;; Simulate checkbox toggle (checkboxes are text buttons)
+        (button-activate (button-at (point-min))))
       (expect vui-last-error :to-be-truthy)
       (expect (plist-get (caddr vui-last-error) :hook) :to-equal "on-change")))
 
