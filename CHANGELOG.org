@@ -111,6 +111,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- vui's TAB/S-TAB bindings are installed by a top-level form, not only inside
+  the =vui-mode-map= =defvar=, so reloading vui.el into a running session
+  re-applies them. =defvar= does not re-evaluate a keymap that is already
+  bound, so before this a reload left =vui-mode-map= without the navigation
+  keys: TAB still worked on a button (which carries its own keymap) but fell
+  through to =indent-for-tab-command= on plain text. Fresh installs were
+  unaffected; this bit reload-driven development.
 - =vui-typed-field= now signals recovery: its =:on-error= callback fires with
   nil when input becomes valid again, not only with a message on failure.
   Listeners that track validation errors - like the form examples, which gate

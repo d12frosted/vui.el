@@ -163,5 +163,37 @@
         (expect (memq 'field visited) :to-be-truthy)
         (expect (nreverse visited) :to-equal '(field "bot" "top"))))))
 
+(describe "keymap bindings survive a reload"
+  ;; The nav keys are installed by `vui--install-keymap-keys' at top level, not
+  ;; inside the `defvar', so reloading vui.el (which does not re-evaluate a
+  ;; bound `defvar') still repairs a stale `vui-mode-map'.  Without this, TAB on
+  ;; plain text - which relies on `vui-mode-map', unlike a button that carries
+  ;; its own keymap - silently fell back to `indent-for-tab-command'.
+  (it "installs TAB/S-TAB on vui-mode-map"
+    (expect (lookup-key vui-mode-map (kbd "TAB")) :to-be 'vui-forward)
+    (expect (lookup-key vui-mode-map (kbd "<tab>")) :to-be 'vui-forward)
+    (expect (lookup-key vui-mode-map (kbd "<backtab>")) :to-be 'vui-backward)
+    (expect (lookup-key vui-mode-map (kbd "S-TAB")) :to-be 'vui-backward))
+
+  (it "reinstalls bindings a stale keymap would have lost"
+    (define-key vui-mode-map (kbd "TAB") nil)
+    (let ((stale (lookup-key vui-mode-map (kbd "TAB"))))
+      ;; Reinstall before asserting, so a failure can't leave the map stale
+      (vui--install-keymap-keys)
+      (expect stale :to-be nil)
+      (expect (lookup-key vui-mode-map (kbd "TAB")) :to-be 'vui-forward)))
+
+  (it "binds TAB to vui navigation on plain text in a mounted buffer"
+    ;; The user-visible symptom: TAB from a text position (not a button) must
+    ;; navigate, which only works if `vui-mode-map' carries the binding.
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-text "heading")
+                              (vui-button "go" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))
+      (expect (button-at (point)) :to-be nil)
+      (expect (key-binding (kbd "<tab>")) :to-be 'vui-forward)
+      (expect (key-binding (kbd "TAB")) :to-be 'vui-forward))))
+
 (provide 'vui-text-button-test)
 ;;; vui-text-button-test.el ends here
