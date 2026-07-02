@@ -111,6 +111,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Calling the low-level =vui-render= twice on the same buffer no longer crashes
+  when that buffer holds a =vui-field=. The first render leaves the field's
+  =widget-after-change= hook on =after-change-functions= and the field itself in
+  =widget-field-list=; the second render's =erase-buffer= then fired that hook
+  against the just-deleted field and signalled =(number-or-marker-p nil)=. It
+  was pre-existing and specific to reusing =vui-render= directly - =vui-mount='s
+  re-render path and fresh =with-temp-buffer= renders were fine, because the
+  component re-render path already clears the field lists before erasing.
+  =vui-render= now does the same, which also stops dead field widgets from
+  piling up in =widget-field-list= across renders.
 - Rendering many buttons (or checkboxes and selects) is linear again, not
   O(n^2). Every widget =widget-create= builds leaves two live markers behind
   (its =:from=/=:to= bounds), and Emacs adjusts every live marker on every

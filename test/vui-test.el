@@ -359,6 +359,31 @@ Buttons are widget.el push-buttons, so we use widget-apply."
             (expect (vui-field-value 'second-key) :to-equal "second"))
         (kill-buffer "*test-fv4*")))))
 
+(describe "vui-render re-render on the same buffer"
+  ;; Regression: calling the low-level `vui-render' twice on the same
+  ;; buffer used to signal (number-or-marker-p nil) during the second
+  ;; render's `erase-buffer'.  A `vui-field' installs
+  ;; `widget-after-change' on `after-change-functions' and leaves the
+  ;; field in `widget-field-list'; erasing then fired that hook against
+  ;; the just-deleted field.  `vui-render' now drops the field
+  ;; bookkeeping before erasing, like the component re-render path.
+  (it "re-renders a field on the same buffer without error"
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :key 'f :value "hello"))
+      (expect (vui-render (vui-field :size 10 :key 'f :value "world"))
+              :not :to-throw)
+      (expect (vui-field-value 'f) :to-equal "world")))
+
+  (it "does not accumulate stale fields across renders"
+    (with-temp-buffer
+      (vui-render (vui-field :size 10 :key 'f :value "one"))
+      (vui-render (vui-field :size 10 :key 'f :value "two"))
+      (vui-render (vui-field :size 10 :key 'f :value "three"))
+      ;; Each render clears the previous field, so only the current one
+      ;; survives -- no dead widgets pile up in `widget-field-list'.
+      (expect (length widget-field-list) :to-equal 1)
+      (expect (vui-field-value 'f) :to-equal "three"))))
+
 
 (describe "vui-checkbox"
   (it "creates a checkbox vnode"
