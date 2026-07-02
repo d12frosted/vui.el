@@ -540,7 +540,18 @@ a keymap once the variable is bound, which would otherwise leave a stale
     (define-key map (kbd "TAB") #'vui-forward)
     (define-key map (kbd "<tab>") #'vui-forward)
     (define-key map (kbd "<backtab>") #'vui-backward)
-    (define-key map (kbd "S-TAB") #'vui-backward)))
+    (define-key map (kbd "S-TAB") #'vui-backward)
+    ;; Shift+Tab (and Tab) reach Emacs as different events per platform
+    ;; (<backtab>, S-TAB, <S-tab>, <S-iso-lefttab>...).  Rather than bind every
+    ;; representation, remap widget.el's and button.el's own navigation
+    ;; commands to vui's, so ANY key that would invoke them (via a keymap in
+    ;; the parent chain - `widget-keymap', `button-buffer-map') navigates the
+    ;; vui way instead.  This matters because e.g. `widget-backward' jumps to
+    ;; point-max when it finds no widgets, stranding point.
+    (define-key map [remap widget-forward] #'vui-forward)
+    (define-key map [remap widget-backward] #'vui-backward)
+    (define-key map [remap forward-button] #'vui-forward)
+    (define-key map [remap backward-button] #'vui-backward)))
 
 (vui--install-keymap-keys)
 
