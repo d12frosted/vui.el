@@ -56,8 +56,8 @@
   (with-current-buffer buf
     (goto-char (point-min))
     (when (search-forward label nil t)
-      (let ((w (widget-at (match-beginning 0))))
-        (when w (widget-apply w :action))))))
+      (let ((w (button-at (match-beginning 0))))
+        (when w (button-activate w))))))
 
 (defun vui-sr--build-stream (&rest clicks)
   "Build the stream UI (content + 2 rows + content), apply CLICKS, return buffer."

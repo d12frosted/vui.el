@@ -11,12 +11,12 @@
 (require 'buttercup)
 (require 'vui)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
-  "Invoke the button widget at POS."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (describe "timing instrumentation"
   (before-each

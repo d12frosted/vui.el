@@ -13,17 +13,16 @@
 (require 'vui)
 (require 'vui-components)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-components-test--click-button-at (pos)
-  "Invoke the button widget at POS.
-Buttons are widget.el push-buttons, so we use widget-apply."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (defun vui-components-test--widget-by-tag (tag)
   "Return the first buffer widget whose :tag is TAG, or nil."
-  (seq-find (lambda (w) (equal (widget-get w :tag) tag))
+  (seq-find (lambda (w) (equal (vui--elt-get w :vui-tag) tag))
             (vui--collect-widgets)))
 
 (describe "vui type conversion functions"
@@ -443,10 +442,9 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                                   "*test-collapsible-12*")))
         (unwind-protect
             (with-current-buffer "*test-collapsible-12*"
-              ;; The face is applied via overlay (widget.el uses overlays)
+              ;; The face is a text property (text buttons carry props)
               (goto-char (point-min))
-              (let* ((ovs (overlays-at (point)))
-                     (face (when ovs (overlay-get (car ovs) 'face))))
+              (let ((face (get-text-property (point) 'face)))
                 ;; Face can be 'bold or include 'bold in a list
                 (expect (or (eq face 'bold)
                             (and (listp face) (memq 'bold face)))
@@ -566,12 +564,12 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (goto-char (car (vui--widget-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Details"))))
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▶ Details")
                 (let ((vui--current-instance inst)) (vui-set-state :open t))
                 ;; Row inserted above AND indicator flipped in one render;
                 ;; point must ride the toggle, not drift onto "banner".
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▼ Details"))
             (kill-buffer "*cc-ts*")))))
 
@@ -593,16 +591,16 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 ;; title, so only the caller's :key tells them apart.
                 (let ((toggles (seq-filter
                                 (lambda (w)
-                                  (equal (widget-get w :tag) "▶ Item"))
+                                  (equal (vui--elt-get w :vui-tag) "▶ Item"))
                                 (vui--collect-widgets))))
                   (goto-char (car (vui--widget-bounds (nth 1 toggles)))))
                 (let ((vui--current-instance inst)) (vui-set-state :open t))
                 ;; Banner shifts both toggles down and the second's indicator
                 ;; flips; without the caller's :key threaded to the toggle,
                 ;; point drifts onto the first "Item".
-                (expect (widget-get (widget-at (point)) :vui-key)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-key)
                         :to-equal 'b)
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▼ Item"))
             (kill-buffer "*cc-dup*")))))
 
@@ -626,14 +624,13 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (goto-char (car (vui--widget-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Bar"))))
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▶ Bar")
                 ;; Expand Foo by invoking its header toggle.
-                (widget-apply (vui-components-test--widget-by-tag "▶ Foo")
-                              :action)
+                (button-activate (vui-components-test--widget-by-tag "▶ Foo"))
                 (vui-flush-sync)
                 (expect (buffer-string) :to-match "inside-foo")
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▶ Bar"))
             (kill-buffer "*cc-sib*"))))))
 
@@ -695,7 +692,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (goto-char (car (vui--widget-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Schema"))))
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▶ Schema")
                 (vui-components-test--click-button-at (point))
                 (vui-flush-sync)
@@ -703,7 +700,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (expect (buffer-string) :to-match "body")
                 (expect (buffer-string) :to-match "3 invalid")
                 ;; Point rode the toggle across the label flip (#103).
-                (expect (widget-get (widget-at (point)) :tag)
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                         :to-equal "▼ Schema"))
             (kill-buffer "*cc-rich-toggle*")))))
 

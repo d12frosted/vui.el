@@ -168,14 +168,18 @@ State Change (vui-set-state)
 - Text content + widgets + text properties
 - All buffer mutations go through the renderer, never direct
 
-*Decision 5: Build on widget.el for input primitives*
-- =vui-field= wraps =editable-field= widget
-- =vui-button= wraps =push-button= widget
-- =vui-checkbox= wraps =checkbox= widget
-- =vui-select= uses =push-button= with =completing-read=
-- TAB navigation, field editing come free from widget library
-- We provide: component model, state management, layout, reconciliation
-- Widget.el provides: battle-tested input handling, keyboard navigation
+*Decision 5: Text buttons for clickables, widget.el only for fields*
+- =vui-button=, =vui-checkbox= and =vui-select= render as =button.el= text
+  buttons (marker-free and cheap; see #107)
+- =vui-field= wraps =editable-field= widget (widget.el has the only
+  battle-tested in-buffer text editing)
+- TAB/S-TAB navigation is vui's own (=vui-forward= / =vui-backward=),
+  stepping across both text buttons and fields; field editing comes free
+  from =widget.el=
+- We provide: component model, state management, layout, reconciliation,
+  unified navigation and cursor tracking over the mixed set
+- (Historically all four wrapped =widget.el= widgets; buttons moved to
+  =button.el= because each widget left markers that made rendering O(n^2))
 
 *Decision 6: Clear-and-rerender approach*
 - On state change, clear buffer and re-render entire tree

@@ -237,6 +237,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- Buttons, checkboxes and selects now render as =button.el= text buttons
+  instead of =widget.el= widgets. This finishes what #108 started for #107:
+  widget push-buttons each left two live markers in the buffer, and even after
+  #108 detached them the widget machinery still cost ~8us per button. Text
+  buttons carry no markers at all and render at a flat ~3us/row (the ~6000-row,
+  12000-button dashboard from #107 now builds in ~44ms). Editable fields stay
+  on =widget.el=, which has no text-input equivalent, and =widget-setup= still
+  runs so the buffer stays read-only outside fields. Navigation is now vui's
+  own: TAB and S-TAB (=vui-forward= / =vui-backward=) step across both text
+  buttons and fields in buffer order, replacing =widget-forward=; a button's
+  RET and mouse activation come from =button-map=, and =vui-mode= keeps
+  =widget-keymap= underneath for field editing. Cursor tracking, =:key=
+  reconciliation, =:tab-order=, a custom =:keymap= and =vui-goto-key= all work
+  as before across the mixed set. The one externally visible change: a button's
+  binding for RET is =push-button= (button.el) rather than =widget-button-press=.
 - The whole-tree skip (commit-skip) is now always on, independent of the
   experimental =vui-incremental-render= flag. When a re-render produces the
   exact same vtree object as the previous commit - which =should-update=

@@ -376,12 +376,12 @@
               ;; Park point on the "target" button (collapsed path (1)).
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(1)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
               (expect (buffer-string) :to-equal "[head]\n[extra]\n[target]")
               ;; The old path (1) now resolves to "extra"; without stable
               ;; identity point drifts there.
-              (expect (widget-get (widget-at (point)) :tag)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                       :to-equal "target"))
           (kill-buffer "*rr-ci*")))))
 
@@ -400,12 +400,12 @@
               ;; Park point on "target" (expanded path (2)).
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(2)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :expanded nil))
               (expect (buffer-string) :to-equal "[head]\n[target]")
               ;; The old path (2)/index 2 no longer exists; point must find
               ;; "target" by identity rather than falling back to the head.
-              (expect (widget-get (widget-at (point)) :tag)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                       :to-equal "target"))
           (kill-buffer "*rr-cr*")))))
 
@@ -430,12 +430,12 @@
               ;; Park point on t2 (the second row that will be removed).
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(2)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "t2")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "t2")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
               (expect (buffer-string) :to-equal "[head]\n[tail]")
               ;; t1 and t2 are gone; point rides to the row below them.
-              (expect (widget-at (point)) :not :to-be nil)
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "tail"))
+              (expect (vui--elt-at (point)) :not :to-be nil)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "tail"))
           (kill-buffer "*rr-csr*")))))
 
   (it "drops point onto the previous widget when the last one is removed"
@@ -456,12 +456,12 @@
               (expect (buffer-string) :to-equal "[first]\n[second]\n[target]")
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(2)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "target")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
               (expect (buffer-string) :to-equal "[first]\n[second]")
               ;; target was last; point falls back to the previous widget,
               ;; not to point-min (which would be "first").
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "second"))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "second"))
           (kill-buffer "*rr-clr*")))))
 
   (it "follows to the successor at the same path when a middle widget goes"
@@ -481,11 +481,11 @@
               (expect (buffer-string) :to-equal "[head]\n[mid]\n[tail]")
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(1)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "mid")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "mid")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
               (expect (buffer-string) :to-equal "[head]\n[tail]")
               ;; tail slid into mid's path (1); point follows to it.
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "tail"))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "tail"))
           (kill-buffer "*rr-cmr*")))))
 
   (it "recovers within the same container, not across a boundary by position"
@@ -512,11 +512,11 @@
               ;; Park on a2, the last leaf of the first group (path (0 1)).
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(0 1)))))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'a2)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'a2)
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
               (expect (buffer-string) :to-equal "[a1]\n[b1]\n[b2]")
               ;; a2 gone; point stays on a1 (same group), not b1 (next group).
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'a1))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'a1))
           (kill-buffer "*rr-cont*")))))
 
   (it "keeps point on the same field when a row is inserted above it"
@@ -535,8 +535,8 @@
                 (goto-char (1+ (widget-field-start field))))
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
               ;; Point must sit inside the target field, not on "extra".
-              (let ((w (widget-at (point))))
-                (expect (widget-get w :vui-key) :to-equal 'target)))
+              (let ((w (vui--elt-at (point))))
+                (expect (vui--elt-get w :vui-key) :to-equal 'target)))
           (kill-buffer "*rr-cf2*")))))
 
   (it "tells two same-label buttons apart by :key when a row shifts in"
@@ -556,9 +556,9 @@
               ;; Park on the SECOND "dup" (key b2, collapsed path (1)).
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(1)))))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b2)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'b2)
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b2))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'b2))
           (kill-buffer "*rr-dk*")))))
 
   (it "keeps point on a keyed button whose label changes as a row shifts in"
@@ -579,12 +579,12 @@
               (expect (buffer-string) :to-equal "[count 5]")
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(0)))))
-              (expect (widget-get (widget-at (point)) :vui-key)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key)
                       :to-equal 'counter)
               ;; Single state change: inserts "x" AND relabels the counter.
               (let ((vui--current-instance inst)) (vui-set-state :n 6))
               (expect (buffer-string) :to-equal "[x]\n[count 6]")
-              (expect (widget-get (widget-at (point)) :vui-key)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key)
                       :to-equal 'counter))
           (kill-buffer "*rr-ck*")))))
 
@@ -602,9 +602,9 @@
             (with-current-buffer "*rr-cbk*"
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(0)))))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'agree)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'agree)
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'agree))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'agree))
           (kill-buffer "*rr-cbk*")))))
 
   (it "keeps point on a keyed select as its label shifts in a single render"
@@ -623,9 +623,9 @@
             (with-current-buffer "*rr-sk2*"
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(0)))))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'sel)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'sel)
               (let ((vui--current-instance inst)) (vui-set-state :val "b"))
-              (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'sel))
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'sel))
           (kill-buffer "*rr-sk2*")))))
 
   (it "tells same-:key widgets in different lists apart by label"
@@ -648,12 +648,12 @@
               ;; carry key item-1.
               (goto-char (car (vui--widget-bounds
                                (vui--find-widget-by-path '(1 0)))))
-              (expect (widget-get (widget-at (point)) :tag) :to-equal "Banana")
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "Banana")
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
               (expect (buffer-string) :to-equal "[top]\n[Apple]\n[Banana]")
               ;; The old path (1 0) now resolves to "Apple" (same key); point
               ;; must follow "Banana", not drift onto the look-alike.
-              (expect (widget-get (widget-at (point)) :tag)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                       :to-equal "Banana"))
           (kill-buffer "*rr-xk*"))))))
 
@@ -672,7 +672,7 @@
               (goto-char (point-min))
               (let ((pos (vui-goto-key 'b)))
                 (expect pos :to-equal (point))
-                (expect (widget-get (widget-at (point)) :vui-key) :to-equal 'b))
+                (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'b))
               ;; Unknown key: point stays put, returns nil.
               (goto-char (point-max))
               (let ((before (point)))
@@ -691,7 +691,7 @@
         (unwind-protect
             (with-current-buffer "*gkl*"
               (expect (vui-goto-key (list 'note "id-2")) :to-be-truthy)
-              (expect (widget-get (widget-at (point)) :vui-key)
+              (expect (vui--elt-get (vui--elt-at (point)) :vui-key)
                       :to-equal (list 'note "id-2")))
           (kill-buffer "*gkl*")))))
 
@@ -749,7 +749,7 @@
                   (let ((screen-row (- (line-number-at-pos (point))
                                        (line-number-at-pos
                                         (window-start win)))))
-                    (expect (widget-get (widget-at (point)) :tag)
+                    (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                             :to-equal "row20")
                     ;; Expand: three rows appear above both the viewport
                     ;; and the cursor.
@@ -757,7 +757,7 @@
                       (vui-set-state :expanded t))
                     ;; Point still on row20 (identity), and the viewport
                     ;; scrolled with it so the screen row is unchanged.
-                    (expect (widget-get (widget-at (point)) :tag)
+                    (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                             :to-equal "row20")
                     (expect (- (line-number-at-pos (point))
                                (line-number-at-pos (window-start win)))

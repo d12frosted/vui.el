@@ -11,13 +11,12 @@
 (require 'buttercup)
 (require 'vui)
 
-;; Helper to click buttons (widget.el push-buttons)
+;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
-  "Invoke the button widget at POS.
-Buttons are widget.el push-buttons, so we use widget-apply."
-  (let ((widget (widget-at pos)))
-    (when widget
-      (widget-apply widget :action))))
+  "Invoke the text button at POS."
+  (let ((button (button-at pos)))
+    (when button
+      (button-activate button))))
 
 (describe "vui.el"
   (it "loads successfully"
@@ -201,7 +200,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (unwind-protect
             (with-current-buffer "*test-submit*"
               ;; Get the field widget directly from widget-field-list
-              ;; (widget-forward doesn't work with single widget on Emacs 29)
+              ;; (vui-forward doesn't work with single widget on Emacs 29)
               (let ((widget (car widget-field-list)))
                 (expect widget :to-be-truthy)
                 ;; Simulate RET by applying the widget action
@@ -338,7 +337,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (unwind-protect
           (with-current-buffer "*test-fv3*"
             ;; Get the field widget directly from widget-field-list
-            ;; (widget-forward doesn't work with single widget on Emacs 29)
+            ;; (vui-forward doesn't work with single widget on Emacs 29)
             (let ((widget (car widget-field-list)))
               ;; Simulate user typing by setting widget value
               (widget-value-set widget "modified")
@@ -452,7 +451,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (vui-render (vui-select :value "a"
                                   :options '(("a" . "Apple") ("b" . "Banana"))
                                   :on-change (lambda (v) (setq received v))))
-          (widget-apply (widget-at (point-min)) :notify)))
+          (button-activate (button-at (point-min)))))
       (expect candidates :to-equal '("Apple" "Banana"))
       (expect received :to-equal "b")))
 
@@ -465,7 +464,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                                   :options '((1 . "One") (2 . "Two"))
                                   :on-change (lambda (v) (setq received v))))
           (expect (buffer-string) :to-match "One")
-          (widget-apply (widget-at (point-min)) :notify)))
+          (button-activate (button-at (point-min)))))
       (expect received :to-equal 2)))
 
   (it "passes plain string options through unchanged"
@@ -476,7 +475,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
           (vui-render (vui-select :value "apple"
                                   :options '("apple" "banana")
                                   :on-change (lambda (v) (setq received v))))
-          (widget-apply (widget-at (point-min)) :notify)))
+          (button-activate (button-at (point-min)))))
       (expect received :to-equal "banana"))))
 (describe "vui-render"
   (it "renders text to buffer"
@@ -558,7 +557,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
       (let ((new-value nil))
         (vui-render (vui-field :value "initial" :on-change (lambda (v) (setq new-value v))))
         ;; Get the field widget directly from widget-field-list
-        ;; (widget-forward doesn't work with single widget on Emacs 29)
+        ;; (vui-forward doesn't work with single widget on Emacs 29)
         (let ((widget (car widget-field-list)))
           (widget-value-set widget "changed")
           (widget-apply widget :notify widget))
@@ -605,13 +604,13 @@ Buttons are widget.el push-buttons, so we use widget-apply."
               (expect (key-binding (kbd "q")) :to-equal 'vui-quit))
           (kill-buffer "*test-keymap*"))))
 
-    (it "inherits widget-keymap bindings"
+    (it "binds TAB to vui's unified navigation"
       (vui-defcomponent keymap-test-2 ()
         :render (vui-text "test"))
       (let ((instance (vui-mount (vui-component 'keymap-test-2) "*test-keymap-2*")))
         (unwind-protect
             (with-current-buffer "*test-keymap-2*"
-              (expect (key-binding (kbd "TAB")) :to-equal 'widget-forward))
+              (expect (key-binding (kbd "TAB")) :to-equal 'vui-forward))
           (kill-buffer "*test-keymap-2*")))))
 
   (describe "q key behavior"
@@ -636,7 +635,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (unwind-protect
             (with-current-buffer "*test-q-field*"
               ;; Get the field widget directly from widget-field-list
-              ;; (widget-forward doesn't work with single widget on Emacs 29)
+              ;; (vui-forward doesn't work with single widget on Emacs 29)
               (let ((field-widget (car widget-field-list)))
                 (expect field-widget :to-be-truthy)
                 (goto-char (widget-field-start field-widget))
@@ -661,7 +660,7 @@ Buttons are widget.el push-buttons, so we use widget-apply."
         (unwind-protect
             (with-current-buffer "*test-g-field*"
               ;; Get the field widget directly from widget-field-list
-              ;; (widget-forward doesn't work with single widget on Emacs 29)
+              ;; (vui-forward doesn't work with single widget on Emacs 29)
               (let ((field-widget (car widget-field-list)))
                 (expect field-widget :to-be-truthy)
                 (goto-char (widget-field-start field-widget))
