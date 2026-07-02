@@ -35,6 +35,7 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'wid-edit)
+(require 'button)
 
 ;;; Forward Declarations
 
@@ -509,6 +510,22 @@ Movement wraps around the buffer, and a negative N moves forward.  See
 It makes TAB and S-TAB use vui's unified navigation (which also stops on
 text buttons) from inside a field; field editing keys fall through to
 `widget-field-keymap'.")
+
+(defvar vui--button-keymap
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    ;; `button-map' inherits `button-buffer-map', which binds TAB/backtab to
+    ;; `forward-button'/`backward-button' - a button-only walk that skips
+    ;; fields and ignores vui's tab-order.  Rebind them to vui's unified
+    ;; navigation so TAB behaves the same on a button as anywhere else, while
+    ;; RET/mouse activation still comes from `button-map' underneath.
+    (define-key map (kbd "TAB") #'vui-forward)
+    (define-key map (kbd "<tab>") #'vui-forward)
+    (define-key map (kbd "<backtab>") #'vui-backward)
+    (define-key map (kbd "S-TAB") #'vui-backward)
+    map)
+  "Keymap for vui text buttons: `button-map' with TAB/S-TAB rebound to
+vui's unified navigation.")
 
 (defvar vui-mode-map
   (let ((map (make-sparse-keymap)))
@@ -2784,7 +2801,12 @@ ACTION is called with the button as its single argument.  PROPS is a
 plist of extra button properties (e.g. `face', `help-echo', `keymap',
 and vui's own :vui-path/:vui-key/:vui-tag/:vui-tab-order).  Returns the
 inserted button.  Text buttons carry no markers, so a bufferful of them
-renders in linear time (issue #107)."
+renders in linear time (issue #107).
+
+Unless PROPS sets its own `keymap', the button gets `vui--button-keymap'
+so TAB/S-TAB use vui navigation instead of button.el's button-only walk."
+  (unless (plist-member props 'keymap)
+    (setq props (plist-put props 'keymap vui--button-keymap)))
   (apply #'insert-text-button text
          'action action
          'follow-link t
@@ -3067,7 +3089,7 @@ text properties."
                     (own (get-text-property pos 'keymap)))
                 (put-text-property pos bend 'keymap
                                    (make-composed-keymap
-                                    (or own button-map) keymap))
+                                    (or own vui--button-keymap) keymap))
                 (setq pos bend))
             ;; Plain text: compose under any nested region's keymap
             (let ((next (or (next-property-change pos nil end) end))
@@ -4981,10 +5003,10 @@ wholesale render's empty-child handling)."
                 (list 'help-echo help-echo))
               (when tab-order
                 (list :vui-tab-order tab-order))
-              ;; A custom keymap composes over `button-map' so RET/mouse
-              ;; still activate the button
+              ;; A custom keymap composes over `vui--button-keymap' so vui
+              ;; nav (TAB/S-TAB) and RET/mouse activation still work
               (when keymap
-                (list 'keymap (make-composed-keymap keymap button-map)))
+                (list 'keymap (make-composed-keymap keymap vui--button-keymap)))
               (when-let* ((key (vui-vnode-button-key vnode)))
                 (list :vui-key key))))))
 

@@ -125,5 +125,43 @@
       (vui-backward 1)
       (expect (button-get (button-at (point)) :vui-tag) :to-equal "two"))))
 
+(describe "navigation keys bound on a button"
+  ;; Regression: `button-map' inherits `button-buffer-map', which binds TAB
+  ;; ([?\t]) to `forward-button' and <backtab> to `backward-button' - a
+  ;; button-only walk that skips fields.  When point is on a text button that
+  ;; keymap shadows `vui-mode-map', hijacking vui's unified navigation.  vui
+  ;; must rebind TAB/S-TAB on its buttons back to `vui-forward'/`vui-backward'.
+  (it "resolves TAB and S-TAB to vui nav when point is on a button"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-button "one" :on-click #'ignore)
+                              (vui-button "two" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))
+      (expect (button-at (point)) :to-be-truthy)
+      (expect (key-binding (kbd "TAB")) :to-be 'vui-forward)
+      (expect (key-binding (kbd "<tab>")) :to-be 'vui-forward)
+      (expect (key-binding (kbd "<backtab>")) :to-be 'vui-backward)
+      (expect (key-binding (kbd "S-TAB")) :to-be 'vui-backward)
+      ;; RET still activates the button (from button-map underneath)
+      (expect (key-binding (kbd "RET")) :to-be 'push-button)))
+
+  (it "reaches a field via the real TAB key from a button (not button-only)"
+    ;; Driving whatever TAB is actually bound to must cross the field; the
+    ;; button-only `forward-button' would skip it.
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-button "top" :on-click #'ignore)
+                              (vui-field :size 4 :key 'f)
+                              (vui-button "bot" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))
+      (let ((visited nil))
+        (dotimes (_ 3)
+          (call-interactively (key-binding (kbd "TAB")))
+          (push (let ((e (vui--elt-at (point))))
+                  (if (widgetp e) 'field (and e (button-get e :vui-tag))))
+                visited))
+        (expect (memq 'field visited) :to-be-truthy)
+        (expect (nreverse visited) :to-equal '(field "bot" "top"))))))
+
 (provide 'vui-text-button-test)
 ;;; vui-text-button-test.el ends here
