@@ -5374,6 +5374,14 @@ Clears the buffer before rendering."
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))
+      ;; Drop stale field bookkeeping before erasing.  A `vui-field'
+      ;; from a previous render installs `widget-after-change' on
+      ;; `after-change-functions' and lingers in `widget-field-list';
+      ;; the `erase-buffer' below would otherwise fire that hook against
+      ;; the just-deleted field and signal (number-or-marker-p nil).
+      ;; Clearing the lists (as the component re-render path does) also
+      ;; keeps dead widgets from piling up across renders.
+      (setq widget-field-list nil widget-field-new nil)
       (remove-overlays)
       (erase-buffer)
       (vui--render-vnode vnode)
