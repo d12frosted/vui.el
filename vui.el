@@ -499,48 +499,50 @@ Movement wraps around the buffer, and a negative N moves forward.  See
                  (idx (mod (- i (1- n)) len)))
             (goto-char (nth idx positions))))))))
 
-(defvar vui--field-nav-keymap
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "TAB") #'vui-forward)
-    (define-key map (kbd "<tab>") #'vui-forward)
-    (define-key map (kbd "<backtab>") #'vui-backward)
-    (define-key map (kbd "S-TAB") #'vui-backward)
-    map)
+(defvar vui--field-nav-keymap (make-sparse-keymap)
   "Keymap merged over `widget-field-keymap' on vui editable fields.
 It makes TAB and S-TAB use vui's unified navigation (which also stops on
 text buttons) from inside a field; field editing keys fall through to
-`widget-field-keymap'.")
+`widget-field-keymap'.  Bindings are installed by
+`vui--install-keymap-keys'.")
 
 (defvar vui--button-keymap
+  ;; `button-map' inherits `button-buffer-map', which binds TAB/backtab to
+  ;; `forward-button'/`backward-button' - a button-only walk that skips fields
+  ;; and ignores vui's tab-order.  This keymap rebinds them to vui's unified
+  ;; navigation (via `vui--install-keymap-keys') so TAB behaves the same on a
+  ;; button as anywhere else, while RET/mouse activation still comes from
+  ;; `button-map' underneath.
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map button-map)
-    ;; `button-map' inherits `button-buffer-map', which binds TAB/backtab to
-    ;; `forward-button'/`backward-button' - a button-only walk that skips
-    ;; fields and ignores vui's tab-order.  Rebind them to vui's unified
-    ;; navigation so TAB behaves the same on a button as anywhere else, while
-    ;; RET/mouse activation still comes from `button-map' underneath.
-    (define-key map (kbd "TAB") #'vui-forward)
-    (define-key map (kbd "<tab>") #'vui-forward)
-    (define-key map (kbd "<backtab>") #'vui-backward)
-    (define-key map (kbd "S-TAB") #'vui-backward)
     map)
   "Keymap for vui text buttons: `button-map' with TAB/S-TAB rebound to
 vui's unified navigation.")
 
-(defvar vui-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "q") #'vui-quit)
-    (define-key map (kbd "g") #'vui-refresh)
-    ;; Unified navigation across text buttons and editable fields,
-    ;; shadowing `widget-keymap's TAB/S-TAB (which only stop on widgets)
+(defvar vui-mode-map (make-sparse-keymap)
+  "Keymap for `vui-mode'.
+This keymap is active in all VUI buffers.  Users and packages can
+add bindings here for functionality like `ace-link'.  Its bindings are
+installed by `vui--install-keymap-keys'.")
+
+(defun vui--install-keymap-keys ()
+  "Install vui's key bindings on its keymaps.
+Run as a top-level form (below), not inside the `defvar's above, so that
+reloading vui.el re-installs the bindings: `defvar' does not re-evaluate
+a keymap once the variable is bound, which would otherwise leave a stale
+`vui-mode-map' without TAB/S-TAB after a reload."
+  (define-key vui-mode-map (kbd "q") #'vui-quit)
+  (define-key vui-mode-map (kbd "g") #'vui-refresh)
+  ;; Unified navigation across text buttons and editable fields.  On
+  ;; `vui-mode-map' it shadows `widget-keymap's widget-only TAB/S-TAB; on the
+  ;; button/field keymaps it shadows button.el's `button-buffer-map'.
+  (dolist (map (list vui-mode-map vui--field-nav-keymap vui--button-keymap))
     (define-key map (kbd "TAB") #'vui-forward)
     (define-key map (kbd "<tab>") #'vui-forward)
     (define-key map (kbd "<backtab>") #'vui-backward)
-    (define-key map (kbd "S-TAB") #'vui-backward)
-    map)
-  "Keymap for `vui-mode'.
-This keymap is active in all VUI buffers.  Users and packages can
-add bindings here for functionality like `ace-link'.")
+    (define-key map (kbd "S-TAB") #'vui-backward)))
+
+(vui--install-keymap-keys)
 
 (define-derived-mode vui-mode special-mode "VUI"
   "Major mode for VUI buffers.
