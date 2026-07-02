@@ -90,6 +90,37 @@
             (expect (plist-get (vui-instance-state instance) :count) :to-equal 5))
         (kill-buffer "*test-fn4*")))))
 
+(describe "vui-set-state value vs updater disambiguation"
+  ;; A functional update is a callable that takes the current value.  A value
+  ;; that is `functionp' but cannot be called with one argument - e.g. a data
+  ;; symbol like `cons', or `all' which became a builtin in Emacs 31 - must be
+  ;; stored as data, not mistaken for an updater and called.
+  (it "stores an fbound multi-argument symbol as data"
+    (vui-defcomponent ss-data-symbol ()
+      :state ((v nil))
+      :render (vui-text "x"))
+    (let ((instance (vui-mount (vui-component 'ss-data-symbol) "*ss-ds*")))
+      (unwind-protect
+          (let ((vui--current-instance instance))
+            ;; `cons' is fboundp and needs two args; before the fix this
+            ;; signalled (wrong-number-of-arguments cons 1)
+            (vui-set-state :v 'cons)
+            (expect (plist-get (vui-instance-state instance) :v) :to-equal 'cons))
+        (kill-buffer "*ss-ds*"))))
+
+  (it "still applies a one-argument function as a functional update"
+    (vui-defcomponent ss-fn-update ()
+      :state ((n 10))
+      :render (vui-text "x"))
+    (let ((instance (vui-mount (vui-component 'ss-fn-update) "*ss-fn*")))
+      (unwind-protect
+          (let ((vui--current-instance instance))
+            (vui-set-state :n #'1+)
+            (expect (plist-get (vui-instance-state instance) :n) :to-equal 11)
+            (vui-set-state :n (lambda (old) (* old 2)))
+            (expect (plist-get (vui-instance-state instance) :n) :to-equal 22))
+        (kill-buffer "*ss-fn*")))))
+
 (describe "vui-batch"
   (it "batches multiple state updates into single render"
     (let ((vui-render-delay nil)  ; Disable idle rendering

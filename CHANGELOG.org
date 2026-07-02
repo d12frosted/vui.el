@@ -111,6 +111,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-set-state= no longer mistakes a data symbol that happens to be a
+  function for a functional update. It ran VALUE on the current state whenever
+  =(functionp value)= was non-nil, but Emacs 31 made =all= a builtin, so
+  =(vui-set-state :filter 'all)= called =(all old-value)= and signalled
+  =(wrong-number-of-arguments ...)=. A value is now treated as an updater only
+  when it can accept one argument, so a data symbol like =all= (or =cons=) is
+  stored literally, while =#'1+= and =(lambda (old) ...)= still update as
+  before. This bit any =vui-set-state= whose value was a bare symbol that was
+  =fboundp= (the todo example's =all=/=active=/=completed= filters).
 - Calling the low-level =vui-render= twice on the same buffer no longer crashes
   when that buffer holds a =vui-field=. The first render leaves the field's
   =widget-after-change= hook on =after-change-functions= and the field itself in

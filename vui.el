@@ -1615,21 +1615,38 @@ or the nearest ancestor that has KEY, or INSTANCE as fallback."
     ;; Return found instance or original as fallback
     (or found instance)))
 
+(defun vui--state-updater-p (value)
+  "Non-nil if VALUE should be treated as a functional state updater.
+A functional update is a callable that takes the current value and returns
+the new one, so VALUE must be able to accept exactly one argument.  A value
+that is `functionp' but cannot - e.g. a data symbol like `all' (a builtin
+since Emacs 31) or `cons' that merely happens to be `fboundp' - is treated
+as a literal value, not an updater."
+  (and (functionp value)
+       (let ((arity (func-arity value)))
+         (and (<= (car arity) 1)
+              (or (eq (cdr arity) 'many)
+                  (>= (cdr arity) 1))))))
+
 (defun vui-set-state (key value)
   "Set state KEY to VALUE in the appropriate component and re-render.
 Searches for the component that owns KEY, starting from the current
 component and going up the parent chain.
 Must be called from within a component's event handler.
 
-If VALUE is a function, it is called with the current value and the
-result is used as the new value.  This is useful in async callbacks
-where the captured value may be stale:
+If VALUE is a function that accepts one argument, it is called with the
+current value and the result is used as the new value.  This is useful in
+async callbacks where the captured value may be stale:
 
   ;; Instead of (1+ count) which captures count at definition time:
   (vui-set-state :count #\\='1+)
 
   ;; Or with a lambda for more complex updates:
   (vui-set-state :items (lambda (old) (cons new-item old)))
+
+A value that cannot take one argument is stored as-is, so a data symbol
+that merely happens to be `fboundp' (e.g. \\='all, a builtin since Emacs 31)
+is kept literally rather than called (see `vui--state-updater-p').
 
 Treat state values as immutable: replace them (as both examples
 above do) rather than mutating them in place with setcar, push, or
@@ -1640,7 +1657,7 @@ sort.  In-place mutation is invisible to change detection
   (let* ((target (vui--find-state-owner vui--current-instance key))
          (current-state (vui-instance-state target))
          (current-value (plist-get current-state key))
-         (new-value (if (functionp value)
+         (new-value (if (vui--state-updater-p value)
                         (funcall value current-value)
                       value)))
     ;; No component in the chain declares KEY: almost certainly a typo.
