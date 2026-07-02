@@ -111,6 +111,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-typed-field= now signals recovery: its =:on-error= callback fires with
+  nil when input becomes valid again, not only with a message on failure.
+  Listeners that track validation errors - like the form examples, which gate
+  their submit button on a =(null errors)= check - previously could never clear
+  an error once a field had reported one, so a transient error (a half-typed
+  email) stuck forever and the button stayed disabled. This is why the contact,
+  registration and wizard examples could not be submitted. =:on-error= now
+  reports the current error state after each input (nil = valid).
 - =vui-set-state= no longer mistakes a data symbol that happens to be a
   function for a functional update. It ran VALUE on the current state whenever
   =(functionp value)= was non-nil, but Emacs 31 made =all= a builtin, so

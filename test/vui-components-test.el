@@ -905,6 +905,43 @@ Buttons are widget.el push-buttons, so we use widget-apply."
                 (expect error-received :to-match "at least 10"))
             (kill-buffer "*test-typed-min*")))))
 
+    (it "calls on-error with nil when input recovers to valid"
+      ;; The clear signal: after reporting an error, recovering to valid input
+      ;; must notify on-error with nil so listeners tracking errors (like the
+      ;; form examples, which gate submit on a `null errors' check) can clear
+      ;; them.  Without this a transient error (e.g. a half-typed email) sticks
+      ;; forever and the submit button stays disabled.
+      (let ((calls '()))
+        (vui-defcomponent typed-recover-test ()
+          :render
+          (vui-typed-field :type 'integer
+                           :value 0
+                           :min 10
+                           :key 'test-field
+                           :on-error (lambda (err _raw) (push err calls))
+                           :on-change #'identity))
+        (let ((instance (vui-mount (vui-component 'typed-recover-test)
+                                    "*test-typed-recover*")))
+          (unwind-protect
+              (with-current-buffer "*test-typed-recover*"
+                ;; below min -> error.  Re-fetch the field before each input:
+                ;; a re-render recreates the widget, and real typing always
+                ;; goes through the current one.
+                (let ((widget (car widget-field-list)))
+                  (widget-value-set widget "5")
+                  (widget-apply widget :notify widget)
+                  (vui-flush-sync))
+                (let ((widget (car widget-field-list)))
+                  ;; valid -> should clear (on-error called with nil)
+                  (widget-value-set widget "20")
+                  (widget-apply widget :notify widget)
+                  (vui-flush-sync))
+                ;; most recent on-error call cleared the error...
+                (expect (car calls) :to-be nil)
+                ;; ...and there was a real error before it
+                (expect (seq-some #'identity calls) :to-be-truthy))
+            (kill-buffer "*test-typed-recover*")))))
+
     (it "does not call on-change when validation fails"
       (let ((change-received nil)
             (error-received nil))
