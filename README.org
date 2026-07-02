@@ -429,6 +429,23 @@ Packages can derive their own modes from =vui-mode= to add custom keybindings:
 
 When using a derived mode, enable it *before* calling =vui-mount= or =vui-render=. VUI will detect the derived mode and preserve it across re-renders.
 
+* Querying Elements at Point
+
+When you bind your own key or command, you often need to know which VUI element the cursor is on and act on it. Reach for these instead of =widget-at= / =button-at=: they are *mechanism-agnostic*. VUI renders buttons, checkboxes and selects as =button.el= text buttons and editable fields as =widget.el= widgets, and these functions hide that difference. Poking at the rendering mechanism directly breaks whenever it changes; this API does not.
+
+- =(vui-element-at &optional POS)= — the VUI element at POS (default point), or =nil=. An opaque handle; don't assume how it was rendered.
+- =(vui-element-get ELEMENT PROP)= — a VUI property of ELEMENT: =:vui-key= (reconciliation key), =:vui-tag= (label), =:vui-path= (component-tree path), and so on.
+- =(vui-key-at &optional POS)= — convenience for the common case: the =:key= of the element at POS, or =nil=. Same as =(vui-element-get (vui-element-at POS) :vui-key)=.
+- =(vui-activate &optional POS)= — run the element's action: follow a button, toggle a checkbox, open a select, submit a field. Returns non-nil when an element was found.
+
+#+begin_src elisp
+;; A command that opens whatever keyed row the cursor is on.
+(defun my-open-at-point ()
+  (interactive)
+  (when-let* ((key (vui-key-at)))
+    (my-open-note key)))
+#+end_src
+
 * Architecture
 
 vui.el implements a React-like architecture:

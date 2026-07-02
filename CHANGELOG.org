@@ -9,6 +9,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- A public element-at-point API so consumers stop depending on the rendering
+  mechanism. =vui-element-at= returns the vui element at point (a button,
+  checkbox, select or field) as an opaque handle; =vui-element-get= reads its
+  vui properties (=:vui-key=, =:vui-tag=, =:vui-path=, ...); =vui-key-at= is
+  the convenience for the common "which keyed row is the cursor on" question;
+  and =vui-activate= runs the element's action (follow a link, toggle a
+  checkbox, submit a field). All four are mechanism-agnostic: they hide
+  whether vui rendered the element as a =button.el= text button or a
+  =widget.el= field. When #109 swapped buttons from widgets to text buttons it
+  silently broke consumers reaching for =(widget-at (point))= and
+  =(widget-get ... :vui-key)=, which return nil for text buttons - the same
+  lesson as the cursor-identity fix, which only survived because vui already
+  abstracted the two internally (=vui--elt-get=). This extends that
+  abstraction outward, so a future rendering refactor is no longer a breaking
+  change for anyone downstream (#113).
 - =vui-goto-key= moves point onto the widget carrying a given reconciliation
   =:key= (matched with =equal=), returning its position or nil. Handy for
   steering point to a known row, e.g. parking it on a stable anchor before a

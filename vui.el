@@ -2793,6 +2793,66 @@ selects) or a `widget.el' editable field."
   "Get PROP of interactive element ELT (a text button or a widget field)."
   (if (widgetp elt) (widget-get elt prop) (button-get elt prop)))
 
+;;; Public element-at-point API
+;;
+;; vui renders interactive elements with two mechanisms - `button.el' text
+;; buttons (buttons, checkboxes, selects) and `widget.el' editable fields
+;; (issues #107/#109) - and hides the difference behind the `vui--elt-*'
+;; helpers above.  These functions give that abstraction a public face, so a
+;; consumer can ask "what vui element is at point, and what are its
+;; properties" without reaching for `button-at'/`widget-at' or
+;; `button-get'/`widget-get'.  That keeps the rendering mechanism an internal
+;; detail vui is free to change: a refactor like #109 (widgets -> text
+;; buttons) stops being a breaking change for everyone downstream (issue #113).
+
+(defun vui-element-at (&optional pos)
+  "Return the vui interactive element at POS, or nil.
+POS defaults to point.  The element is whatever vui rendered there - a
+text button (a vui button, checkbox or select) or an editable field -
+returned as an opaque handle.  Read its properties with `vui-element-get'
+and run its action with `vui-activate'.  Do not assume which rendering
+mechanism produced the handle: that is vui's to change (issue #113)."
+  (vui--elt-at (or pos (point))))
+
+(defun vui-element-get (element prop)
+  "Return vui property PROP of ELEMENT, or nil.
+ELEMENT is a handle from `vui-element-at'.  PROP is one of vui's element
+properties - `:vui-key' (the reconciliation key), `:vui-tag' (the label),
+`:vui-path' (the component-tree path) and the like.  This reads them the
+same way whichever mechanism rendered ELEMENT, so consumers never call
+`widget-get' or `button-get' directly and stay insulated from a rendering
+change (issue #113)."
+  (vui--elt-get element prop))
+
+(defun vui-key-at (&optional pos)
+  "Return the reconciliation `:key' of the vui element at POS, or nil.
+POS defaults to point.  Returns nil when POS holds no vui element, or the
+element carries no key.  A convenience for the common case of asking which
+keyed row - a note, an item, a choice - the cursor sits on; equivalent to
+\(vui-element-get (vui-element-at POS) :vui-key)."
+  (when-let* ((elt (vui--elt-at (or pos (point)))))
+    (vui--elt-get elt :vui-key)))
+
+(defun vui-activate (&optional pos)
+  "Activate the vui element at POS, running its action.
+POS defaults to point.  Runs whatever the element does when pushed: a
+button follows its `:on-click', a checkbox toggles, a select opens its
+menu, an editable field submits (`:on-submit').  Returns non-nil when an
+element was found at POS (and its action invoked), nil when POS holds none.
+
+Mechanism-agnostic on purpose: activation is itself where the rendering
+mechanism used to leak (`push-button' for a button, `widget-apply' for a
+field), so a consumer calls this and a rendering change never reaches it
+\(issue #113).  A disabled button is still reported here, but its own
+action no-ops."
+  (interactive)
+  (when-let* ((elt (vui--elt-at (or pos (point)))))
+    (if (widgetp elt)
+        (when (widget-get elt :action)
+          (widget-apply elt :action))
+      (button-activate elt))
+    t))
+
 (defun vui--widget-bounds (elt)
   "Return (START . END) bounds of interactive element ELT, or nil.
 For an editable field, the editable text area (not decoration); for a
