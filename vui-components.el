@@ -567,7 +567,13 @@ PLACEHOLDER is hint text shown while the field is empty."
                           (vui-set-state :error-msg validation-err)
                           (when on-error
                             (funcall on-error validation-err string-input)))
-                      ;; All valid
+                      ;; All valid.  Notify on-error with nil so listeners
+                      ;; tracking error state (e.g. a form that gates submit on
+                      ;; `null errors') clear any error they recorded for this
+                      ;; field; without this a transient error (a half-typed
+                      ;; email) sticks and the submit button stays disabled.
+                      (when on-error
+                        (funcall on-error nil string-input))
                       (vui-set-state :error-msg nil)
                       (vui-set-state :synced-value typed-value)
                       (when callback
@@ -605,7 +611,9 @@ PROPS is a plist accepting:
   :validate   - (lambda (typed-value) error-string-or-nil)
   :on-change  - (lambda (typed-value)) called only when valid
   :on-submit  - (lambda (typed-value)) called only when valid on RET
-  :on-error   - (lambda (error-msg raw-input)) on parse/validation failure
+  :on-error   - (lambda (error-msg raw-input)) with the current error state
+                after each input: the message on parse/validation failure, or
+                nil when the input is valid (so listeners can clear it)
   :show-error - t or \\='below for below, \\='inline for same line
   :size       - Field width
   :secret     - Password mode
