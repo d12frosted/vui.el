@@ -42,10 +42,16 @@ shape, not absolute milliseconds (which depend on the machine):
   transcript is O(M^2) overall. This is the case where a marker-based
   append (insert at the end, no full rebuild) wins, and the main
   motivation for incremental rendering (#82).
-- *Widgets are the steepest cliff.* Interactive widgets (buttons,
-  fields) are markedly more expensive than text and scale worse than
-  linearly, because each one is created through =widget.el= on every
-  render. Widget-heavy re-renders are where vui slows down first.
+- *Widgets cost more than text, but scale linearly.* Interactive widgets
+  (buttons, checkboxes, selects) are several times more expensive per row
+  than plain text, because each one is created through =widget.el= on every
+  render. They used to scale *worse* than linearly: =widget-create= leaves
+  two live markers per widget, and Emacs adjusts every live marker on every
+  insert, so N buttons cost O(N^2) to build and tens of thousands could
+  crash Emacs (#107). vui now detaches those markers right after creating
+  each widget and reads bounds from the button overlay, so button-heavy
+  renders are linear again (a flat ~8us/row in batch). Editable fields keep
+  their markers, but you rarely have many at once.
 
 Re-run after performance changes and compare; the suite exists so those
 changes can be justified and regressions caught.

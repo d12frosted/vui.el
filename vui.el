@@ -2658,20 +2658,47 @@ BUFFER defaults to the current buffer.  Undoes
     (remove-hook 'window-size-change-functions
                  #'vui--on-window-size-change t)))
 
+(defun vui--detach-widget-bounds-markers (widget)
+  "Detach WIDGET's :from/:to bounds markers from the buffer.
+
+`widget-create' leaves two live markers per widget (its :from/:to
+bounds).  Emacs adjusts every live marker on each insert, so a buffer of
+N such widgets makes rendering O(N^2) and, at tens of thousands of
+widgets, can crash Emacs (issue #107).  Buttons, checkboxes and selects
+do not need those markers after creation - their bounds are recoverable
+from the button overlay (see `vui--widget-bounds') - so detaching them
+keeps rendering linear.  Editable fields are left untouched: they rely on
+their own field overlay and are never numerous enough to matter."
+  (let ((from (widget-get widget :from))
+        (to (widget-get widget :to)))
+    (when (markerp from) (set-marker from nil))
+    (when (markerp to) (set-marker to nil))))
+
 (defun vui--widget-bounds (widget)
   "Get (START . END) bounds for WIDGET's editable area.
-For editable fields, returns the actual text area, not widget decoration."
+For editable fields, returns the actual text area, not widget
+decoration.  For buttons and other overlay-based widgets, reads the
+button overlay, whose bounds survive `vui--detach-widget-bounds-markers'
+\(issue #107); falls back to the :from/:to markers when no overlay is
+present."
   (let ((field-start (widget-field-start widget))
         (field-end (widget-field-end widget)))
     (if (and field-start field-end)
         ;; Editable field - use field bounds
         (cons field-start field-end)
-      ;; Other widgets - use widget bounds
-      (let ((from (widget-get widget :from))
-            (to (widget-get widget :to)))
-        (when (and from to)
-          (cons (if (markerp from) (marker-position from) from)
-                (if (markerp to) (marker-position to) to)))))))
+      (let ((overlay (widget-get widget :button-overlay)))
+        (if (and (overlayp overlay) (overlay-buffer overlay))
+            ;; Button/checkbox/select - overlay tracks bounds without the
+            ;; per-insert marker cost the :from/:to markers would add
+            (cons (overlay-start overlay) (overlay-end overlay))
+          ;; Fallback - widget bounds via :from/:to (markers or ints)
+          (let ((from (widget-get widget :from))
+                (to (widget-get widget :to)))
+            (when (and from to)
+              (let ((fp (if (markerp from) (marker-position from) from))
+                    (tp (if (markerp to) (marker-position to) to)))
+                (when (and fp tp)
+                  (cons fp tp))))))))))
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
@@ -4862,7 +4889,10 @@ wholesale render's empty-child handling)."
         ;; Store reconciliation key so cursor identity can tell
         ;; same-label buttons apart (see `vui--widget-identity')
         (when-let* ((key (vui-vnode-button-key vnode)))
-          (widget-put w :vui-key key)))))
+          (widget-put w :vui-key key))
+        ;; Detach :from/:to bounds markers so later inserts stay O(1)
+        ;; (see issue #107); bounds come from the button overlay
+        (vui--detach-widget-bounds-markers w))))
 
    ;; Checkbox
    ((vui-vnode-checkbox-p vnode)
@@ -4887,7 +4917,9 @@ wholesale render's empty-child handling)."
         ;; A checkbox has no label, so its :key is its only stable
         ;; cursor identity (see `vui--widget-identity')
         (when-let* ((key (vui-vnode-checkbox-key vnode)))
-          (widget-put w :vui-key key)))
+          (widget-put w :vui-key key))
+        ;; Detach :from/:to bounds markers (see issue #107)
+        (vui--detach-widget-bounds-markers w))
       (when label
         (insert " " label))))
 
@@ -4934,7 +4966,9 @@ wholesale render's empty-child handling)."
         ;; button label reflects the current selection (see
         ;; `vui--widget-identity')
         (when-let* ((key (vui-vnode-select-key vnode)))
-          (widget-put w :vui-key key)))))
+          (widget-put w :vui-key key))
+        ;; Detach :from/:to bounds markers (see issue #107)
+        (vui--detach-widget-bounds-markers w))))
 
    ;; Horizontal stack
    ;; Children that render to nothing (e.g., components returning nil)
