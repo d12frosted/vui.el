@@ -65,7 +65,7 @@
         (button-activate (button-at (point-min))))
       (expect hit :to-be t)))
 
-  (it "renders a disabled button that stays inert"
+  (it "renders a disabled button that stays inert and non-clickable-looking"
     (let ((hit nil))
       (with-temp-buffer
         (vui-render (vui-button "no" :disabled t
@@ -73,7 +73,16 @@
                     (current-buffer))
         (button-activate (button-at (point-min)))
         (expect hit :to-be nil)
-        (expect (get-text-property (point-min) 'face) :to-equal 'widget-inactive)))))
+        (expect (get-text-property (point-min) 'face) :to-equal 'widget-inactive)
+        ;; a disabled button must not advertise clickability
+        (expect (get-text-property (point-min) 'mouse-face) :to-be nil)
+        (expect (get-text-property (point-min) 'follow-link) :to-be nil))))
+
+  (it "an enabled button shows the clickable affordance"
+    (with-temp-buffer
+      (vui-render (vui-button "go" :on-click #'ignore) (current-buffer))
+      (expect (get-text-property (point-min) 'mouse-face) :to-equal 'highlight)
+      (expect (get-text-property (point-min) 'follow-link) :to-be t))))
 
 (describe "unified navigation (vui-forward/backward)"
   (it "moves across text buttons"
@@ -87,6 +96,28 @@
       ;; wraps back to the first
       (vui-forward 1)
       (expect (button-get (button-at (point)) :vui-tag) :to-equal "one")))
+
+  (it "collects and navigates adjacent buttons (no separator)"
+    ;; Two buttons that abut with no separating text share one contiguous
+    ;; `button' text-property span; `next-button' skips the second, so
+    ;; collection and navigation must not depend on it or a button is dropped.
+    (with-temp-buffer
+      (vui-render (vui-hstack :spacing 0
+                    (vui-button "a" :key 'a :on-click #'ignore)
+                    (vui-button "b" :key 'b :on-click #'ignore)
+                    (vui-button "c" :key 'c :on-click #'ignore))
+                  (current-buffer))
+      (expect (buffer-string) :to-equal "[a][b][c]")
+      ;; every button is collected, in order
+      (expect (mapcar (lambda (e) (button-get e :vui-key)) (vui--collect-widgets))
+              :to-equal '(a b c))
+      ;; and every one is reachable by TAB, wrapping
+      (goto-char (point-min))
+      (let (seq)
+        (dotimes (_ 4)
+          (vui-forward 1)
+          (push (button-get (button-at (point)) :vui-key) seq))
+        (expect (nreverse seq) :to-equal '(b c a b)))))
 
   (it "stops on both text buttons and editable fields, in order"
     (with-temp-buffer

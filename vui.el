@@ -2816,15 +2816,18 @@ and vui's own :vui-path/:vui-key/:vui-tag/:vui-tab-order).  Returns the
 inserted button.  Text buttons carry no markers, so a bufferful of them
 renders in linear time (issue #107).
 
-Unless PROPS sets its own `keymap', the button gets `vui--button-keymap'
-so TAB/S-TAB use vui navigation instead of button.el's button-only walk."
+PROPS may override the defaults: unless it sets its own `keymap' the
+button gets `vui--button-keymap' (so TAB/S-TAB use vui navigation, not
+button.el's button-only walk), and unless it sets `follow-link' /
+`mouse-face' the button gets the clickable-affordance defaults (a
+disabled button passes nil for both so it does not look clickable)."
   (unless (plist-member props 'keymap)
     (setq props (plist-put props 'keymap vui--button-keymap)))
-  (apply #'insert-text-button text
-         'action action
-         'follow-link t
-         'mouse-face 'highlight
-         props))
+  (unless (plist-member props 'follow-link)
+    (setq props (plist-put props 'follow-link t)))
+  (unless (plist-member props 'mouse-face)
+    (setq props (plist-put props 'mouse-face 'highlight)))
+  (apply #'insert-text-button text 'action action props))
 
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
@@ -2852,25 +2855,28 @@ but are not needed here."
 (defun vui--collect-widgets (&optional start end)
   "Collect interactive elements between START and END, in buffer order.
 Bounds default to the whole buffer.  Text buttons (vui buttons,
-checkboxes and selects) are found by scanning `next-button'; editable
+checkboxes and selects) are found by walking `button-at'; editable
 fields come from `widget-field-list'."
   (let ((from (or start (point-min)))
         (to (or end (point-max)))
         (entries nil))
-    ;; Text buttons.  `next-button' does not report a button sitting
-    ;; exactly at FROM, so check that position explicitly first.
-    (let ((pos from) (b nil))
-      (when (setq b (button-at pos))
-        (when (>= (button-start b) from)
-          (push (cons (button-start b) b) entries))
-        (setq pos (button-end b)))
+    ;; Text buttons.  Walk position by position with `button-at' rather than
+    ;; `next-button': two buttons that abut with no separating text (e.g. an
+    ;; hstack with :spacing 0) share one contiguous `button' text-property
+    ;; span, and `next-button' skips the second one.  `button-at' at each
+    ;; position catches every button.  The `< to' loop guard bounds each
+    ;; button's start (which is <= pos), matching the field branch below.
+    (let ((pos from))
       (catch 'done
-        (while (setq pos (next-button pos))
-          (setq b (button-at pos))
-          (when (>= (button-start b) to)
-            (throw 'done nil))
-          (push (cons (button-start b) b) entries)
-          (setq pos (button-end b)))))
+        (while (< pos to)
+          (let ((b (button-at pos)))
+            (cond
+             (b
+              (when (>= (button-start b) from)
+                (push (cons (button-start b) b) entries))
+              (setq pos (button-end b)))
+             ((setq pos (next-button pos)))     ; skip a gap to the next button
+             (t (throw 'done nil)))))))          ; no more buttons
     ;; Editable fields
     (dolist (widget widget-field-list)
       (when-let* ((pos (widget-field-start widget)))
@@ -5005,6 +5011,10 @@ wholesale render's empty-child handling)."
                        (vui--root-instance captured-root))
                    (funcall wrapped-click))))
              'face (if disabled 'widget-inactive (or face 'link))
+             ;; A disabled button should not advertise clickability: no hover
+             ;; highlight and no follow-link cursor (it is inert)
+             'mouse-face (unless disabled 'highlight)
+             'follow-link (not disabled)
              ;; Store path and label for cursor tracking; a reconciliation
              ;; key tells same-label buttons apart (see `vui--widget-identity')
              :vui-path captured-path
