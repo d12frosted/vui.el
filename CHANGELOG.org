@@ -111,6 +111,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Shift+Tab navigates reliably no matter how the platform encodes it. Shift+Tab
+  reaches Emacs as different events (=<backtab>=, =S-TAB=, =<S-tab>=,
+  =<S-iso-lefttab>=...); the ones vui had not bound leaked through
+  =widget-keymap= to =widget-backward=, which jumps to point-max when there are
+  no widgets and left point stranded there. Instead of chasing every
+  representation, vui now remaps =widget-forward=/=widget-backward= and
+  =forward-button=/=backward-button= to its own navigation, so any key that
+  would invoke them cycles through vui's elements the same way.
 - vui's TAB/S-TAB bindings are installed by a top-level form, not only inside
   the =vui-mode-map= =defvar=, so reloading vui.el into a running session
   re-applies them. =defvar= does not re-evaluate a keymap that is already

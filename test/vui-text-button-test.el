@@ -195,5 +195,49 @@
       (expect (key-binding (kbd "<tab>")) :to-be 'vui-forward)
       (expect (key-binding (kbd "TAB")) :to-be 'vui-forward))))
 
+(describe "Shift-Tab variants and command remapping"
+  ;; Shift+Tab reaches Emacs as different events on different platforms
+  ;; (<backtab>, S-TAB, <S-tab>, <S-iso-lefttab>...).  Rather than chase every
+  ;; representation, vui remaps widget.el's and button.el's own navigation
+  ;; commands to its own, so ANY key that would run them navigates the vui way.
+  ;; Regression: on some systems Shift+Tab arrives as <S-tab>, which vui did
+  ;; not bind, so it leaked through `widget-keymap' to `widget-backward' - which
+  ;; jumps to point-max when it finds no widgets, and got stuck there.
+  (it "remaps widget/button nav commands to vui nav"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-button "one" :on-click #'ignore)
+                              (vui-button "two" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))
+      (expect (command-remapping 'widget-forward) :to-be 'vui-forward)
+      (expect (command-remapping 'widget-backward) :to-be 'vui-backward)
+      (expect (command-remapping 'forward-button) :to-be 'vui-forward)
+      (expect (command-remapping 'backward-button) :to-be 'vui-backward)))
+
+  (it "resolves the <S-tab> Shift-Tab variant to vui-backward"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-button "one" :on-click #'ignore)
+                              (vui-button "two" :on-click #'ignore))
+                  (current-buffer))
+      ;; on a button
+      (goto-char (point-min))
+      (expect (key-binding (kbd "<S-tab>")) :to-be 'vui-backward)
+      (expect (key-binding (kbd "<backtab>")) :to-be 'vui-backward)
+      (expect (key-binding (kbd "S-TAB")) :to-be 'vui-backward)
+      ;; and on plain text between/after buttons
+      (goto-char (point-max))
+      (expect (button-at (point)) :to-be nil)
+      (expect (key-binding (kbd "<S-tab>")) :to-be 'vui-backward)))
+
+  (it "S-Tab from the first element wraps to the last (never point-max)"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-button "one" :on-click #'ignore)
+                              (vui-button "two" :on-click #'ignore)
+                              (vui-button "three" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))                ; on "one"
+      (call-interactively (key-binding (kbd "<S-tab>")))
+      (expect (button-get (button-at (point)) :vui-tag) :to-equal "three"))))
+
 (provide 'vui-text-button-test)
 ;;; vui-text-button-test.el ends here
