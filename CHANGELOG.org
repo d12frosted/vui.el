@@ -111,6 +111,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Rendering many buttons (or checkboxes and selects) is linear again, not
+  O(n^2). Every widget =widget-create= builds leaves two live markers behind
+  (its =:from=/=:to= bounds), and Emacs adjusts every live marker on every
+  insert, so a buffer of N widgets cost O(N^2) to build: a ~6000-row schema
+  dashboard took ~8.5s, and a 100k-row one crashed Emacs outright (#107). Plain
+  text and flex layout stayed linear because overlays (Emacs 29+) carry no such
+  cost, only explicit markers do. vui now detaches those bounds markers right
+  after creating each button, checkbox and select, and reads their bounds from
+  the button overlay instead (which tracks position for free), so navigation and
+  cursor tracking are unchanged. That same 6000-row dashboard now builds in
+  ~0.1s, and buttons render at a flat ~8us/row through 16000. Editable fields
+  keep their markers: they rely on their own field machinery and are never
+  numerous enough to matter.
 - Re-render recovers point semantically when the row it was on is removed,
   instead of dropping to the top of the buffer. Cursor restoration first looks
   for the saved widget by tree path and by =:key=/label; when both miss because
