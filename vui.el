@@ -74,6 +74,15 @@ Same options as `vui-lifecycle-error-handler'."
           (function :tag "Custom handler"))
   :group 'vui)
 
+(defcustom vui-width-mode 'char
+  "Specify the measurement mode for width calculations in the vui package.
+This variable allows choosing between character-based (char) and
+pixel-based (pixel) methods for handling text width."
+  :type '(choice (const :tag "character-based mode" char)
+                 (const :tag "pixel-based mode" pixel))
+
+  :group 'vui)
+
 (defvar vui-last-error nil
   "The most recent error caught by vui's error handling.
 Stored as (TYPE ERROR CONTEXT) where TYPE is `lifecycle' or `event',
@@ -791,7 +800,6 @@ vnode (re-)emits the items and binds the region around them."
 Maps boundary keys to caught errors.  Lazily initialized by
 `vui--error-boundary-table'.")
 
-
 ;;; Component System
 
 ;; Component definition - the template
@@ -924,6 +932,12 @@ loaders are not started, so the measurement has no side effects.")
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
 Each entry is a vui-context-binding.")
+
+(defvar vui--text-pixel-cache nil
+  "A hash table used to store and retrieve the pixel width of text strings
+for performance optimization through caching.")
+
+(add-hook 'after-setting-font-hook #'vui--reset-text-pixel-cache)
 
 (defun vui--register-component (def)
   "Register component definition DEF in the registry."
@@ -3249,7 +3263,7 @@ is modified."
     (when (string-empty-p (widget-value widget))
       (let ((start (widget-field-start widget))
             (end (widget-field-end widget))
-            (size (widget-get widget :size)))
+            (size (vui--width (widget-get widget :size))))
         (when (and start end (> end start)
                    ;; Idempotent: the field may already show its
                    ;; placeholder (e.g. another region in the same
@@ -3262,9 +3276,8 @@ is modified."
             (overlay-put overlay 'vui-placeholder t)
             (overlay-put overlay 'display
                          (propertize
-                          (truncate-string-to-width
-                           placeholder (or size (string-width placeholder))
-                           nil ?\s)
+                          (concat (vui--truncate-string placeholder (or size (vui--text-width placeholder)))
+                                  (vui--pad (- size (vui--text-width placeholder))))
                           'face 'vui-field-placeholder))
             ;; Hide the placeholder the moment the field is modified;
             ;; the next re-render decides whether to show it again
@@ -3588,6 +3601,161 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
 
 ;;; Rendering
 
+;; General Render Width
+
+(defun vui--width (width)
+  "Return the width value converted according to the current measurement
+mode specified by vui-width-mode. If the mode is char, return width as
+is; if the mode is pixel, convert width to its pixel equivalent using
+vui--to-pixel-width."
+  (pcase vui-width-mode
+    ('char width)
+    ('pixel (vui--to-pixel-width width))))
+
+(defun vui--text-width (text &optional multi-line-p)
+  "Calculate the width of TEXT according to the value of vui-width-mode. If
+the mode is char, return the maximum width of all lines when
+MULTI-LINE-P is non-nil, or the width of the entire string otherwise. If
+the mode is pixel, return the pixel width of TEXT."
+  (pcase vui-width-mode
+    ('char (if multi-line-p
+               (apply #'max (mapcar #'string-width (string-split text "\n")))
+             (string-width text)))
+    ('pixel (vui--string-pixel-width text))))
+
+(defun vui--pad (width)
+  "Return a padding string of the specified WIDTH based on the current
+vui-width-mode. If the mode is char, return a string of WIDTH spaces. If
+the mode is pixel, return pixel-based padding using vui--pixel-spaces."
+  (if (and width (> width 0))
+      (pcase vui-width-mode
+        ('char (make-string width ?\s))
+        ('pixel (vui--pixel-spaces width)))
+    ""))
+
+(defun vui--normalize-width (char width)
+  "Normalize WIDTH based on the pixel width of CHAR when vui-width-mode is
+pixel. If CHAR is non-nil and the mode is pixel, return WIDTH rounded up
+to the nearest multiple of the pixel width of CHAR. Otherwise, return
+WIDTH unchanged."
+  (if (and char
+           (equal vui-width-mode 'pixel))
+      (let ((char-width (vui--text-width char)))
+        (if (= 0 (% width char-width))
+            width
+          (* char-width (1+ (/ width char-width)))))
+    width))
+
+(defun vui--index-of (str width)
+  "Return the index in STR that corresponds to the specified WIDTH based on
+the current vui-width-mode. If the mode is char, return the minimum of
+the string length and WIDTH. If the mode is pixel, return the index
+found using a pixel-based binary search."
+  (pcase vui-width-mode
+    ('char (min (length str) width))
+    ('pixel (vui--pixel-binary-search str width))))
+
+(defun vui--clip-string (str width)
+  "Clip STR to the specified WIDTH. If WIDTH is 0 or less, return an empty
+string. Otherwise, return the prefix of STR that fits within WIDTH
+according to the current vui-width-mode."
+  (if (<= width 0)
+      ""
+    (substring str 0 (vui--index-of str width))))
+
+(defun vui--truncate-string-pixelwise (string max-pixels &optional buffer ellipsis ellipsis-pixels)
+  "Truncate STRING to a maximum width of MAX-PIXELS.
+If the built-in truncate-string-pixelwise is available, it is used for
+the truncation. Otherwise, if the pixel width of STRING exceeds
+MAX-PIXELS, it is clipped and ELLIPSIS is appended."
+  (if (fboundp 'truncate-string-pixelwise)
+      (truncate-string-pixelwise string max-pixels buffer ellipsis ellipsis-pixels)
+    (if (<= (vui--string-pixel-width string) max-pixels)
+        string
+      (let* ((ellipsis (or ellipsis ""))
+             (ellipsis-pixels (or ellipsis-pixels (vui--string-pixel-width ellipsis))))
+        (concat (vui--clip-string string (- max-pixels ellipsis-pixels))
+                ellipsis)))))
+
+(defun vui--truncate-string (str width &optional ellipsis)
+  "Truncate STR to the specified WIDTH, optionally appending ELLIPSIS. The
+truncation method depends on vui-width-mode: it uses character-based
+truncation if the mode is char, and pixel-based truncation if the mode
+is pixel."
+  (pcase vui-width-mode
+    ('char (truncate-string-to-width str width nil nil ellipsis))
+    ('pixel (vui--truncate-string-pixelwise str width nil ellipsis (vui--string-pixel-width ellipsis)))))
+
+(defun vui--make-string (width char)
+  "Create a string of CHAR repeated to fit WIDTH. It calculates the number
+of characters required by dividing the target WIDTH by the text width of
+CHAR and returns a string of that length."
+  (let* ((char-width (vui--text-width char))
+         (char-count (and (> char-width 0) (/ width char-width))))
+    (make-string char-count (string-to-char char))))
+
+;; Render Pixel Width
+
+(defun vui--reset-text-pixel-cache ()
+  "Reset the text pixel width cache by reinitializing vui--text-pixel-cache
+as a new hash table using equal as the comparison test. NOTE: `equal'
+compare strings will ignores text properties. There will be cache issue
+when a face changes the font or size. If necessary, you will implement a
+user-supplied test and hash functions using
+`equal-including-properties'."
+  (setq vui--text-pixel-cache (make-hash-table :test #'equal)))
+
+(defun vui--string-pixel-width (str)
+  "Return the pixel width of string STR while utilizing a cache for
+optimization. It looks up the width in vui--text-pixel-cache and, if
+missing, calculates it using string-pixel-width and stores the result."
+  (when str
+    (unless vui--text-pixel-cache
+      (vui--reset-text-pixel-cache))
+    (or (gethash str vui--text-pixel-cache)
+        (puthash str (string-pixel-width str) vui--text-pixel-cache))))
+
+(defun vui--pixel-binary-search (str pixel-width)
+  "Automatically calculate the boundary and return the truncation position."
+  (let* ((len (length str))
+         (low 0)
+         (high len)
+         (best 0))
+    (while (<= low high)
+      (let* ((mid (/ (+ low high) 2))
+             (w (vui--text-width (substring str 0 mid))))
+        (cond
+         ((= w pixel-width) (setq best mid
+                                  low (1+ len)))
+         ((< w pixel-width) (setq best mid
+                                  low (1+ mid)))
+         (t (setq high (1- mid))))))
+    best))
+
+(defun vui--pixel-spaces (pixel)
+  "Generate a string of spaces and fine-tuned pixel spacing equivalent to
+the specified PIXEL width. It calculates the number of standard space
+characters that fit and appends the remaining pixel width using
+vui--pixel-spacing."
+  (let* ((space-pixel (vui--string-pixel-width " "))
+         (space-count (/ pixel space-pixel)))
+    (concat
+     (make-string space-count ?\s)
+     (vui--pixel-spacing (- pixel (* space-pixel space-count))))))
+
+(defun vui--pixel-spacing (pixel)
+  "Return a pixel spacing with a PIXEL pixel width."
+  (if (<= pixel 0)
+      ""
+    (propertize " " 'display `(space :width (,pixel)))))
+
+(defun vui--to-pixel-width (width)
+  "Convert characters width to pixel width."
+  (when width
+    (if (<= width 0)
+        0
+      (* width (vui--string-pixel-width " ")))))
+
 ;; Table rendering helpers
 
 (defun vui--cell-visual-width (cell)
@@ -3596,7 +3764,7 @@ This is the two-pass approach: render to measure, then render for real.
 Simple cases (string, nil) are optimized to avoid temp buffer overhead."
   (cond
    ((null cell) 0)
-   ((stringp cell) (string-width cell))
+   ((stringp cell) (vui--text-width cell))
    ;; For any vnode: render to temp buffer and measure
    ;; This is the universal approach that works for any component
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
@@ -3610,7 +3778,7 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
               (vui--measuring-p t)
               (vui--pending-effects nil))
           (vui--render-vnode cell))
-        (string-width (buffer-string))))))
+        (vui--text-width (buffer-string))))))
 
 (defun vui--measure-vnode-width (vnode)
   "Measure VNODE's rendered width as the width of its widest line.
@@ -3620,7 +3788,7 @@ widest line rather than the sum of all lines."
   (cond
    ((null vnode) 0)
    ((stringp vnode)
-    (apply #'max (mapcar #'string-width (split-string vnode "\n"))))
+    (vui--text-width vnode t))
    (t (with-temp-buffer
         (let ((vui--current-instance nil)
               (vui--root-instance nil)
@@ -3629,13 +3797,7 @@ widest line rather than the sum of all lines."
               (vui--measuring-p t)
               (vui--pending-effects nil))
           (vui--render-vnode vnode))
-        (let ((max-width 0))
-          (goto-char (point-min))
-          (while (not (eobp))
-            (end-of-line)
-            (setq max-width (max max-width (current-column)))
-            (forward-line 1))
-          max-width)))))
+        (vui--text-width (buffer-string) t)))))
 
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
@@ -3657,13 +3819,7 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
           (vui--render-vnode cell))
         (buffer-string)))))
 
-(defun vui--truncate-string (str width)
-  "Truncate STR to WIDTH characters, adding ... if truncated."
-  (if (<= (string-width str) width)
-      str
-    (concat (substring str 0 (max 0 (- width 3))) "...")))
-
-(defun vui--calculate-table-widths (columns rows)
+(defun vui--calculate-table-widths (columns rows border)
   "Calculate column widths from COLUMNS specs and ROWS data.
 Uses two-pass rendering: cells are rendered to measure their visual width.
 
@@ -3680,7 +3836,7 @@ Width calculation:
          (widths (make-vector col-count 0)))
     (cl-loop for col in columns
              for i from 0
-             do (let ((declared-width (plist-get col :width))
+             do (let ((declared-width (vui--width (plist-get col :width)))
                       (grow (plist-get col :grow))
                       (truncate-p (plist-get col :truncate))
                       (header (plist-get col :header)))
@@ -3688,7 +3844,7 @@ Width calculation:
                       ;; No :width - auto-size to max content
                       (let ((max-w 1))
                         (when header
-                          (setq max-w (max max-w (string-width header))))
+                          (setq max-w (max max-w (vui--text-width header))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
                             (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -3702,7 +3858,7 @@ Width calculation:
                           ;; (unless :truncate is set)
                           (unless truncate-p
                             (when header
-                              (setq max-w (max max-w (string-width header))))
+                              (setq max-w (max max-w (vui--text-width header))))
                             (dolist (row rows)
                               (when (and (listp row) (< i (length row)))
                                 (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -3712,7 +3868,7 @@ Width calculation:
                       (let ((max-w 1)
                             (has-overflow nil))
                         (when header
-                          (setq max-w (max max-w (string-width header))))
+                          (setq max-w (max max-w (vui--text-width header))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
                             (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -3723,7 +3879,10 @@ Width calculation:
                         (aset widths i (if has-overflow
                                            declared-width
                                          max-w)))))))
-    (append widths nil)))
+    (mapcar
+     (apply-partially #'vui--normalize-width
+                      (pcase border (:ascii "-") (:unicode "─")))
+     (append widths nil))))
 
 (defvar-local vui--table-sticky-registry nil
   "Sticky table regions in this buffer, newest first.
@@ -3841,7 +4000,7 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
     (cl-loop for width in col-widths
              for i from 0
              do (progn
-                  (insert (make-string (+ width (* 2 padding)) (string-to-char fill)))
+                  (insert (vui--make-string (+ width (vui--width (* 2 padding))) fill))
                   (if (< i (1- (length col-widths)))
                       (insert mid)
                     (insert right))))
@@ -3871,7 +4030,7 @@ Handles :truncate and overflow:
                          (:ascii (propertize "¦" 'face sep-face))
                          (:unicode (propertize "¦" 'face sep-face))
                          (_ " ")))
-         (cell-padding (if border-style 1 0)))
+         (cell-padding (if border-style (vui--text-width " ") 0)))
     (when border-style
       (insert sep))
     (cl-loop for cell in cells
@@ -3881,11 +4040,11 @@ Handles :truncate and overflow:
              do (let* ((align (if header-p :left (or (plist-get col :align) :left)))
                        (truncate-p (plist-get col :truncate))
                        (grow (plist-get col :grow))
-                       (declared-width (plist-get col :width))
+                       (declared-width (vui--width (plist-get col :width)))
                        (face (when header-p (or header-face 'vui-table-header)))
                        ;; Get content as string (works for both vnodes and strings)
                        (content (vui--cell-to-string cell))
-                       (content-width (string-width content))
+                       (content-width (vui--text-width content))
                        ;; Check for overflow (content exceeds declared width)
                        ;; No overflow if :grow t (column expands) or :truncate t (content truncated)
                        (has-overflow (and declared-width
@@ -3897,20 +4056,20 @@ Handles :truncate and overflow:
                         (cond
                          ;; Truncate if content exceeds width and :truncate is set
                          ((and truncate-p declared-width (> content-width declared-width))
-                          (vui--truncate-string content declared-width))
+                          (vui--truncate-string content declared-width "..."))
                          ;; Overflow: show content up to width
                          (has-overflow
-                          (substring content 0 (min (length content) declared-width)))
+                          (vui--truncate-string content declared-width))
                          ;; Normal case
                          (t content)))
                        (overflow-content
                         (when has-overflow
-                          (substring content (min (length content) declared-width))))
-                       (display-width (string-width display-content))
+                          (substring content (length display-content))))
+                       (display-width (vui--text-width display-content))
                        (padding (max 0 (- width display-width))))
                   ;; Left cell padding
                   (when (> cell-padding 0)
-                    (insert (make-string cell-padding ?\s)))
+                    (insert (vui--pad cell-padding)))
                   ;; Render cell content with alignment
                   ;; For vnodes (buttons, etc.), render directly to preserve interactivity
                   ;; For strings, insert with optional face
@@ -3945,9 +4104,9 @@ Handles :truncate and overflow:
                          (if face
                              (insert (propertize display-content 'face face))
                            (insert display-content)))
-                       (insert (make-string padding ?\s)))
+                       (insert (vui--pad padding)))
                       (:right
-                       (insert (make-string padding ?\s))
+                       (insert (vui--pad padding))
                        (if is-vnode
                            (vui--render-vnode render-cell)
                          (if face
@@ -3956,26 +4115,26 @@ Handles :truncate and overflow:
                       (:center
                        (let ((left-pad (/ padding 2))
                              (right-pad (- padding (/ padding 2))))
-                         (insert (make-string left-pad ?\s))
+                         (insert (vui--pad left-pad))
                          (if is-vnode
                              (vui--render-vnode render-cell)
                            (if face
                                (insert (propertize display-content 'face face))
                              (insert display-content)))
-                         (insert (make-string right-pad ?\s))))))
+                         (insert (vui--pad right-pad))))))
                   ;; Right cell padding and column separator
                   ;; When overflow, use padding + overflow separator + trimmed overflow content
                   (cond
                    ;; Overflow case: padding + overflow separator + overflow content (trimmed)
                    ((and border-style has-overflow)
                     (when (> cell-padding 0)
-                      (insert (make-string cell-padding ?\s)))
+                      (insert (vui--pad cell-padding)))
                     (insert overflow-sep)
                     (insert (string-trim-left overflow-content)))
                    ;; Normal case with border: padding + separator
                    (border-style
                     (when (> cell-padding 0)
-                      (insert (make-string cell-padding ?\s)))
+                      (insert (vui--pad cell-padding)))
                     (insert sep))
                    ;; No border: space between cells
                    (t
@@ -3987,18 +4146,19 @@ Handles :truncate and overflow:
   "Resolve a `vui-flex' WIDTH spec to a number at render time.
 WIDTH is a number, a function, or one of the symbols `fill-column'
 and `window'."
-  (cond
-   ((numberp width) width)
-   ((eq width 'fill-column) fill-column)
-   ((eq width 'window) (window-width))
-   ((functionp width) (funcall width))
-   (t fill-column)))
+  (vui--width
+   (cond
+    ((numberp width) width)
+    ((eq width 'fill-column) fill-column)
+    ((eq width 'window) (window-width))
+    ((functionp width) (funcall width))
+    (t fill-column))))
 
 (defun vui--render-flex (vnode)
   "Render a `vui-flex' VNODE: distribute its width among children."
   (let* ((children (vui-vnode-flex-children vnode))
-         (spacing (or (vui-vnode-flex-spacing vnode) 1))
-         (indent (or (vui-vnode-flex-indent vnode) 0))
+         (spacing (vui--width (or (vui-vnode-flex-spacing vnode) 1)))
+         (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (justify (or (vui-vnode-flex-justify vnode) :start))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
                           indent)))
@@ -4013,11 +4173,11 @@ and `window'."
                                   :natural (vui--measure-vnode-width child))))
                         children))
          (grow-total (cl-reduce #'+ (mapcar (lambda (s) (or (plist-get s :grow) 0))
-                                            specs)
-                                :initial-value 0))
+                                     specs)
+                      :initial-value 0))
          (naturals (cl-reduce #'+ (mapcar (lambda (s) (or (plist-get s :natural) 0))
-                                          specs)
-                              :initial-value 0))
+                                   specs)
+                    :initial-value 0))
          (sep-count (max 0 (1- (length specs))))
          (leftover (max 0 (- total naturals (* spacing sep-count)))))
     ;; Distribute leftover among growers, remainder to the last one
@@ -4047,16 +4207,16 @@ and `window'."
            (prev-rendered-p nil)
            (child-idx 0))
       (when (> lead 0)
-        (insert (make-string lead ?\s)))
+        (insert (vui--pad lead)))
       (dolist (spec specs)
         (let ((sep-start (point))
               (content-start nil)
               (vui--render-path (cons child-idx vui--render-path)))
           ;; Separator (plus space-between padding) if previous child rendered
           (when prev-rendered-p
-            (insert (make-string spacing ?\s))
+            (insert (vui--pad spacing))
             (when (> gap-base 0)
-              (insert (make-string gap-base ?\s)))
+              (insert (vui--pad gap-base)))
             (when (< gap-index gap-remainder)
               (insert " "))
             (cl-incf gap-index))
@@ -5286,7 +5446,7 @@ wholesale render's empty-child handling)."
 
    ;; Space
    ((vui-vnode-space-p vnode)
-    (insert (make-string (vui-vnode-space-width vnode) ?\s)))
+    (insert (vui--pad (vui--width (vui-vnode-space-width vnode)))))
 
    ;; Button - a button.el text button (marker-free; see issue #107)
    ((vui-vnode-button-p vnode)
@@ -5294,20 +5454,23 @@ wholesale render's empty-child handling)."
            (on-click (vui-vnode-button-on-click vnode))
            (face (vui-vnode-button-face vnode))
            (disabled (vui-vnode-button-disabled-p vnode))
-           (max-width (vui-vnode-button-max-width vnode))
+           (max-width (vui--width (vui-vnode-button-max-width vnode)))
            (no-decoration (vui-vnode-button-no-decoration vnode))
            (help-echo (vui-vnode-button-help-echo vnode))
            (tab-order (vui-vnode-button-tab-order vnode))
            (keymap (vui-vnode-button-keymap vnode))
            ;; Brackets add 2 chars around the label unless :no-decoration
-           (bracket-width (if no-decoration 0 2))
+           (bracket-width (if no-decoration 0 (vui--text-width "[]")))
            (display-label
-            (if (and max-width (> (+ (string-width label) bracket-width) max-width))
+            (if (and max-width (> (+ (vui--text-width label) bracket-width) max-width))
                 ;; Need truncation: available = max-width - brackets - 3 (...)
-                (let ((available (- max-width bracket-width 3)))
+                (let ((available (- max-width bracket-width (vui--text-width "..."))))
                   (if (<= available 0)
                       "..."  ; Just show [...] or ... for very small widths
-                    (concat (substring label 0 (min available (length label))) "...")))
+                    (concat (substring label 0 (vui--index-of
+                                                label
+                                                (min available (vui--text-width label))))
+                            "...")))
               label))
            (text (if no-decoration display-label (concat "[" display-label "]")))
            ;; Capture instance context for callback
@@ -5425,14 +5588,14 @@ wholesale render's empty-child handling)."
    ;; Children that render to nothing (e.g., components returning nil)
    ;; are skipped and don't affect spacing.
    ((vui-vnode-hstack-p vnode)
-    (let ((spacing (or (vui-vnode-hstack-spacing vnode) 1))
-          (indent (or (vui-vnode-hstack-indent vnode) 0))
+    (let ((spacing (vui--width (or (vui-vnode-hstack-spacing vnode) 1)))
+          (indent (vui--width (or (vui-vnode-hstack-indent vnode) 0)))
           (children (vui-vnode-hstack-children vnode))
           (container-start (point))
           (space-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
-      (setq space-str (make-string spacing ?\s))
+      (setq space-str (vui--pad spacing))
       (dolist (child children)
         (let ((sep-start (point))
               (content-start nil)
@@ -5478,7 +5641,7 @@ wholesale render's empty-child handling)."
           (indent-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
-      (setq indent-str (make-string indent ?\s))
+      (setq indent-str (vui--pad indent))
       (dolist (child children)
         (let ((vui--render-path (cons child-idx vui--render-path)))
           ;; newline children are intentional blank lines - always "render"
@@ -5573,13 +5736,13 @@ wholesale render's empty-child handling)."
 
    ;; Fixed-width box
    ((vui-vnode-box-p vnode)
-    (let* ((width (vui-vnode-box-width vnode))
+    (let* ((width (vui--width (vui-vnode-box-width vnode)))
            (align (or (vui-vnode-box-align vnode) :left))
-           (pad-left (or (vui-vnode-box-padding-left vnode) 0))
-           (pad-right (or (vui-vnode-box-padding-right vnode) 0))
+           (pad-left (vui--width (or (vui-vnode-box-padding-left vnode) 0)))
+           (pad-right (vui--width (or (vui-vnode-box-padding-right vnode) 0)))
            (child (vui-vnode-box-child vnode))
            (box-start (point))
-           (pad-left-str (make-string pad-left ?\s))
+           (pad-left-str (vui--pad pad-left))
            ;; First render to temp buffer to measure width.
            ;; Isolate the measure pass like table cells do: without the
            ;; rebindings, a component inside the box would be reconciled
@@ -5593,7 +5756,7 @@ wholesale render's empty-child handling)."
                                   (vui--measuring-p t)
                                   (vui--pending-effects nil))
                               (vui--render-vnode child))
-                            (string-width (buffer-string))))
+                            (vui--text-width (buffer-string))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding
@@ -5604,16 +5767,16 @@ wholesale render's empty-child handling)."
         (pcase align
           (:left
            (vui--render-vnode child)
-           (insert (make-string padding ?\s)))
+           (insert (vui--pad padding)))
           (:right
-           (insert (make-string padding ?\s))
+           (insert (vui--pad padding))
            (vui--render-vnode child))
           (:center
            (let ((left-pad (/ padding 2))
                  (right-pad (- padding (/ padding 2))))
-             (insert (make-string left-pad ?\s))
+             (insert (vui--pad left-pad))
              (vui--render-vnode child)
-             (insert (make-string right-pad ?\s)))))
+             (insert (vui--pad right-pad)))))
         ;; Add left padding after each newline for block indentation
         (when (> pad-left 0)
           (save-excursion
@@ -5621,7 +5784,7 @@ wholesale render's empty-child handling)."
             (while (search-forward "\n" nil t)
               (insert pad-left-str)))))
       ;; Insert right padding
-      (insert (make-string pad-right ?\s))
+      (insert (vui--pad pad-right))
       (vui--apply-region-props box-start (point)
                                (vui-vnode-box-face vnode)
                                (vui-vnode-box-keymap vnode))))
@@ -5636,7 +5799,7 @@ wholesale render's empty-child handling)."
            (has-header (cl-some (lambda (c) (plist-get c :header)) columns))
            (sticky (and (vui-vnode-table-sticky-header vnode) has-header))
            ;; Calculate column widths
-           (col-widths (vui--calculate-table-widths columns rows)))
+           (col-widths (vui--calculate-table-widths columns rows border)))
       ;; The pinned copy of a sticky header is display-only text in the
       ;; header line, out of reach of vui navigation and buttons -
       ;; require plain string headers so nothing looks interactive
