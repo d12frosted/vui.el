@@ -25,6 +25,8 @@ meant to gate CI.
 | Streaming append  | Per-line re-render as a transcript grows                   |
 | Update throughput | Raw re-render floor for a trivial UI                       |
 | Widgets           | Full re-render cost vs interactive widget (button) count   |
+| Tables            | Re-render cost vs rows, vs columns, and string vs vnode cells |
+| Table width mode  | char vs pixel measurement cost (#121), where the build has the switch |
 
 * What to expect (the shape, not the numbers)
 
@@ -52,6 +54,23 @@ shape, not absolute milliseconds (which depend on the machine):
   migration then dropped widgets for buttons entirely (~3us/row). Editable
   fields are the one thing still built on =widget.el= (it has no text-input
   equivalent), but you rarely have many at once.
+
+- *Tables are the measurement-heavy path.* Column widths are recomputed from
+  scratch on every render, so every cell is measured several times per pass and
+  cost tracks cells (rows x columns), not rows: at 500 rows the per-column cost
+  settles at ~3.8ms from 5 columns up (a touch higher at 2, where the
+  per-table overhead has fewer columns to amortize over). A 5-column table runs
+  about 6x a plain-text list of the same row count, and vnode cells cost about
+  2x string cells, because measuring a vnode means rendering it into a temp
+  buffer while a string is measured directly.
+
+  This is why the width primitive itself matters here and nowhere else.
+  =string-pixel-width= costs roughly 23x what =string-width= does per call, so
+  pixel-based alignment (#121) lands squarely on this scenario. Note the
+  =Table width mode= numbers only appear on a build that has the switch, and
+  that in batch the two modes render identical text (a tty frame is one pixel
+  per column) while still costing different amounts - decide the default from a
+  GUI frame.
 
 Re-run after performance changes and compare; the suite exists so those
 changes can be justified and regressions caught.

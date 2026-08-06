@@ -7,6 +7,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- Table scenarios in the benchmark suite (=benchmarks/vui-bench.el=): re-render
+  cost vs row count, vs column count, and string cells vs vnode cells. Tables
+  are the measurement-heavy path (column widths are recomputed from scratch
+  every render, so cost tracks cells rather than rows), which is exactly where
+  the cost of the width primitive shows up, and there was no scenario covering
+  them. A fourth scenario compares =char= and =pixel= width modes; it is
+  feature-detected and does nothing until the switch exists, so the same file
+  still runs on builds without it (#121).
+
 * v1.3.0 - 2026-07-02
 
 ** Added

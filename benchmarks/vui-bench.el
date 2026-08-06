@@ -224,6 +224,27 @@ this is the parity guard that keeps a faster-but-wrong variant honest."
   "Return an alist of N (ID . LABEL) pairs."
   (cl-loop for i from 1 to n collect (cons i (format "row %d - content" i))))
 
+(vui-defcomponent vui-bench-table-view (columns rows)
+  :render (vui-table :columns columns :rows rows :border :unicode))
+
+(defun vui-bench--table-columns (n)
+  "Return N column specs, cycling through the three alignments.
+Mixing alignments exercises all three padding branches rather than just
+the left-aligned one."
+  (cl-loop for i from 1 to n
+           collect (list :header (format "col %d" i)
+                         :align (nth (mod i 3) '(:left :right :center)))))
+
+(defun vui-bench--table-rows (rows cols &optional vnode)
+  "Return ROWS rows of COLS cells each.
+With VNODE non-nil the cells are `vui-text' vnodes instead of plain
+strings, which forces `vui--cell-visual-width' down its temp-buffer
+render path instead of measuring the string directly."
+  (cl-loop for r from 1 to rows
+           collect (cl-loop for c from 1 to cols
+                            for s = (format "r%dc%d value" r c)
+                            collect (if vnode (vui-text s) s))))
+
 ;;; Scenarios
 
 (defconst vui-bench--sizes '(50 200 500 1000 2000 4000)
@@ -367,6 +388,142 @@ A diffing renderer can only lose here (pure diff/marker overhead)."
        n (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
       (vui-unmount inst)
       (when (get-buffer buf) (kill-buffer buf)))))
+
+;;; Tables
+;;
+;; Tables are the measurement-heavy corner of vui: column widths are
+;; recomputed from scratch on every render, so a cell is measured
+;; several times per pass (once sizing the column, then again for the
+;; content and the padding).  That makes them the scenario where the
+;; cost of the width primitive itself shows up, which is what issue #121
+;; (pixel-based alignment) turns on.
+
+(defconst vui-bench--table-sizes '(50 200 500 1000 2000)
+  "Row counts swept by the table scenarios.
+Stops short of `vui-bench--sizes': a table row costs several string
+measurements per column, so it gets expensive well before 4000.")
+
+(defvar vui-bench--width-mode-ok (boundp 'vui-width-mode)
+  "Non-nil when the loaded vui has the char/pixel width switch (issue #121).")
+
+(defun vui-bench-table ()
+  "Full table re-render cost vs row count (5 columns, unicode border).
+Every render re-measures every cell to size the columns, so expect a
+steeper line than the plain-text scaling scenarios - this is the shape
+that decides whether a more expensive width primitive is affordable."
+  (vui-bench--header "Table re-render (N rows x 5 columns, unicode border)")
+  (let ((cols (vui-bench--table-columns 5)))
+    (dolist (n vui-bench--table-sizes)
+      (let* ((buf (format "*vui-bench-tbl-%d*" n))
+             (rows (vui-bench--table-rows n 5))
+             (inst (vui-mount (vui-component 'vui-bench-table-view
+                                             :columns cols :rows rows)
+                              buf)))
+        ;; Mechanism: a table that silently rendered short would report a
+        ;; flattering number, so prove the last row actually made it in.
+        (with-current-buffer buf
+          (vui-bench--assert
+           (save-excursion
+             (goto-char (point-min))
+             (search-forward (format "r%dc5 value" n) nil t))
+           "table N=%d: last row missing from the render" n))
+        (vui-bench--result-row
+         n (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
+(defun vui-bench-table-columns ()
+  "Table re-render cost vs COLUMN count at a fixed 500 rows.
+Measurement work scales with cells, not rows, so this should track the
+row sweep: doubling the columns costs about what doubling the rows does.
+A steeper line than that means per-column work beyond the cells."
+  (vui-bench--header "Table re-render (500 rows x N columns)")
+  (dolist (c '(2 5 10 20))
+    (let* ((buf (format "*vui-bench-tblc-%d*" c))
+           (cols (vui-bench--table-columns c))
+           (rows (vui-bench--table-rows 500 c))
+           (inst (vui-mount (vui-component 'vui-bench-table-view
+                                           :columns cols :rows rows)
+                            buf)))
+      (vui-bench--result-row
+       (format "%d cols" c)
+       (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
+      (vui-unmount inst)
+      (when (get-buffer buf) (kill-buffer buf)))))
+
+(defun vui-bench-table-cells ()
+  "String cells vs vnode cells at the same size (500 rows x 5 columns).
+`vui--cell-visual-width' measures a string directly, but renders a vnode
+into a temp buffer to measure it.  The gap between these two rows is
+what a component inside a table costs over plain text."
+  (vui-bench--header "Table cell kind (500 rows x 5 columns)")
+  (let ((cols (vui-bench--table-columns 5)))
+    (dolist (spec '(("string" . nil) ("vnode" . t)))
+      (let* ((buf (format "*vui-bench-tblk-%s*" (car spec)))
+             (rows (vui-bench--table-rows 500 5 (cdr spec)))
+             (inst (vui-mount (vui-component 'vui-bench-table-view
+                                             :columns cols :rows rows)
+                              buf)))
+        (vui-bench--result-row
+         (car spec)
+         (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
+(defun vui-bench-table-width-mode ()
+  "Table re-render cost under each width mode (issue #121).
+Pixel alignment swaps `string-width' for `string-pixel-width', which is
+far more expensive per call, so this is the gate on whether pixel mode
+can be the default rather than opt-in.  Timed round-robin, so system
+drift cannot bias one mode over the other.
+
+Two caveats on reading it.  In batch the modes produce IDENTICAL buffer
+text (a tty frame is one pixel per column) but NOT identical cost - the
+pixel path still pays for `window-text-pixel-size'.  So the numbers here
+are real while the visual difference is not, and the default should be
+decided from a GUI frame.  Second, the ratio only means something within
+one build: run it before and after caching work rather than comparing
+against a number from another machine.
+
+Does nothing on builds without the switch."
+  (when vui-bench--width-mode-ok
+    (vui-bench--header "Table width mode (1000 rows x 5 columns)")
+    (let* ((cols (vui-bench--table-columns 5))
+           (rows (vui-bench--table-rows 1000 5))
+           (cells nil)
+           (specs nil))
+      (dolist (mode '(char pixel))
+        (let* ((label (symbol-name mode))
+               (buf (format "*vui-bench-tblw-%s*" label))
+               (inst (cl-progv '(vui-width-mode) (list mode)
+                       (vui-mount (vui-component 'vui-bench-table-view
+                                                 :columns cols :rows rows)
+                                  buf))))
+          (push (list label inst buf mode) cells)))
+      (setq cells (nreverse cells))
+      ;; Each spec re-renders its own instance under its own mode, so the
+      ;; round-robin never leaves a mode measuring the other's buffer.
+      (dolist (cell cells)
+        (let ((inst (nth 1 cell))
+              (mode (nth 3 cell)))
+          (push (list (nth 0 cell)
+                      (lambda ()
+                        (cl-progv '(vui-width-mode) (list mode)
+                          (vui--rerender-instance inst))))
+                specs)))
+      (setq specs (nreverse specs))
+      (let ((results (vui-bench--compare vui-bench-rounds specs)))
+        (dolist (cell cells)
+          (vui-bench--result-row (nth 0 cell)
+                                 (cdr (assoc (nth 0 cell) results))))
+        (vui-bench--row
+         (cons 30 "pixel cost (pixel vs char)")
+         (cons 30 (or (vui-bench--ratio-note (cdr (assoc "char" results))
+                                             (cdr (assoc "pixel" results)))
+                      "n/a"))))
+      (dolist (cell cells)
+        (vui-unmount (nth 1 cell))
+        (when (get-buffer (nth 2 cell)) (kill-buffer (nth 2 cell)))))))
 
 ;;;###autoload
 (defun vui-bench-component-bailout ()
@@ -867,6 +1024,10 @@ machine-readable CMPDATA lines."
     (vui-bench-throughput)
     (vui-bench-skip-knob)
     (vui-bench-widgets)
+    (vui-bench-table)
+    (vui-bench-table-columns)
+    (vui-bench-table-cells)
+    (vui-bench-table-width-mode)
     (vui-bench-component-bailout)
     (vui-bench-streaming-growth)
     (vui-bench-agent-append-growth)
