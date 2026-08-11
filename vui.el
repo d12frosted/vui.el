@@ -5644,6 +5644,13 @@ Returns the root instance."
         ;; Enable vui-mode (this also sets up the keymap hierarchy)
         (unless (derived-mode-p 'vui-mode)
           (vui-mode))
+        ;; Drop stale field bookkeeping before erasing, as `vui-render'
+        ;; does: a `vui-field' from the previous mount lingers in
+        ;; `widget-field-list' with `widget-after-change' still on
+        ;; `after-change-functions'; `remove-overlays' deletes its
+        ;; overlay, so the `erase-buffer' below would fire that hook
+        ;; against a dead field and signal (number-or-marker-p nil).
+        (setq widget-field-list nil widget-field-new nil)
         (remove-overlays)
         (erase-buffer)
         ;; Store root instance for state updates
