@@ -270,5 +270,38 @@
       (call-interactively (key-binding (kbd "<S-tab>")))
       (expect (button-get (button-at (point)) :vui-tag) :to-equal "three"))))
 
+;; `widget-keymap' (a parent of `vui-mode-map') binds down-mouse-1 and
+;; down-mouse-2 to `widget-button-click', which treats any `button' char
+;; property as a widget button.  vui buttons are button.el text buttons,
+;; so every mouse-1 press on one signaled "Wrong type argument: overlayp,
+;; nil" (reported on the quickstart article, d12frosted.io#107).  vui
+;; buffers get their activation from button.el (`push-button' on
+;; RET/mouse-2 via `button-map', mouse-1 via the
+;; `mouse-1-click-follows-link' translation), so mouse presses should
+;; keep their plain global semantics everywhere in the buffer.
+(describe "mouse dispatch"
+  (it "never resolves a mouse press to widget-button-click on a button"
+    (with-temp-buffer
+      (vui-render (vui-checkbox :checked nil :on-change #'ignore)
+                  (current-buffer))
+      (let ((pos (button-start (button-at (point-min)))))
+        (expect (key-binding [down-mouse-1] nil nil pos)
+                :to-be 'mouse-drag-region)
+        (expect (key-binding [down-mouse-2] nil nil pos)
+                :not :to-be 'widget-button-click)
+        ;; Activation still comes from button.el
+        (expect (key-binding [mouse-2] nil nil pos) :to-be 'push-button))))
+
+  (it "keeps plain mouse semantics on non-button text"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-text "plain")
+                              (vui-button "b" :on-click #'ignore))
+                  (current-buffer))
+      (goto-char (point-min))
+      (expect (button-at (point)) :to-be nil)
+      (expect (key-binding [down-mouse-1]) :to-be 'mouse-drag-region)
+      (expect (key-binding [down-mouse-2])
+              :not :to-be 'widget-button-click))))
+
 (provide 'vui-text-button-test)
 ;;; vui-text-button-test.el ends here

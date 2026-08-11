@@ -7,6 +7,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Fixed
+
+- Clicking a button or checkbox with mouse-1 signaled
+  =widget-button--check-and-call-button: Wrong type argument: overlayp, nil=.
+  =widget-keymap= (a parent of =vui-mode-map=) binds mouse presses to
+  =widget-button-click=, which treats any =button= char property as a widget
+  button and fails on vui's button.el text buttons. vui buffers now keep plain
+  global mouse semantics (=mouse-drag-region= on the mouse-1 press, taps go to
+  the touchscreen translator); activation still comes from button.el, so
+  mouse-1 (via =mouse-1-click-follows-link=), mouse-2 and RET all work.
+  Reported on the [[https://github.com/d12frosted/d12frosted.io/issues/107#issuecomment-5254448420][quickstart article]].
+
 ** Added
 
 - Table scenarios in the benchmark suite (=benchmarks/vui-bench.el=): re-render
