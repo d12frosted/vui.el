@@ -533,6 +533,21 @@ a keymap once the variable is bound, which would otherwise leave a stale
 `vui-mode-map' without TAB/S-TAB after a reload."
   (define-key vui-mode-map (kbd "q") #'vui-quit)
   (define-key vui-mode-map (kbd "g") #'vui-refresh)
+  ;; `widget-keymap' (in vui-mode-map's parent chain) binds down-mouse-1,
+  ;; down-mouse-2 and touchscreen-begin to `widget-button-click', which
+  ;; treats any `button' char property as a widget button - and signals
+  ;; "Wrong type argument: overlayp, nil" on vui's button.el text buttons.
+  ;; vui buffers activate buttons through button.el (`push-button' on
+  ;; RET/mouse-2 via `button-map', mouse-1 via the
+  ;; `mouse-1-click-follows-link' translation), so mouse presses keep
+  ;; their plain global semantics: drag/set point on mouse-1, nothing on
+  ;; the (globally unbound) mouse-2 press.
+  (define-key vui-mode-map [down-mouse-1] #'mouse-drag-region)
+  (define-key vui-mode-map [down-mouse-2] #'ignore)
+  ;; Taps go through the same broken `widget-button-click' path; hand
+  ;; them to the normal touchscreen translator instead (Emacs 30+).
+  (when (fboundp 'touch-screen-handle-touch)
+    (define-key vui-mode-map [touchscreen-begin] #'touch-screen-handle-touch))
   ;; Unified navigation across text buttons and editable fields.  On
   ;; `vui-mode-map' it shadows `widget-keymap's widget-only TAB/S-TAB; on the
   ;; button/field keymaps it shadows button.el's `button-buffer-map'.
