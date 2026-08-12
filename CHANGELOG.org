@@ -9,6 +9,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-stream-update-last= (and the node-path =vui-stream-update= /
+  =vui-stream-append-to=) patched the item region in place even when the
+  replacement left the whole stream region zero-width, so the separator the
+  container had emitted around the stream went stale: appending an item and
+  then updating it to an empty text left a stray blank line ("\nnote"), while
+  a fresh mount with the same items renders just "note" (a vstack drops a
+  zero-output child). In-place updates now re-lay the tree once whenever they
+  cross the empty boundary, in either direction: emptying the last item drops
+  the stale separator, and refilling the emptied stream brings it back. This
+  is the mirror of the empty -> non-empty transition on append and of the
+  emptying =vui-stream-remove-last=.
+
 - The incremental patcher (=vui-incremental-render=) skipped a segment whose
   content string changed only in text properties: =equal= on vnodes ignores
   string properties, so a =vui-text= with the same characters but a different

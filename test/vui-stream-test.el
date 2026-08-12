@@ -273,5 +273,88 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '("first") "n1")))
           (vui-st--kill))))))
 
+(describe "vui-stream: update-last on an empty-rendering stream re-lays the tree"
+  ;; Mirror of the empty -> non-empty append transition: when an in-place
+  ;; update shrinks the WHOLE stream region to zero width, the separator
+  ;; the container emitted around the stream is stale (a fresh mount drops
+  ;; the zero-output child), so the tree must be re-laid once.
+  (it "drops the stray separator when update-last empties the only item"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-update-last s (vui-text ""))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
+          (vui-st--kill)))))
+
+  (it "drops the stray separator when vui-stream-update empties the only node"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (let ((n (vui-stream-open s (vui-text "a"))))
+              (vui-stream-update n (vui-text ""))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
+          (vui-st--kill)))))
+
+  (it "restores the separator when update-last refills the emptied item"
+    ;; The other direction of the same boundary: once the emptied stream
+    ;; was re-laid (separator dropped), refilling it must bring the
+    ;; separator back, exactly like the first append on an empty stream.
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-update-last s (vui-text ""))
+              (vui-stream-update-last s (vui-text "b"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("b") "x")))
+          (vui-st--kill)))))
+
+  (it "restores the separator when vui-stream-update refills the emptied node"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (let ((n (vui-stream-open s (vui-text "a"))))
+              (vui-stream-update n (vui-text ""))
+              (vui-stream-update n (vui-text "b"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("b") "x")))
+          (vui-st--kill)))))
+
+  (it "restores the separator when append-to grows the emptied node"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (let ((n (vui-stream-open s (vui-text "a"))))
+              (vui-stream-update n (vui-text ""))
+              (vui-stream-append-to n (vui-text "b"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("b") "x")))
+          (vui-st--kill)))))
+
+  (it "keeps the in-place patch when other items still render"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-append s (vui-text "b"))
+              (vui-stream-update-last s (vui-text ""))
+              ;; The stream still renders "a\n" (item + separator), so no
+              ;; re-lay: the buffer matches the oracle for ("a" "").
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("a" "") "x")))
+          (vui-st--kill))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
