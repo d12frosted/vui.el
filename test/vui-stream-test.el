@@ -165,6 +165,26 @@ leading separator), matching what a plain declarative list renders."
                       :to-equal (vui-st--oracle '("first updated") "hi")))
           (vui-st--kill)))))
 
+  (it "re-renders when the grown text's prefix changed only in properties"
+    ;; The extend fast path appends just the new suffix, but
+    ;; `string-prefix-p' compares characters only: when the old prefix's
+    ;; text properties changed too, appending the suffix would leave the
+    ;; prefix's stale properties in the buffer.
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "p")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text (propertize "load" 'face 'shadow)))
+              (vui-stream-update-last
+               s (vui-text (propertize "loaded" 'face 'success)))
+              (with-current-buffer "*vui-st*"
+                (expect (get-text-property 1 'face) :to-equal 'success))
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("loaded") "p")))
+          (vui-st--kill)))))
+
   (it "appends correctly after an update-last (continue the stream)"
     (let ((vui-render-delay nil)
           (s (vui-make-stream)))

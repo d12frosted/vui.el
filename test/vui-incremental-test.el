@@ -84,7 +84,59 @@
                 ;; Incremental leaves alpha's text (and overlay) untouched.
                 (expect (overlay-start ov) :to-equal 1)
                 (expect (overlay-end ov) :to-equal 6)))
-          (kill-buffer "*inc-skip*"))))))
+          (kill-buffer "*inc-skip*")))))
+
+  (it "patches a segment whose string changed only in text properties"
+    ;; `equal' ignores string text properties, so a segment whose
+    ;; characters are unchanged but whose face (carried on the content
+    ;; string) flipped must still be re-rendered, not skipped.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-propchange (danger)
+        :render (vui-vstack
+                 (vui-text "header")
+                 (vui-text (propertize "gauge" 'face
+                                       (if danger 'error 'success)))
+                 (vui-text "footer")))
+      (let ((inst (vui-mount (vui-component 'inc-propchange :danger nil)
+                             "*inc-props*")))
+        (unwind-protect
+            (with-current-buffer "*inc-props*"
+              ;; First re-render establishes the content record.
+              (vui-update inst '(:danger nil))
+              ;; Position 8 is the first char of the gauge line.
+              (expect (get-text-property 8 'face) :to-equal 'success)
+              ;; Same characters, different face: must not be skipped.
+              (vui-update inst '(:danger t))
+              (expect (get-text-property 8 'face) :to-equal 'error)
+              (expect (equal-including-properties
+                       (buffer-string)
+                       (vui-inc--string
+                        (vui-vstack
+                         (vui-text "header")
+                         (vui-text (propertize "gauge" 'face 'error))
+                         (vui-text "footer"))))
+                      :to-be-truthy))
+          (kill-buffer "*inc-props*"))))))
+
+(describe "vui--vnode-equal"
+  (it "handles a long flat children list without exhausting the stack"
+    ;; Recursion must only be as deep as the tree NESTING, not the list
+    ;; length: a single segment holding thousands of children (the
+    ;; 10k-row viewport scenario) must not blow `max-lisp-eval-depth'.
+    (let ((make (lambda ()
+                  (apply #'vui-vstack
+                         (mapcar (lambda (i) (vui-text (format "row-%d" i)))
+                                 (number-sequence 1 5000))))))
+      (expect (vui--vnode-equal (funcall make) (funcall make))
+              :to-be-truthy)))
+
+  (it "compares dotted tails with the same string-aware equality"
+    (expect (vui--vnode-equal (cons "a" "b") (cons "a" "b")) :to-be-truthy)
+    (expect (vui--vnode-equal (cons "a" (propertize "b" 'face 'error))
+                              (cons "a" "b"))
+            :to-be nil)
+    (expect (vui--vnode-equal (list "a" "b") (cons "a" "b")) :to-be nil)))
 
 (describe "incremental rendering whole-tree skip"
   (it "skips entirely when should-update returns nil"

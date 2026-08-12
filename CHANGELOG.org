@@ -9,6 +9,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- The incremental patcher (=vui-incremental-render=) skipped a segment whose
+  content string changed only in text properties: =equal= on vnodes ignores
+  string properties, so a =vui-text= with the same characters but a different
+  face (via =propertize=) kept the stale face in the buffer. Segments are now
+  compared with a property-aware vnode equality
+  (=equal-including-properties= on strings). The =vui-stream-update-last=
+  extend fast path had the same blind spot: =string-prefix-p= compares
+  characters only, so growing a propertized text whose prefix changed
+  properties appended just the suffix and left the stale prefix; the prefix
+  is now checked including properties before taking the fast path.
 - Clicking a button or checkbox with mouse-1 signaled
   =widget-button--check-and-call-button: Wrong type argument: overlayp, nil=.
   =widget-keymap= (a parent of =vui-mode-map=) binds mouse presses to
