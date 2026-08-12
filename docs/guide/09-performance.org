@@ -71,8 +71,10 @@ Return =t= to render, =nil= to skip.
 
 Most =:should-update= forms just say "skip when nothing changed". =:memo
 t= is a shorthand for exactly that: skip the re-render while props are
-shallow-equal (=equal= on each value) and state is unchanged, like
-=React.memo=. These two components behave the same:
+shallow-equal (=equal= on each value, except that strings must also
+match in text properties - a prop whose face changed counts as changed)
+and state is unchanged, like =React.memo=. These two components behave
+the same:
 
 #+begin_src elisp
 (vui-defcomponent row-explicit (id label)

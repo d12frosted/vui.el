@@ -28,6 +28,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the touchscreen translator); activation still comes from button.el, so
   mouse-1 (via =mouse-1-click-follows-link=), mouse-2 and RET all work.
   Reported on the [[https://github.com/d12frosted/d12frosted.io/issues/107#issuecomment-5254448420][quickstart article]].
+- =:memo= components and hook deps (=vui-use-memo=, =vui-use-callback=) ignored
+  string text properties: comparing with plain =equal= meant a propertized
+  string prop or dep with the same characters but a different face counted as
+  unchanged, so the component kept a stale render (or the hook a stale cache),
+  even with =vui-incremental-render= off. Same bug class as the incremental
+  patcher fix above; these comparisons now use the same property-aware
+  equality. Functions in props and deps keep plain =equal= semantics, so a
+  closure rebuilt on every render with an equal captured environment still
+  hits the cache. The cost on the hot bail-out path is negligible: identical
+  values short-circuit on =eq=, and even fresh-but-equal strings add well
+  under a microsecond per component (#126).
 
 ** Added
 

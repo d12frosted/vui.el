@@ -585,6 +585,76 @@
               (expect (buffer-string) :to-equal "30"))
           (kill-buffer "*test-memo-up2*"))))))
 
+(describe "deps comparison and text properties"
+  (it "vui-use-memo recomputes when a dep string changes only in text properties"
+    (let ((compute-count 0))
+      (vui-defcomponent memo-face-dep (label)
+        :render (let ((result (vui-use-memo (label)
+                                (setq compute-count (1+ compute-count))
+                                (substring-no-properties label))))
+                  (vui-text result)))
+      (let ((instance (vui-mount (vui-component 'memo-face-dep
+                                   :label (propertize "hot" 'face 'error))
+                                 "*test-memo-props*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              ;; same characters, different face: the dep DID change
+              (vui-update-props instance
+                                (list :label (propertize "hot" 'face 'success)))
+              (expect compute-count :to-equal 2)
+              ;; a fresh string with the same characters AND properties
+              ;; is unchanged: stays cached
+              (vui-update-props instance
+                                (list :label (propertize "hot" 'face 'success)))
+              (expect compute-count :to-equal 2))
+          (kill-buffer "*test-memo-props*")))))
+
+  (it "vui-use-callback regenerates when a dep string changes only in text properties"
+    (let ((fns nil))
+      (vui-defcomponent cb-face-dep (label)
+        :render (progn
+                  (push (vui-use-callback (label) (ignore label)) fns)
+                  (vui-text "x")))
+      (let ((instance (vui-mount (vui-component 'cb-face-dep
+                                   :label (propertize "hot" 'face 'error))
+                                 "*test-cb-props*")))
+        (unwind-protect
+            (progn
+              (expect (length fns) :to-equal 1)
+              ;; same characters, different face: must yield a NEW callback
+              (vui-update-props instance
+                                (list :label (propertize "hot" 'face 'success)))
+              (expect (length fns) :to-equal 2)
+              (expect (nth 0 fns) :not :to-be (nth 1 fns))
+              ;; equal characters and properties: cached callback returned
+              (vui-update-props instance
+                                (list :label (propertize "hot" 'face 'success)))
+              (expect (length fns) :to-equal 3)
+              (expect (nth 0 fns) :to-be (nth 1 fns)))
+          (kill-buffer "*test-cb-props*")))))
+
+  (it "fresh but equal closures in deps still hit the cache"
+    ;; A dep that is a closure built fresh on every render: `equal'
+    ;; treats same-source closures with equal captured environments as
+    ;; equal, so the memo stays cached.  This locks that behavior in -
+    ;; the text-property-aware comparison must not regress it by
+    ;; comparing functions with `eq'.
+    (let ((compute-count 0))
+      (vui-defcomponent memo-closure-dep (value)
+        :render (let ((result (vui-use-memo ((lambda () (+ 1 2)))
+                                (setq compute-count (1+ compute-count))
+                                value)))
+                  (vui-text (format "%s" result))))
+      (let ((instance (vui-mount (vui-component 'memo-closure-dep :value "a")
+                                 "*test-memo-closure*")))
+        (unwind-protect
+            (progn
+              (expect compute-count :to-equal 1)
+              (vui-update-props instance '(:value "b"))
+              (expect compute-count :to-equal 1))
+          (kill-buffer "*test-memo-closure*"))))))
+
 (describe "use-async"
   (it "ignores resolve and reject from superseded loads"
     (let ((vui-render-delay nil)
