@@ -227,6 +227,181 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x")))
           (vui-st--kill))))))
 
+(describe "vui--string-prefix-equal-including-properties-p"
+  ;; The allocation-free replacement for
+  ;; (equal-including-properties O (substring N 0 (length O))): must give
+  ;; the same verdict without copying the prefix.
+  (it "accepts a plain equal prefix"
+    (expect (vui--string-prefix-equal-including-properties-p "abc" "abcdef")
+            :to-be-truthy))
+
+  (it "accepts an equal prefix with matching properties"
+    (expect (vui--string-prefix-equal-including-properties-p
+             (propertize "ab" 'face 'bold)
+             (concat (propertize "ab" 'face 'bold) "cd"))
+            :to-be-truthy))
+
+  (it "rejects when characters differ inside the prefix"
+    (expect (vui--string-prefix-equal-including-properties-p "abx" "abcdef")
+            :not :to-be-truthy))
+
+  (it "rejects when old is longer than new"
+    (expect (vui--string-prefix-equal-including-properties-p "abcdef" "abc")
+            :not :to-be-truthy))
+
+  (it "rejects when a property differs inside the prefix"
+    (expect (vui--string-prefix-equal-including-properties-p
+             (propertize "ab" 'face 'bold)
+             (concat (propertize "ab" 'face 'shadow) "cd"))
+            :not :to-be-truthy))
+
+  (it "rejects when only the new string has properties in the prefix"
+    (expect (vui--string-prefix-equal-including-properties-p
+             "ab" (propertize "abcd" 'face 'bold))
+            :not :to-be-truthy))
+
+  (it "rejects when a property run boundary moved inside the prefix"
+    ;; old: [a]bold [b]plain; new: [ab]bold - same chars, same property
+    ;; lists at 0, but the bold run covers one more char of the prefix.
+    (expect (vui--string-prefix-equal-including-properties-p
+             (concat (propertize "a" 'face 'bold) "b")
+             (concat (propertize "ab" 'face 'bold) "c"))
+            :not :to-be-truthy))
+
+  (it "ignores a property change exactly at the old length"
+    ;; The new string starts a new run at (length old); that run lies
+    ;; entirely outside the compared range and must not disqualify.
+    (expect (vui--string-prefix-equal-including-properties-p
+             (propertize "ab" 'face 'bold)
+             (concat (propertize "ab" 'face 'bold)
+                     (propertize "cd" 'face 'shadow)))
+            :to-be-truthy))
+
+  (it "accepts an empty old string"
+    (expect (vui--string-prefix-equal-including-properties-p
+             "" (propertize "ab" 'face 'bold))
+            :to-be-truthy))
+
+  (it "handles multiple property intervals in the old string"
+    (let ((o (concat (propertize "a" 'face 'bold)
+                     "b"
+                     (propertize "c" 'face 'italic))))
+      (expect (vui--string-prefix-equal-including-properties-p
+               o (concat o "d"))
+              :to-be-truthy)
+      ;; same shape but the middle interval differs
+      (expect (vui--string-prefix-equal-including-properties-p
+               o (concat (propertize "a" 'face 'bold)
+                         (propertize "b" 'face 'shadow)
+                         (propertize "c" 'face 'italic)
+                         "d"))
+              :not :to-be-truthy))))
+
+(describe "vui-stream: update-last extend fast path with propertized text"
+  ;; These specs pin the MECHANISM, not just the result: a marker inside
+  ;; the prefix survives the fast path (only the suffix is inserted at
+  ;; the end) but collapses to the item start when the item is deleted
+  ;; and re-rendered wholesale.
+  (it "appends only the suffix when the propertized prefix is unchanged"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "p")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append
+               s (vui-text (concat (propertize "bold" 'face 'bold) " tail")))
+              (let ((m (with-current-buffer "*vui-st*" (copy-marker 3))))
+                (vui-stream-update-last
+                 s (vui-text (concat (propertize "bold" 'face 'bold)
+                                     " tail grows")))
+                (expect (marker-position m) :to-equal 3)
+                (with-current-buffer "*vui-st*"
+                  (expect (get-text-property 1 'face) :to-equal 'bold))
+                (expect (vui-st--buffer)
+                        :to-equal (vui-st--oracle '("bold tail grows") "p"))))
+          (vui-st--kill)))))
+
+  (it "takes the fast path when a property run starts exactly at the old length"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "p")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text (propertize "ab" 'face 'bold)))
+              (let ((m (with-current-buffer "*vui-st*" (copy-marker 2))))
+                (vui-stream-update-last
+                 s (vui-text (concat (propertize "ab" 'face 'bold)
+                                     (propertize "cd" 'face 'shadow))))
+                (expect (marker-position m) :to-equal 2)
+                (with-current-buffer "*vui-st*"
+                  (expect (get-text-property 1 'face) :to-equal 'bold)
+                  (expect (get-text-property 3 'face) :to-equal 'shadow))
+                (expect (vui-st--buffer)
+                        :to-equal (vui-st--oracle '("abcd") "p"))))
+          (vui-st--kill)))))
+
+  (it "takes the fast path over multiple property intervals in the old text"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "p"))
+            (old (concat (propertize "a" 'face 'bold)
+                         "b"
+                         (propertize "c" 'face 'italic))))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text old))
+              (let ((m (with-current-buffer "*vui-st*" (copy-marker 2))))
+                (vui-stream-update-last s (vui-text (concat old "d")))
+                (expect (marker-position m) :to-equal 2)
+                (with-current-buffer "*vui-st*"
+                  (expect (get-text-property 1 'face) :to-equal 'bold)
+                  (expect (get-text-property 3 'face) :to-equal 'italic))
+                (expect (vui-st--buffer)
+                        :to-equal (vui-st--oracle '("abcd") "p"))))
+          (vui-st--kill)))))
+
+  (it "extends an item whose old text is empty"
+    ;; The empty old text is a trivial prefix of anything: the whole new
+    ;; text is the suffix.  (A SECOND item, so the update stays inside a
+    ;; non-empty region and isolates the prefix check; the empty FIRST
+    ;; item crosses the empty boundary and has its own specs below.)
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "line 1"))
+              (vui-stream-append s (vui-text ""))
+              (vui-stream-update-last s (vui-text "hi"))
+              (expect (vui-st--buffer)
+                      :to-equal (vui-st--oracle '("line 1" "hi") "x")))
+          (vui-st--kill)))))
+
+  (it "re-renders wholesale when a property changed inside the prefix"
+    ;; Companion to the marker specs above: same shape, but the prefix's
+    ;; properties changed, so the fast path must be REJECTED - the marker
+    ;; collapses to the item start and no stale prefix survives.
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "p")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text (propertize "load" 'face 'shadow)))
+              (let ((m (with-current-buffer "*vui-st*" (copy-marker 3))))
+                (vui-stream-update-last
+                 s (vui-text (propertize "loaded" 'face 'success)))
+                (expect (marker-position m) :to-equal 1)
+                (with-current-buffer "*vui-st*"
+                  (expect (get-text-property 1 'face) :to-equal 'success))
+                (expect (vui-st--buffer)
+                        :to-equal (vui-st--oracle '("loaded") "p"))))
+          (vui-st--kill))))))
+
 (describe "vui-stream: update-last appends only the delta when text grows"
   (it "grows the last text item incrementally, matching a full render"
     (let ((vui-render-delay nil)

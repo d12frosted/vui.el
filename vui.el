@@ -4575,6 +4575,35 @@ component appended to an empty stream falls back to a plain child render."
               (push row (vui-stream-handle-items-rev handle))
               row))))))))   ; return the inline instance (or nil on fallback)
 
+(defun vui--string-prefix-equal-including-properties-p (o n)
+  "Return non-nil when O is a prefix of N, text properties included.
+Equivalent to (equal-including-properties O (substring N 0 (length O)))
+but allocation-free: this is the per-chunk check of the update-last
+extend fast path, where copying the prefix on every streamed token adds
+up to O(n^2) garbage over a message's lifetime.  Characters are compared
+with `compare-strings' (no copy); the text-property intervals of both
+strings are then walked in lockstep over the first (length O)
+characters, comparing property lists with `equal' at each interval
+start.  A property change in N at exactly (length O) lies outside the
+compared range and does not disqualify the prefix.  Property lists are
+compared in order, which can reject a reordered-but-equivalent plist
+that `equal-including-properties' would accept; for the fast path that
+only means a full re-render, never a wrong answer."
+  (let ((len (length o)))
+    (and (<= len (length n))
+         (eq t (compare-strings o 0 len n 0 len))
+         (let ((pos 0) (ok t))
+           (while (and ok (< pos len))
+             (if (not (equal (text-properties-at pos o)
+                             (text-properties-at pos n)))
+                 (setq ok nil)
+               ;; Both interval starts matched; jump to the nearer next
+               ;; change (in either string), clamped to the prefix end.
+               (setq pos (min (or (next-property-change pos o) len)
+                              (or (next-property-change pos n) len)
+                              len))))
+           ok))))
+
 (defun vui-stream-update-last (handle vnode)
   "Replace HANDLE's last item with VNODE, re-rendering only its region.
 This is the in-progress message in a streaming agent UI: as tokens
@@ -4623,15 +4652,12 @@ keeping its state."
                                  (vui-vnode-text-properties vnode))
                           (let ((o (vui-vnode-text-content old))
                                 (n (vui-vnode-text-content vnode)))
+                            ;; The prefix must match INCLUDING text
+                            ;; properties: appending just the suffix would
+                            ;; otherwise leave the prefix's stale properties
+                            ;; in the buffer.
                             (and (> (length n) (length o))
-                                 (string-prefix-p o n)
-                                 ;; The prefix must match INCLUDING text
-                                 ;; properties: `string-prefix-p' compares
-                                 ;; characters only, and appending just the
-                                 ;; suffix would leave the prefix's stale
-                                 ;; properties in the buffer.
-                                 (equal-including-properties
-                                  o (substring n 0 (length o)))
+                                 (vui--string-prefix-equal-including-properties-p o n)
                                  (substring n (length o)))))))
         (if (and node (vui--stream-node-start node)
                  (marker-position (vui--stream-node-start node)))

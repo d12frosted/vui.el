@@ -7,6 +7,23 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Changed
+
+- The =vui-stream-update-last= extend fast path checks the prefix without
+  copying it. The property-aware check from #125 did =(substring n 0 (length
+  o))= on every call just to compare it with =equal-including-properties=,
+  which allocates the whole prefix per streamed chunk - O(n^2) garbage over a
+  message's lifetime, on the hot path of streamed output
+  (=docs/examples/14-claude-chat.el=). The check now compares characters with
+  =compare-strings= and walks the text-property intervals of both strings in
+  lockstep (=vui--string-prefix-equal-including-properties-p=), allocating
+  nothing: streaming a 2000-chunk message drops from ~12M allocated string
+  chars to ~12K (just the suffixes). Plain-text chunks (the realistic
+  streaming payload) run at time parity; content with many property intervals
+  in the prefix trades some comparison speed (the interval walk is Lisp, the
+  old one was C) for the allocation win. A new benchmark scenario
+  (=vui-bench-stream-update-last-extend=) measures both payloads (#127).
+
 ** Fixed
 
 - =vui-stream-update-last= (and the node-path =vui-stream-update= /
