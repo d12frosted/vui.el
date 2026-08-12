@@ -4451,6 +4451,41 @@ Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
       (when-let* ((root (vui-get-instance buf)))
         (vui-rerender root)))))
 
+(defun vui--stream-region-empty-p (handle)
+  "Non-nil when HANDLE's region is live and zero-width."
+  (let ((s (vui-stream-handle-region-start handle))
+        (e (vui-stream-handle-region-end handle)))
+    (and s (marker-position s) e (marker-position e)
+         (= (marker-position s) (marker-position e)))))
+
+(defun vui--stream-relay-empty-transition (handle was-empty &optional node)
+  "Re-lay HANDLE's tree when an in-place edit crossed the empty boundary.
+WAS-EMPTY is whether the whole stream region was zero-width before the
+edit.  When its emptiness changed, the separators the container emitted
+around the stream are stale (it drops a zero-output child), the mirror
+of the empty -> non-empty append and the emptying
+`vui-stream-remove-last' - so re-lay once so the buffer matches a plain
+render.  The re-lay re-binds the handle's markers; when NODE (the edited
+node) is the last item, re-seat its markers on the fresh region so it
+stays updatable, like `vui-stream-open' does after the empty stream's
+first render."
+  (let ((s (vui-stream-handle-region-start handle))
+        (e (vui-stream-handle-region-end handle)))
+    (when (and s (marker-position s) e (marker-position e)
+               (not (eq (and was-empty t)
+                        (= (marker-position s) (marker-position e)))))
+      (vui--stream-request-rerender handle)
+      (when (and node
+                 (eq (vui--stream-node-cell node)
+                     (vui-stream-handle-items-rev handle)))
+        (let ((buf (vui-stream-handle-buffer handle))
+              (ls (vui-stream-handle-last-start handle))
+              (end (vui-stream-handle-region-end handle)))
+          (when (and buf (buffer-live-p buf)
+                     ls (marker-position ls) end (marker-position end))
+            (vui--stream-node-bind node (marker-position ls)
+                                   (marker-position end) buf)))))))
+
 (defun vui-stream-append (handle vnode)
   "Append VNODE to HANDLE's stream and return HANDLE.
 When the stream is live and already non-empty, this writes exactly one
@@ -4616,24 +4651,26 @@ keeping its state."
             (setcar (vui-stream-handle-items-rev handle) vnode)
             (when (and buf (buffer-live-p buf)
                        ls (marker-position ls) end (marker-position end))
-              (with-current-buffer buf
-                (let ((inhibit-read-only t)
-                      (inhibit-modification-hooks t)
-                      (buffer-undo-list t))
-                  (save-excursion
-                    (if suffix
-                        (progn
-                          (goto-char (marker-position end))
-                          (vui--render-vnode
-                           (vui-vnode-text--create
-                            :content suffix
-                            :face (vui-vnode-text-face vnode)
-                            :properties (vui-vnode-text-properties vnode)))
-                          (set-marker end (point)))
-                      (delete-region (marker-position ls) (marker-position end))
-                      (goto-char (marker-position ls))
-                      (vui--render-vnode vnode)
-                      (set-marker end (point)))))))))))))
+              (let ((was-empty (vui--stream-region-empty-p handle)))
+                (with-current-buffer buf
+                  (let ((inhibit-read-only t)
+                        (inhibit-modification-hooks t)
+                        (buffer-undo-list t))
+                    (save-excursion
+                      (if suffix
+                          (progn
+                            (goto-char (marker-position end))
+                            (vui--render-vnode
+                             (vui-vnode-text--create
+                              :content suffix
+                              :face (vui-vnode-text-face vnode)
+                              :properties (vui-vnode-text-properties vnode)))
+                            (set-marker end (point)))
+                        (delete-region (marker-position ls) (marker-position end))
+                        (goto-char (marker-position ls))
+                        (vui--render-vnode vnode)
+                        (set-marker end (point))))))
+                (vui--stream-relay-empty-transition handle was-empty)))))))))
   handle)
 
 ;; --- Random-access nodes: address a region by ref, not just "the last" ---
@@ -4792,15 +4829,17 @@ finalized, and on a component node (append-to is content-only)."
       ;; accumulated node, not just the latest delta.
       (when cell
         (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              (buffer-undo-list t))
-          (save-excursion
-            (goto-char (marker-position end))
-            (vui--render-vnode vnode)
-            (set-marker end (point))
-            (vui--stream-sync-end handle (point))))))
+      (let ((was-empty (vui--stream-region-empty-p handle)))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t))
+            (save-excursion
+              (goto-char (marker-position end))
+              (vui--render-vnode vnode)
+              (set-marker end (point))
+              (vui--stream-sync-end handle (point)))))
+        (vui--stream-relay-empty-transition handle was-empty node)))
     node))
 
 (defun vui-stream-update (node vnode)
@@ -4838,16 +4877,18 @@ its own region, keeping its state - the out-of-order counterpart of
         (when (and buf (buffer-live-p buf)
                    start (marker-position start) end (marker-position end))
           (when cell (setcar cell vnode))
-          (with-current-buffer buf
-            (let ((inhibit-read-only t)
-                  (inhibit-modification-hooks t)
-                  (buffer-undo-list t))
-              (save-excursion
-                (delete-region (marker-position start) (marker-position end))
-                (goto-char (marker-position start))
-                (vui--render-vnode vnode)
-                (set-marker end (point))
-                (vui--stream-sync-end handle (point)))))))))
+          (let ((was-empty (vui--stream-region-empty-p handle)))
+            (with-current-buffer buf
+              (let ((inhibit-read-only t)
+                    (inhibit-modification-hooks t)
+                    (buffer-undo-list t))
+                (save-excursion
+                  (delete-region (marker-position start) (marker-position end))
+                  (goto-char (marker-position start))
+                  (vui--render-vnode vnode)
+                  (set-marker end (point))
+                  (vui--stream-sync-end handle (point)))))
+            (vui--stream-relay-empty-transition handle was-empty node))))))
   node)
 
 (defun vui-stream-finalize (node)
