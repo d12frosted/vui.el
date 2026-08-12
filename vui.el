@@ -4026,6 +4026,47 @@ Return the number of characters inserted."
     (vui--render-vnode child)
     (- (point) start)))
 
+(defun vui--vnode-equal (a b)
+  "Compare A and B like `equal', but strings must also match in properties.
+`equal' ignores string text properties, so two `vui-text' vnodes whose
+content strings differ only in properties (same characters, different
+face via `propertize') would compare equal and the patcher would skip
+the segment, leaving stale properties in the buffer.  Descends conses,
+records (vnode structs), and vectors; every string is compared with
+`equal-including-properties'.  Cost is the same order as `equal', which
+also walks the full structure."
+  (cond
+   ((eq a b) t)
+   ((stringp a)
+    (and (stringp b) (equal-including-properties a b)))
+   ((consp a)
+    ;; Iterate over cdrs instead of recursing on them, so recursion
+    ;; depth tracks tree NESTING, not list length: a segment holding
+    ;; thousands of children must not blow `max-lisp-eval-depth'.
+    (let ((ok (consp b)))
+      (while (and ok (consp a) (consp b))
+        (setq ok (vui--vnode-equal (car a) (car b))
+              a (cdr a)
+              b (cdr b)))
+      (and ok (not (consp a)) (not (consp b))
+           ;; nil or dotted tails: same string-aware comparison
+           (vui--vnode-equal a b))))
+   ;; Closures compare by identity only.  Interpreted closures can
+   ;; satisfy `recordp'; walking one would descend into its captured
+   ;; environment - expensive, and two distinct closures could compare
+   ;; equal through it.  A fresh closure means "changed".
+   ((functionp a)
+    (and (functionp b) (eq a b)))
+   ((or (recordp a) (vectorp a))
+    (and (eq (type-of a) (type-of b))
+         (= (length a) (length b))
+         (let ((n (length a)) (ok t) (i 0))
+           (while (and ok (< i n))
+             (setq ok (vui--vnode-equal (aref a i) (aref b i))
+                   i (1+ i)))
+           ok)))
+   (t (equal a b))))
+
 (defun vui--patch-segments (start old-segs new-children sep)
   "Patch the current buffer from START so its segments become NEW-CHILDREN.
 OLD-SEGS is a list of (VNODE . LENGTH) describing what is currently in the
@@ -4064,7 +4105,7 @@ new list of (VNODE . LENGTH)."
       (while (or old-segs new-children)
         (let ((old (car old-segs))
               (new (car new-children)))
-          (if (and old new (equal (car old) new))
+          (if (and old new (vui--vnode-equal (car old) new))
               ;; unchanged: flush any pending run, then leave it in place
               (progn (flush)
                      (forward-char (cdr old))
@@ -4525,6 +4566,13 @@ keeping its state."
                                 (n (vui-vnode-text-content vnode)))
                             (and (> (length n) (length o))
                                  (string-prefix-p o n)
+                                 ;; The prefix must match INCLUDING text
+                                 ;; properties: `string-prefix-p' compares
+                                 ;; characters only, and appending just the
+                                 ;; suffix would leave the prefix's stale
+                                 ;; properties in the buffer.
+                                 (equal-including-properties
+                                  o (substring n 0 (length o)))
                                  (substring n (length o)))))))
         (if (and node (vui--stream-node-start node)
                  (marker-position (vui--stream-node-start node)))
