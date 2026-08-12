@@ -719,6 +719,44 @@ size - only the last item's region is rewritten."
              handle (vui-text (format "growing message token %d here" k))))))
       (vui-bench--agent-teardown inst buf))))
 
+(defun vui-bench-stream-update-last-extend ()
+  "Cost of streaming ONE message of N chunks via update-last extension.
+Each update EXTENDS the previous text, so the extend fast path runs once
+per chunk.  The per-chunk prefix check must not allocate O(prefix), or
+streaming a message of N chunks costs O(N^2) garbage in total (#127):
+the tell is per-chunk cost and GC time rising with N.  The message-so-far
+strings are precomputed so the timed run measures only update-last."
+  (vui-bench--header "Stream update-last extend: stream one message of N chunks")
+  ;; Two payloads: PLAIN chunks (the realistic case - streamed deltas are
+  ;; plain strings, faces arrive via the :face prop) and FACED chunks (a
+  ;; face-propertized span per chunk, so the prefix accumulates O(N)
+  ;; property intervals - the worst case for a property-aware check).
+  (dolist (payload `((plain . "token ")
+                     (faced . ,(concat (propertize "tok" 'face 'shadow) "en "))))
+    (dolist (n '(250 500 1000 2000))
+      (let* ((handle (vui-make-stream))
+             (buf "*vui-bench-stream-ext*")
+             (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle)
+                              buf))
+             (chunk (cdr payload))
+             ;; message-so-far vnodes, one per chunk count
+             (vnodes (make-vector n nil)))
+        (let ((text ""))
+          (dotimes (i n)
+            (setq text (concat text chunk))
+            (aset vnodes i (vui-text text))))
+        (vui-stream-append handle (vui-text "starting"))
+        (vui-bench--result-row
+         (format "%d %s" n (car payload))
+         (vui-bench--measure
+          5 (lambda ()
+              ;; reset to a non-prefix (full re-render), then stream: every
+              ;; subsequent update extends the last text by one chunk
+              (vui-stream-update-last handle (vui-text "reset"))
+              (dotimes (i n)
+                (vui-stream-update-last handle (aref vnodes i))))))
+        (vui-bench--agent-teardown inst buf)))))
+
 (defun vui-bench-stream-box-update-growth ()
   "Cost of a box-only state change on the stream UI, flag off vs on.
 Off rebuilds the whole transcript (O(N)); on leaves the stream region
@@ -787,6 +825,7 @@ or rebuilding the transcript."
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
+    (vui-bench-stream-update-last-extend)
     (vui-bench-stream-box-update-growth)
     (vui-bench-stream-row-rerender-growth)
     (message "")
@@ -1280,6 +1319,7 @@ comparison takes the extra mode argument."
     (vui-bench-agent-box-update)
     (vui-bench-stream-append-growth)
     (vui-bench-stream-update-last-growth)
+    (vui-bench-stream-update-last-extend)
     (vui-bench-stream-box-update-growth)
     (vui-bench-stream-row-rerender-growth)
     (message "")
