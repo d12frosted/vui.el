@@ -712,11 +712,12 @@ Both =vui-use-callback*= and =vui-use-memo*= support custom comparison modes.
 
 ** Comparison Modes
 
-| Mode       | Description                         |
-|------------+-------------------------------------|
-| =eq=       | Identity comparison (fastest)       |
-| =equal=    | Structural comparison (default)     |
-| =(lambda)= | Custom comparison function          |
+| Mode       | Description                                    |
+|------------+------------------------------------------------|
+| =eq=       | Identity comparison (fastest)                  |
+| =equal=    | Structural comparison (default); strings must  |
+|            | also match in text properties                  |
+| =(lambda)= | Custom comparison function                     |
 
 ** Using =eq= Comparison
 

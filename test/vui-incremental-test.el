@@ -407,7 +407,48 @@
               (let ((vui--current-instance inst)) (vui-set-state :tick 1))
               (expect renders :to-equal 0)
               (expect (buffer-string) :to-equal "tick1\nx"))
-          (kill-buffer "*memo-ws*"))))))
+          (kill-buffer "*memo-ws*")))))
+
+  (it "re-renders a memo child when a string prop changes only in text properties"
+    (let ((vui-incremental-render nil)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-memo-ws-face (label)
+        :memo t
+        :render (vui-text label))
+      (vui-defcomponent inc-memo-ws-face-parent (label)
+        :render (vui-component 'inc-memo-ws-face :label label))
+      (let ((inst (vui-mount (vui-component 'inc-memo-ws-face-parent
+                               :label (propertize "hot" 'face 'error))
+                             "*memo-ws-face*")))
+        (unwind-protect
+            (with-current-buffer "*memo-ws-face*"
+              (expect (get-text-property (point-min) 'face) :to-equal 'error)
+              ;; same characters, different face: :memo must NOT bail out
+              (vui-update inst (list :label (propertize "hot" 'face 'success)))
+              (expect (get-text-property (point-min) 'face) :to-equal 'success))
+          (kill-buffer "*memo-ws-face*")))))
+
+  (it "re-renders a memo child when a state string changes only in text properties"
+    (let ((vui-incremental-render nil)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-memo-ws-sface ()
+        :memo t
+        :state ((s (propertize "hot" 'face 'error)))
+        :render (vui-text s))
+      (vui-defcomponent inc-memo-ws-sface-parent ()
+        :render (vui-component 'inc-memo-ws-sface))
+      (let ((inst (vui-mount (vui-component 'inc-memo-ws-sface-parent)
+                             "*memo-ws-sface*")))
+        (unwind-protect
+            (with-current-buffer "*memo-ws-sface*"
+              (expect (get-text-property (point-min) 'face) :to-equal 'error)
+              (let ((child (car (vui-get-component-instances
+                                 'inc-memo-ws-sface inst))))
+                (let ((vui--current-instance child))
+                  (vui-set-state :s (propertize "hot" 'face 'success))))
+              ;; same characters, different face: :memo must NOT bail out
+              (expect (get-text-property (point-min) 'face) :to-equal 'success))
+          (kill-buffer "*memo-ws-sface*"))))))
 
 (provide 'vui-incremental-test)
 ;;; vui-incremental-test.el ends here

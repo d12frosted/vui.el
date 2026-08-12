@@ -33,8 +33,9 @@ Define a component named NAME.
 | =:render=        | Yes      | The render expression (must return a vnode) |
 
 =:memo t= is a shorthand for the most common =:should-update=: skip the
-re-render while props are shallow-equal (=equal= on each value) and state
-is unchanged, like =React.memo=.  An explicit =:should-update= always
+re-render while props are shallow-equal (=equal= on each value, except
+that strings must also match in text properties) and state is unchanged,
+like =React.memo=.  An explicit =:should-update= always
 takes precedence over =:memo=.  Note that =:children= counts as a prop,
 so a memo component wrapping nested content re-renders whenever its
 parent does (the children vnodes are freshly built each render); =:memo=
@@ -1007,7 +1008,8 @@ Like =vui-use-callback= with configurable comparison.
 
 COMPARE options:
 - =eq= - identity comparison (fast)
-- =equal= - structural comparison (default)
+- =equal= - structural comparison (default); strings must also match in
+  text properties
 - function - custom =(lambda (old-deps new-deps) bool)=
 
 ** use-memo

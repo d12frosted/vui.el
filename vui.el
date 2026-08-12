@@ -934,11 +934,16 @@ Each entry is a vui-context-binding.")
       (error "Unknown component: %s" name)))
 
 (defun vui--shallow-equal-plist (a b)
-  "Non-nil if plists A and B have the same keys with `equal' values.
-Used by `:memo' components to decide whether props are unchanged."
+  "Non-nil if plists A and B have the same keys with equal values.
+Used by `:memo' components to decide whether props are unchanged.
+Values are compared with `vui--vnode-equal', so strings that differ
+only in text properties (same characters, different face) count as
+changed; functions keep plain `equal' semantics, so a fresh closure
+with an `equal' captured environment does not defeat the memo."
   (and (= (length a) (length b))
        (cl-loop for (k v) on a by #'cddr
-                always (and (plist-member b k) (equal v (plist-get b k))))))
+                always (and (plist-member b k)
+                            (vui--vnode-equal v (plist-get b k) t)))))
 
 (defmacro vui-defcomponent (name args &rest body)
   "Define a component named NAME.
@@ -1016,7 +1021,7 @@ Example:
     (when (and memo-flag (not should-update-provided))
       (setq should-update-form
             '(not (and (vui--shallow-equal-plist --props-- --prev-props--)
-                       (equal --state-- --prev-state--)))
+                       (vui--vnode-equal --state-- --prev-state-- t)))
             should-update-provided t))
     (let ((state-vars (mapcar #'car state-spec))
           (state-inits (mapcar #'cadr state-spec)))
@@ -2205,7 +2210,8 @@ as long as DEPS do not change.  This is useful for optimizing child
 components that depend on callback reference equality.
 
 DEPS is a list of variables to watch.  The callback is regenerated when
-any dep changes (compared with `equal').
+any dep changes (compared with `equal', except that strings must also
+match in text properties - a dep whose face changed counts as changed).
 
 Example:
   ;; Stable callback that only changes when item-id changes
@@ -2226,7 +2232,8 @@ not a function returning a callback."
 DEPS is a list of variables to watch.
 BODY may start with `:compare MODE' to select how deps are compared:
   `eq'     - identity comparison (fastest, for symbols/numbers)
-  `equal'  - structural comparison (default)
+  `equal'  - structural comparison (default); text-property-aware
+             for strings (see `vui--deps-equal-p')
   form     - any other form is evaluated and must yield a function
              (lambda (old-deps new-deps) bool)
 
@@ -2265,16 +2272,22 @@ returning a callback."
 COMPARE can be:
   `eq'     - identity comparison (fastest)
   `equal'  - structural comparison (default)
-  function - custom (lambda (old new) bool)"
+  function - custom (lambda (old new) bool)
+
+The `equal' mode is text-property-aware (`vui--vnode-equal'): a dep
+string that changed only in properties (same characters, different
+face) counts as changed.  Functions in deps keep plain `equal'
+semantics, so a closure rebuilt on every render with an `equal'
+captured environment does not defeat the cache."
   (cond
    ((eq compare 'eq)
     (and (= (length old-deps) (length new-deps))
          (cl-every #'eq old-deps new-deps)))
    ((eq compare 'equal)
-    (equal old-deps new-deps))
+    (vui--vnode-equal old-deps new-deps t))
    ((functionp compare)
     (funcall compare old-deps new-deps))
-   (t (equal old-deps new-deps))))
+   (t (vui--vnode-equal old-deps new-deps t))))
 
 (defun vui--get-or-update-callback (deps callback-fn &optional compare)
   "Return cached callback or update it if DEPS changed.
@@ -2312,7 +2325,8 @@ Similar to `vui-use-callback' but for computed values rather than functions.
 BODY is evaluated only when DEPS change, and the result is cached.
 
 DEPS is a list of variables to watch.  The value is recomputed when any
-dep changes (compared with `equal').
+dep changes (compared with `equal', except that strings must also
+match in text properties - a dep whose face changed counts as changed).
 
 Example:
   ;; Expensive filtering only runs when items or filter change
@@ -2330,7 +2344,8 @@ Example:
 DEPS is a list of variables to watch.
 BODY may start with `:compare MODE' to select how deps are compared:
   `eq'     - identity comparison (fastest, for symbols/numbers)
-  `equal'  - structural comparison (default)
+  `equal'  - structural comparison (default); text-property-aware
+             for strings (see `vui--deps-equal-p')
   form     - any other form is evaluated and must yield a function
              (lambda (old-deps new-deps) bool)
 
@@ -4026,7 +4041,7 @@ Return the number of characters inserted."
     (vui--render-vnode child)
     (- (point) start)))
 
-(defun vui--vnode-equal (a b)
+(defun vui--vnode-equal (a b &optional equal-functions)
   "Compare A and B like `equal', but strings must also match in properties.
 `equal' ignores string text properties, so two `vui-text' vnodes whose
 content strings differ only in properties (same characters, different
@@ -4034,7 +4049,16 @@ face via `propertize') would compare equal and the patcher would skip
 the segment, leaving stale properties in the buffer.  Descends conses,
 records (vnode structs), and vectors; every string is compared with
 `equal-including-properties'.  Cost is the same order as `equal', which
-also walks the full structure."
+also walks the full structure.
+
+Functions compare by identity by default: a fresh closure means
+\"changed\", the right call for vnodes where a new handler must be
+re-attached.  With EQUAL-FUNCTIONS non-nil they compare with `equal'
+instead, which treats a same-source closure with an `equal' captured
+environment as unchanged - the historical behavior of the `:memo' and
+hook-deps comparisons (`vui--shallow-equal-plist',
+`vui--deps-equal-p'), where a fresh-but-equivalent closure in props or
+deps must not defeat the cache."
   (cond
    ((eq a b) t)
    ((stringp a)
@@ -4045,24 +4069,24 @@ also walks the full structure."
     ;; thousands of children must not blow `max-lisp-eval-depth'.
     (let ((ok (consp b)))
       (while (and ok (consp a) (consp b))
-        (setq ok (vui--vnode-equal (car a) (car b))
+        (setq ok (vui--vnode-equal (car a) (car b) equal-functions)
               a (cdr a)
               b (cdr b)))
       (and ok (not (consp a)) (not (consp b))
            ;; nil or dotted tails: same string-aware comparison
-           (vui--vnode-equal a b))))
-   ;; Closures compare by identity only.  Interpreted closures can
-   ;; satisfy `recordp'; walking one would descend into its captured
-   ;; environment - expensive, and two distinct closures could compare
-   ;; equal through it.  A fresh closure means "changed".
+           (vui--vnode-equal a b equal-functions))))
+   ;; Closures satisfy `recordp'; walking one with the string-aware
+   ;; comparison would descend into its captured environment.  Compare
+   ;; them by identity (vnodes) or plain `equal' (memo/deps) instead.
    ((functionp a)
-    (and (functionp b) (eq a b)))
+    (and (functionp b)
+         (if equal-functions (equal a b) (eq a b))))
    ((or (recordp a) (vectorp a))
     (and (eq (type-of a) (type-of b))
          (= (length a) (length b))
          (let ((n (length a)) (ok t) (i 0))
            (while (and ok (< i n))
-             (setq ok (vui--vnode-equal (aref a i) (aref b i))
+             (setq ok (vui--vnode-equal (aref a i) (aref b i) equal-functions)
                    i (1+ i)))
            ok)))
    (t (equal a b))))
