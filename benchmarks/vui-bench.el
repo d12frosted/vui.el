@@ -991,6 +991,250 @@ machine-readable CMPDATA lines."
                  (vui-bench--ms (vui-bench-stat-gc res)))
         (when (get-buffer buf) (kill-buffer buf))))))
 
+;;; Large-state :memo comparison
+;;
+;; The `:memo' bail-out compares props AND state with the
+;; text-property-aware `vui--vnode-equal' (a Lisp walk) instead of the
+;; C-level `equal' (#126, #128).  For props the cost was measured at the
+;; time; state was only reasoned about: `prev-state' is a shallow copy
+;; of the state plist, so unchanged values short-circuit on `eq' and the
+;; walk never descends.  The one case where it runs to completion is a
+;; state value replaced by a fresh but structurally equal object - a
+;; functional update that rebuilt an equal structure.  These scenarios
+;; pin numbers on that reasoning with a deliberately large state value
+;; (a btop-like snapshot: 1000 process plists plus two 120-sample
+;; histories), so a future change to the comparison has a baseline.
+;;
+;; Wholesale mode only: the comparison under test runs before commit,
+;; so the incremental flag would only add unrelated commit-path noise.
+
+(defun vui-bench--big-state ()
+  "A btop-snapshot-shaped value: 1000 process plists + two histories.
+Built fresh on every call, so two calls return `equal' structures that
+share no cons cells, strings, or floats - the fresh-but-equal worst
+case for change detection."
+  (list :procs (cl-loop for i from 0 below 1000
+                        collect (list :pid i
+                                      :name (format "proc-%d" i)
+                                      :user (if (= 0 (mod i 3)) "root" "app")
+                                      :cpu (/ (mod (* 7 i) 1000) 10.0)
+                                      :mem (* 3 i)
+                                      :threads (1+ (mod i 32))
+                                      :state (if (= 0 (mod i 5)) 'sleeping 'running)
+                                      :prio 20))
+        :cpu-history (cl-loop for i from 0 below 120 collect (mod (* 7 i) 100))
+        :mem-history (cl-loop for i from 0 below 120 collect (mod (* 13 i) 100))))
+
+(when vui-bench--memo-ok
+  ;; Deferred eval so master (no :memo keyword) never expands this macro.
+  (eval '(progn
+           (vui-defcomponent vui-bench-memo-state-child (tag)
+             :memo t
+             :state ((snapshot nil) (tick 0))
+             :render (progn
+                       (cl-incf vui-bench--render-count)
+                       (vui-text (format "%s tick=%d rows=%d" tag tick
+                                         (length (plist-get snapshot :procs))))))
+           (vui-defcomponent vui-bench-memo-state-parent (tag)
+             :render (vui-component 'vui-bench-memo-state-child :tag tag)))
+        t))
+
+(defun vui-bench-memo-state ()
+  "End-to-end flush cost around a `:memo' child holding a large state.
+Three cells, timed round-robin on one mounted tree:
+
+  eq-bail     parent re-renders, no state change: every state value is
+              `eq', the walk never descends.  The common case; must
+              stay cheap regardless of state size.
+  tick        `vui-set-state' bumps a small int: the memo must NOT
+              bail, and the comparison stops at the first difference.
+              Cost here is a real child re-render, not comparison.
+  equal-bail  `vui-set-state' swaps the snapshot for a fresh `equal'
+              copy: the memo MUST bail, and only after walking the
+              entire structure.  This is the worst case the scenario
+              exists for.  Measured (Emacs 31, this state size): the
+              flush is comparison-dominated - the walk alone (see the
+              micro scenario) accounts for nearly all of the ~1.2ms,
+              where the C `equal' walk it replaced took ~0.07ms.  That
+              is the number that would justify future work (an
+              identity-stable-state note in the docs, or a fast path)
+              if a real UI ever hits this shape at a high refresh rate.
+
+MECHANISM is asserted before and during timing: the render counter
+proves each cell renders exactly as promised (0/1/0 per flush), and the
+bail path is checked to refresh `prev-state', so every equal-bail toggle
+really compares two fresh copies instead of degrading to `eq'."
+  (when vui-bench--memo-ok
+    (vui-bench--header "Large-state :memo bail-out (btop-snapshot shape)")
+    (vui-bench--row '(12 . "cell") '(34 . "median (min..max) +gc")
+                    '(10 . "renders"))
+    (let* ((snap-a (vui-bench--big-state))
+           (snap-b (vui-bench--big-state))
+           (buf "*vui-bench-memo-state*")
+           (inst (vui-mount (vui-component 'vui-bench-memo-state-parent
+                                           :tag "s")
+                            buf)))
+      (vui-bench--assert (and (equal snap-a snap-b) (not (eq snap-a snap-b)))
+                         "big-state copies must be equal but distinct")
+      (unwind-protect
+          (with-current-buffer buf
+            (let ((child (car (vui-get-component-instances
+                               'vui-bench-memo-state-child inst)))
+                  (tog (list nil)))
+              ;; Install the initial snapshot (untimed).
+              (let ((vui--current-instance child))
+                (vui-set-state :snapshot snap-a))
+              ;; MECHANISM, one probe per cell before timing.
+              ;; eq-bail: parent re-render, all state values eq -> child bails.
+              (setq vui-bench--render-count 0)
+              (vui-update-props inst '(:tag "s"))
+              (vui-bench--assert (= vui-bench--render-count 0)
+                                 "eq-bail: %d child renders, expected 0"
+                                 vui-bench--render-count)
+              ;; tick: small scalar changed -> child must NOT bail.
+              (setq vui-bench--render-count 0)
+              (let ((vui--current-instance child))
+                (vui-set-state :tick #'1+))
+              (vui-bench--assert (= vui-bench--render-count 1)
+                                 "tick: %d child renders, expected 1"
+                                 vui-bench--render-count)
+              ;; equal-bail: fresh equal snapshot -> child bails, and the
+              ;; bail must still refresh prev-state; otherwise the next
+              ;; toggle back to the previous copy would short-circuit on
+              ;; `eq' and the cell would measure the wrong path half the
+              ;; time.
+              (setq vui-bench--render-count 0)
+              (let ((vui--current-instance child))
+                (vui-set-state :snapshot snap-b))
+              (vui-bench--assert (= vui-bench--render-count 0)
+                                 "equal-bail: %d child renders, expected 0"
+                                 vui-bench--render-count)
+              (vui-bench--assert (eq (plist-get (vui-instance-prev-state child)
+                                                :snapshot)
+                                     snap-b)
+                                 "equal-bail: prev-state not refreshed on bail")
+              (let ((vui--current-instance child))
+                (vui-set-state :snapshot snap-a))
+              (vui-bench--assert (= vui-bench--render-count 0)
+                                 "equal-bail: toggle back rendered the child")
+              ;; Timing.  Round-robin across the cells; only the tick cell
+              ;; renders, so the counter over the whole timed phase must be
+              ;; exactly warmups + rounds.
+              (setq vui-bench--render-count 0)
+              (let* ((rounds vui-bench-rounds)
+                     (results
+                      (vui-bench--compare
+                       rounds
+                       (list
+                        (list "eq-bail"
+                              (lambda () (vui-update-props inst '(:tag "s"))))
+                        (list "tick"
+                              (lambda ()
+                                (let ((vui--current-instance child))
+                                  (vui-set-state :tick #'1+))))
+                        (list "equal-bail"
+                              (lambda ()
+                                (setcar tog (not (car tog)))
+                                (let ((vui--current-instance child))
+                                  (vui-set-state :snapshot (if (car tog)
+                                                               snap-b
+                                                             snap-a)))))))))
+                (vui-bench--assert (= vui-bench--render-count (+ 2 rounds))
+                                   "timed phase: %d child renders, expected %d"
+                                   vui-bench--render-count (+ 2 rounds))
+                ;; Parity after the fact: the buffer must reflect exactly
+                ;; the tick renders that happened (mechanism probe + timed
+                ;; phase), with the bails leaving no trace.
+                (vui-bench--assert
+                 (equal (buffer-string)
+                        (format "s tick=%d rows=1000" (+ 1 2 rounds)))
+                 "buffer does not match the expected final render")
+                (dolist (cell '("eq-bail" "tick" "equal-bail"))
+                  (let ((res (cdr (assoc cell results))))
+                    (vui-bench--row (cons 12 cell)
+                                    (cons 34 (concat (vui-bench--stat-cell res)
+                                                     " ms"))
+                                    (cons 10 (if (equal cell "tick") 1 0)))
+                    (message "CMPDATA memo-state %s %s %s %s %s"
+                             cell
+                             (vui-bench--ms (vui-bench-stat-min res))
+                             (vui-bench--ms (vui-bench-stat-median res))
+                             (vui-bench--ms (vui-bench-stat-max res))
+                             (vui-bench--ms (vui-bench-stat-gc res)))))
+                (vui-bench--cmp-ratio results "equal-bail" "eq-bail"
+                                      "eq fast path vs full walk"))))
+        (vui-unmount inst)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
+(defun vui-bench-memo-state-micro ()
+  "Direct cost of one comparison walk over the big state plist.
+Times plain `equal' against the property-aware comparison the memo
+bail-out actually uses (`vui--vnode-equal' in its equal-functions
+mode), on two fresh `equal' builds, so the constant factor between the
+C walk and the Lisp walk is a printed number.  The Lisp function is
+byte-compiled (it comes from vui.elc); each sample runs the comparison
+100 times.  The vnode-equal cell only appears on builds where the
+comparison takes the extra mode argument."
+  (vui-bench--header "Micro: equal vs vui--vnode-equal on the big state")
+  (let* ((a (list :snapshot (vui-bench--big-state) :tick 0))
+         (b (list :snapshot (vui-bench--big-state) :tick 0))
+         (reps 100)
+         ;; Late-bound so byte-compiling this file against a build whose
+         ;; `vui--vnode-equal' still takes two arguments does not warn.
+         (vnode-equal (and (fboundp 'vui--vnode-equal)
+                           (>= (cdr (func-arity
+                                     (symbol-function 'vui--vnode-equal)))
+                               3)
+                           (symbol-function 'vui--vnode-equal))))
+    (vui-bench--assert (and (equal a b) (not (eq a b)))
+                       "micro: builds must be equal but distinct")
+    (when vnode-equal
+      (vui-bench--assert (funcall vnode-equal a b t)
+                         "micro: vnode-equal disagrees with equal"))
+    ;; The comparison results land in `sink': `equal' is pure, and a
+    ;; byte-compiled thunk discarding its value could have the call
+    ;; optimized away entirely, timing an empty loop.
+    (let* ((sink nil)
+           (specs (append
+                   (list (list "equal"
+                               (lambda ()
+                                 (dotimes (_ reps) (setq sink (equal a b))))))
+                   (when vnode-equal
+                     (list (list "vnode-eq"
+                                 (lambda ()
+                                   (dotimes (_ reps)
+                                     (setq sink (funcall vnode-equal a b t)))))))))
+           (results (vui-bench--compare vui-bench-rounds specs)))
+      (vui-bench--assert sink "micro: comparison reported not-equal")
+      (dolist (s specs)
+        (let ((res (cdr (assoc (car s) results))))
+          (vui-bench--row (cons 12 (car s))
+                          (cons 34 (concat (vui-bench--stat-cell res) " ms"))
+                          (cons 22 (format "%.1f us/walk"
+                                           (/ (* 1e6 (vui-bench-stat-min res))
+                                              reps))))
+          (message "CMPDATA memo-state-micro %s %s %s %s %s"
+                   (car s)
+                   (vui-bench--ms (vui-bench-stat-min res))
+                   (vui-bench--ms (vui-bench-stat-median res))
+                   (vui-bench--ms (vui-bench-stat-max res))
+                   (vui-bench--ms (vui-bench-stat-gc res)))))
+      (vui-bench--cmp-ratio results "vnode-eq" "equal"
+                            "C walk vs Lisp walk"))))
+
+(defun vui-bench-memo-state-run ()
+  "Run only the large-state :memo comparison benchmarks."
+  (interactive)
+  (let ((vui-render-delay nil)
+        (vui-timing-enabled nil)
+        (vui-debug-enabled nil))
+    (message "VUI large-state :memo benchmarks (Emacs %s, %s build)"
+             emacs-version (if vui-bench--incr-ok "branch" "master"))
+    (vui-bench-memo-state)
+    (vui-bench-memo-state-micro)
+    (message "")
+    (message "done.")))
+
 (defun vui-bench-compare-run ()
   "Run only the cross-version comparison (mount + localized matrix)."
   (interactive)
@@ -1029,6 +1273,8 @@ machine-readable CMPDATA lines."
     (vui-bench-table-cells)
     (vui-bench-table-width-mode)
     (vui-bench-component-bailout)
+    (vui-bench-memo-state)
+    (vui-bench-memo-state-micro)
     (vui-bench-streaming-growth)
     (vui-bench-agent-append-growth)
     (vui-bench-agent-box-update)

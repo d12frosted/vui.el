@@ -42,6 +42,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- Large-state =:memo= scenarios in the benchmark suite
+  (=benchmarks/vui-bench.el=): the =:memo= bail-out now compares state with the
+  property-aware =vui--vnode-equal= (a Lisp walk) instead of C-level =equal=,
+  and nothing measured that cost against a large state value. Three end-to-end
+  cells against a btop-snapshot-shaped state (1000 process plists plus two
+  120-sample histories): identity-stable bail (the common case, stays at
+  microseconds regardless of state size), a small scalar change (memo must not
+  bail), and the worst case - replacing the state with a fresh but =equal=
+  structure, where the walk runs to completion (~1.2ms at this size, vs
+  ~0.07ms for the C walk it replaced; the flush is comparison-dominated). A
+  micro scenario prints the raw C-vs-Lisp walk ratio. Mechanism is asserted
+  throughout: a render counter proves each cell bails or renders exactly as
+  claimed, and the bail path is checked to refresh =prev-state= so the
+  worst-case cell cannot silently degrade to the =eq= fast path (#128).
+
 - Table scenarios in the benchmark suite (=benchmarks/vui-bench.el=): re-render
   cost vs row count, vs column count, and string cells vs vnode cells. Tables
   are the measurement-heavy path (column widths are recomputed from scratch
