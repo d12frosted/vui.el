@@ -356,5 +356,54 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '("a" "") "x")))
           (vui-st--kill))))))
 
+(describe "vui-stream: update-last grows an empty FIRST item"
+  ;; A different way into the zero-width region than emptying an existing
+  ;; item: an empty text appended as the FIRST item renders zero
+  ;; characters, so the container drops the stream child at the empty ->
+  ;; non-empty re-render and the separator to the content below is never
+  ;; emitted at all.  Growing the item via update-last must re-lay the
+  ;; tree, on both of its paths, or the item comes out glued to the note
+  ;; ("hinote: x").
+  (it "recovers the separator on the extend fast path"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text ""))
+              ;; zero-char stream child is dropped, like a plain render
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '() "x"))
+              ;; "" -> "hi" is an extension, so this hits the fast path
+              (vui-stream-update-last s (vui-text "hi"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("hi") "x")))
+          (vui-st--kill)))))
+
+  (it "recovers the separator on the replace path"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text ""))
+              ;; a different face defeats the extend fast path
+              (vui-stream-update-last s (vui-text "hi" :face 'bold))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("hi") "x")))
+          (vui-st--kill)))))
+
+  (it "keeps appending correctly after the recovery"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (let ((inst (vui-st--mount s "x")))
+        (ignore inst)
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text ""))
+              (vui-stream-update-last s (vui-text "hi"))
+              (vui-stream-append s (vui-text "b"))
+              (expect (vui-st--buffer) :to-equal (vui-st--oracle '("hi" "b") "x")))
+          (vui-st--kill))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
