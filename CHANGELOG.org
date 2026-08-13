@@ -7,6 +7,24 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- =vui-table= accepts =:sticky-header t=: while the window is scrolled
+  into the table's body (the in-buffer header row above the window start,
+  rows still visible), a copy of the header row is pinned in
+  =header-line-format=, so long tables keep their column labels in view.
+  This is the sticky-scroll model, not the =tabulated-list-mode= one: the
+  table renders into the buffer unchanged (header included), content
+  before and after the table behaves normally, several sticky tables in
+  one buffer hand the pinned header over as you scroll between them, and
+  evaluation is per window via an =:eval= header-line construct. The
+  pinned copy is read live from the buffer at redisplay, so it always
+  matches current column widths, borders, faces, and surrounding
+  indentation. Unmounting or remounting restores the previous
+  =header-line-format=. Sticky headers must be plain strings (the pinned
+  copy is unreachable by vui navigation); a vnode header signals an
+  error (#117).
+
 ** Changed
 
 - The =vui-stream-update-last= extend fast path checks the prefix without

@@ -657,14 +657,15 @@ default =RET= / =TAB= behavior, and input fields keep their own keymap.
 Create a table layout. Cell contents can be strings or vnodes (including
 interactive widgets like buttons, fields, and components).
 
-| Property       | Type   | Description                                    |
-|----------------+--------+------------------------------------------------|
-| =:columns=     | list   | List of column specs (see below)               |
-| =:rows=        | list   | List of rows, each a list of cells             |
-| =:border=      | symbol | nil, :ascii, or :unicode                       |
-| =:header-face= | face   | Face for header cells (default =vui-table-header=) |
-| =:border-face= | face   | Face for border characters (default =vui-table-border=) |
-| =:key=         | any    | Reconciliation key                             |
+| Property          | Type    | Description                                    |
+|-------------------+---------+------------------------------------------------|
+| =:columns=        | list    | List of column specs (see below)               |
+| =:rows=           | list    | List of rows, each a list of cells             |
+| =:border=         | symbol  | nil, :ascii, or :unicode                       |
+| =:sticky-header=  | boolean | Render the header row into =header-line-format= (see below) |
+| =:header-face=    | face    | Face for header cells (default =vui-table-header=) |
+| =:border-face=    | face    | Face for border characters (default =vui-table-border=) |
+| =:key=            | any     | Reconciliation key                             |
 
 Headers render in the =vui-table-header= face (inherits =bold=) and
 border characters in =vui-table-border= (no attributes by default), so
@@ -699,7 +700,60 @@ side for readability (e.g., =| value |= instead of =|value|=).
 | W        | t       | t           | content > W      | Column = W, content truncated with "..."  |
 | nil      | -       | -           | any              | Column auto-sizes to content              |
 
-*** Basic Example
+*** Sticky Header
+
+With =:sticky-header t= the header row stays visible while a long
+table scrolls. The table renders into the buffer exactly as without
+it - header row included - and a copy of the header row is pinned in
+the window's =header-line-format= *only while the window is scrolled
+into the table's body*, that is, while the in-buffer header row is
+above the window start but the table has not ended yet:
+
+#+begin_src elisp
+(vui-table
+ :sticky-header t
+ :columns '((:header "Name" :min-width 15)
+            (:header "Age" :width 5 :align :right))
+ :rows lots-of-rows
+ :border :ascii)
+#+end_src
+
+This is the sticky-scroll model rather than the =tabulated-list-mode=
+model: content before and after the table (titles, filter fields,
+footers) behaves normally, windows showing that content pin nothing,
+and a buffer can hold several sticky tables - as the window scrolls
+from one into the next, the pinned header hands over.
+
+The pinned copy is read live from the buffer at redisplay time, so it
+always matches the current column widths, borders, padding, faces,
+and even surrounding indentation - columns line up exactly, and
+re-renders that change widths are picked up automatically. Evaluation
+is per window: two windows on the same buffer scrolled to different
+tables each pin their own header. Unmounting the tree (or mounting
+another one over the buffer) restores whatever =header-line-format=
+was there before.
+
+Faces: the pinned copy keeps =vui-table-header= (or =:header-face=)
+and =vui-table-border= (or =:border-face=), drawn on top of the
+window's =header-line= face, which typically adds its own background.
+The defaults (bold, no colors) compose well with it; if you override
+the faces with explicit colors, check them against the =header-line=
+background.
+
+Limitations:
+
+- Headers must be plain strings. The pinned copy lives in the header
+  line, outside the buffer, so vui navigation (=vui-forward= /
+  =vui-backward=) and buttons cannot reach it; a vnode header signals
+  an error when =:sticky-header= is on. (The in-buffer header row is
+  plain text anyway, so nothing is lost.)
+- While any sticky table is mounted, the header line is reserved: it
+  shows an empty line when no table is pinned, rather than appearing
+  and disappearing as you scroll (which would make the window content
+  jump by a line).
+
+See =docs/examples/16-sticky-table.el= for a runnable demo: a long
+filterable table with widgets before and after it.
 
 #+begin_src elisp
 (vui-table

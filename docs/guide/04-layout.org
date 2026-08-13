@@ -358,6 +358,37 @@ For interactive tables with complex state, embed components in cells:
  :border :ascii)
 #+end_src
 
+** Sticky Header
+
+For long tables the header scrolls out of view with the content. Pass
+=:sticky-header t= to keep it visible: the table renders normally,
+and while the window is scrolled into the table's body - the header
+row above the window start, rows still on screen - a copy of the
+header row is pinned in the window's header line:
+
+#+begin_src elisp
+(vui-table
+ :sticky-header t
+ :columns '((:header "Name" :width 8)
+            (:header "Role" :width 10))
+ :rows lots-of-rows
+ :border :ascii)
+#+end_src
+
+Content around the table (titles, filter fields, footers) behaves
+normally - windows showing it pin nothing - and a buffer can hold
+several sticky tables; the pinned header hands over as you scroll
+from one into the next. The copy is read from the buffer at
+redisplay time, so it always matches the current column widths,
+borders, and faces. Unmounting restores the previous
+=header-line-format=.
+
+Sticky headers must be plain strings: the pinned copy is outside the
+buffer, so buttons there would be unreachable by vui navigation. A
+vnode header signals an error when =:sticky-header= is on. See the
+[[../reference/api.org][API reference]] for details and limitations, and
+=docs/examples/16-sticky-table.el= for a runnable demo.
+
 ** Dynamic Column Widths
 
 Calculate column widths dynamically based on content:
@@ -578,7 +609,7 @@ available through the =vui-region= wrapper:
 | =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=, =:face=, =:keymap= |
 | =vui-flex=   | Width distribution     | =:width=, =:justify=, =vui-flex-item= =:grow= |
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
-| =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=            |
+| =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=, =:sticky-header= |
 | =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |
 | =vui-region= | Styling wrapper        | =:face=, =:keymap=                        |
 

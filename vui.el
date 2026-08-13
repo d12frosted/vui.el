@@ -705,6 +705,7 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   columns     ; List of column specs (plists with :header :width :align :min-width)
   rows        ; List of rows, each row is list of cell content (strings or vnodes)
   border      ; nil, :ascii, :unicode
+  sticky-header ; When non-nil, pin the header row in the header line while scrolled into the body
   header-face ; Face for header cells (default `vui-table-header')
   border-face); Face for border characters (default `vui-table-border')
 
@@ -1343,6 +1344,16 @@ Table properties:
   :columns LIST      - List of column specs
   :rows LIST         - List of rows, each row is a list of cell contents
   :border MODE       - nil (default), :ascii, :unicode
+  :sticky-header BOOL - keep the header row visible while scrolling:
+                     the header renders into the buffer as usual, and
+                     a copy is pinned in `header-line-format' whenever
+                     the window is scrolled into the table's body (the
+                     in-buffer header row is above the window start).
+                     Windows outside the table pin nothing, and each
+                     sticky table pins its own header as the window
+                     moves through it.  Requires plain string headers.
+                     The previous `header-line-format' is restored on
+                     unmount.
   :header-face FACE  - face for header cells (default `vui-table-header')
   :border-face FACE  - face for border characters (default `vui-table-border')
   :key KEY           - for reconciliation
@@ -1365,6 +1376,7 @@ Example:
      :columns columns
      :rows rows
      :border border
+     :sticky-header (plist-get args :sticky-header)
      :header-face (plist-get args :header-face)
      :border-face (plist-get args :border-face)
      :key key)))
@@ -3713,6 +3725,94 @@ Width calculation:
                                          max-w)))))))
     (append widths nil)))
 
+(defvar-local vui--table-sticky-registry nil
+  "Sticky table regions in this buffer, newest first.
+Each entry is a cons (HEADER-MARKER . END-MARKER): HEADER-MARKER sits
+at the start of the table's in-buffer header row, END-MARKER at the
+end of the table.  `vui--table-sticky-header' pins the header of the
+entry whose region spans the window start.  Entries whose region has
+collapsed (the table was erased or re-rendered elsewhere) are inert
+and are pruned by `vui--table-prune-sticky-registry'.")
+
+(defvar-local vui--table-saved-header-line nil
+  "Previous `header-line-format', saved before a sticky header replaced it.
+A cons (t . VALUE) while a sticky table header is installed, nil
+otherwise.  The cons distinguishes a saved nil from nothing saved.
+VALUE is put back by `vui--table-restore-header-line'.")
+
+(defun vui--table-prune-sticky-registry ()
+  "Drop registry entries whose table region no longer exists.
+A deleted or rewritten table leaves its markers collapsed (start not
+before end); such entries never match a window position, so this is
+garbage collection, not behavior."
+  (setq vui--table-sticky-registry
+        (cl-delete-if (lambda (entry)
+                        (let ((start (marker-position (car entry)))
+                              (end (marker-position (cdr entry))))
+                          (when (or (null start) (null end) (>= start end))
+                            (set-marker (car entry) nil)
+                            (set-marker (cdr entry) nil)
+                            t)))
+                      vui--table-sticky-registry)))
+
+(defun vui--table-register-sticky (header-pos end-pos)
+  "Register a sticky table spanning up to END-POS in the current buffer.
+HEADER-POS is where its in-buffer header row starts.  Installs the
+header-line machinery on first use, saving the previous
+`header-line-format' so unmounting can restore it."
+  (vui--table-prune-sticky-registry)
+  (push (cons (copy-marker header-pos) (copy-marker end-pos))
+        vui--table-sticky-registry)
+  (unless vui--table-saved-header-line
+    (setq vui--table-saved-header-line (cons t header-line-format)))
+  (setq header-line-format '("" (:eval (vui--table-sticky-header)))))
+
+(defun vui--table-sticky-header (&optional pos)
+  "Return the header to pin for a window starting at POS.
+POS defaults to `window-start'; redisplay evaluates this per window,
+with that window selected, so each window pins the header of the
+sticky table it is scrolled into.  Returns the table's in-buffer
+header row - read live from the buffer, so it is always in sync with
+the current column widths - when POS is past the header row but
+before the table's end, and an empty string otherwise.
+
+The copy is prefixed with a stretch space up to column 0: header-line
+content starts at the window edge (over the fringe), while buffer
+text starts after it, so without the prefix the pinned columns would
+not line up with the table body.  Percent signs are doubled because
+the result is a mode-line construct.  Never signals: redisplay runs
+this on every frame update, and an error here would loop."
+  (condition-case nil
+      (let* ((pos (or pos (window-start)))
+             (entry (cl-find-if
+                     (lambda (e)
+                       (let ((start (marker-position (car e)))
+                             (end (marker-position (cdr e))))
+                         (and start end (> pos start) (< pos end))))
+                     vui--table-sticky-registry)))
+        (if (null entry)
+            ""
+          (save-excursion
+            (goto-char (car entry))
+            (concat (propertize " " 'display '(space :align-to 0))
+                    (replace-regexp-in-string
+                     "%" "%%"
+                     (buffer-substring (line-beginning-position)
+                                       (line-end-position)))))))
+    (error "")))
+
+(defun vui--table-restore-header-line ()
+  "Restore the header line replaced by sticky table headers, if any.
+Only restores once no live sticky table remains in the buffer, so
+tearing down one instance leaves another instance's pinned header
+working."
+  (vui--table-prune-sticky-registry)
+  (when (and vui--table-saved-header-line
+             (null vui--table-sticky-registry))
+    (setq header-line-format (cdr vui--table-saved-header-line))
+    (kill-local-variable 'vui--table-saved-header-line)
+    (kill-local-variable 'vui--table-sticky-registry)))
+
 (defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face)
   "Render a table border line.
 COL-WIDTHS is list of column widths.
@@ -5533,16 +5633,30 @@ wholesale render's empty-child handling)."
            (border (vui-vnode-table-border vnode))
            (header-face (vui-vnode-table-header-face vnode))
            (border-face (vui-vnode-table-border-face vnode))
+           (has-header (cl-some (lambda (c) (plist-get c :header)) columns))
+           (sticky (and (vui-vnode-table-sticky-header vnode) has-header))
            ;; Calculate column widths
            (col-widths (vui--calculate-table-widths columns rows)))
+      ;; The pinned copy of a sticky header is display-only text in the
+      ;; header line, out of reach of vui navigation and buttons -
+      ;; require plain string headers so nothing looks interactive
+      ;; without being so
+      (when sticky
+        (dolist (col columns)
+          (let ((header (plist-get col :header)))
+            (unless (or (null header) (stringp header))
+              (error "vui-table: :sticky-header requires plain string headers, got %S"
+                     header)))))
       ;; Cell padding when borders are enabled
       (let ((cell-padding (if border 1 0))
-            (row-idx 0))
+            (row-idx 0)
+            (header-row-start nil))
         ;; Render header if any column has one
-        (when (cl-some (lambda (c) (plist-get c :header)) columns)
+        (when has-header
           (when border
             (vui--render-table-border col-widths border 'top cell-padding
                                       border-face))
+          (setq header-row-start (point))
           (vui--render-table-row
            (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
            col-widths columns border 'header nil header-face border-face)
@@ -5550,7 +5664,7 @@ wholesale render's empty-child handling)."
             (vui--render-table-border col-widths border 'separator cell-padding
                                       border-face)))
         ;; Render data rows
-        (let ((first-row (not (cl-some (lambda (c) (plist-get c :header)) columns))))
+        (let ((first-row (not has-header)))
           (when (and border first-row)
             (vui--render-table-border col-widths border 'top cell-padding
                                       border-face))
@@ -5566,10 +5680,17 @@ wholesale render's empty-child handling)."
               (cl-incf row-idx)))
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding
-                                      border-face))))
-      ;; Remove trailing newline - tables emit content only, no trailing newline
-      (when (eq (char-before) ?\n)
-        (delete-char -1))))
+                                      border-face)))
+        ;; Remove trailing newline - tables emit content only, no trailing newline
+        (when (eq (char-before) ?\n)
+          (delete-char -1))
+        ;; Sticky header: register the table's region so redisplay can
+        ;; pin the header row while the window is scrolled into the
+        ;; body.  Skipped during measure passes, which run in a temp
+        ;; buffer: only the real render may touch the target buffer's
+        ;; header line.
+        (when (and sticky header-row-start (not vui--measuring-p))
+          (vui--table-register-sticky header-row-start (point))))))
 
    ;; Field (editable text input)
    ((vui-vnode-field-p vnode)
@@ -5740,6 +5861,9 @@ Clears the buffer before rendering."
       (setq widget-field-list nil widget-field-new nil)
       (remove-overlays)
       (erase-buffer)
+      ;; A previous render's sticky table header must not outlive it;
+      ;; rendering a sticky table below installs a fresh one
+      (vui--table-restore-header-line)
       (vui--render-vnode vnode)
       ;; Setup widgets for keyboard navigation
       (widget-setup)
@@ -5792,6 +5916,9 @@ Returns the root instance."
         (setq widget-field-list nil widget-field-new nil)
         (remove-overlays)
         (erase-buffer)
+        ;; The previous mount's sticky table header must not leak into
+        ;; this one; the new tree installs its own if it has one
+        (vui--table-restore-header-line)
         ;; Store root instance for state updates
         (setq-local vui--root-instance instance)
         ;; Release component resources when the buffer is killed
@@ -5941,7 +6068,9 @@ Returns INSTANCE, or nil if it was already unmounted."
                   (end-pos (marker-position end)))
               (vui--remove-widget-overlays pos end-pos)
               (vui--forget-region-fields pos end-pos)
-              (delete-region pos end-pos)))))
+              (delete-region pos end-pos)))
+          ;; Put back the header line a sticky table header replaced
+          (vui--table-restore-header-line)))
       (when start (set-marker start nil))
       (when end (set-marker end nil))
       (setf (vui-instance-region-start instance) nil)
@@ -5990,7 +6119,9 @@ Returns the unmounted instance, or nil if nothing was mounted."
             (let ((inhibit-read-only t)
                   (inhibit-modification-hooks t))
               (remove-overlays)
-              (erase-buffer)))))
+              (erase-buffer))
+            ;; Put back the header line a sticky table header replaced
+            (vui--table-restore-header-line))))
       instance))))
 
 (provide 'vui)
