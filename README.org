@@ -236,6 +236,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 | 13 | [[file:docs/examples/13-agent-chat.el][Agent Chat]]            | A transcript that streams above a persistent input box with =vui-stream=                |
 | 14 | [[file:docs/examples/14-claude-chat.el][Claude Chat]]           | A live chat against the =claude -p= CLI, streamed through =vui-stream=                  |
 | 15 | [[file:docs/examples/15-ci-dashboard.el][CI Dashboard]]          | A *real* GitHub Actions dashboard over =gh=: async run table, drill-down, log streaming |
+| 16 | [[file:docs/examples/16-sticky-table.el][Sticky Table]]          | A long filterable table whose header stays visible via =:sticky-header=                 |
 
 * Available Components
 
@@ -260,7 +261,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 | =vui-vstack= | Vertical layout with spacing/indent     |
 | =vui-flex=   | Row distributing width among children   |
 | =vui-box=    | Fixed-width container with alignment    |
-| =vui-table=  | Table with headers, borders, alignment  |
+| =vui-table=  | Table with headers (optionally sticky), borders, alignment |
 | =vui-list=   | Dynamic list with key-based reconcile   |
 
 ** Higher-Level Components (vui-components.el)
