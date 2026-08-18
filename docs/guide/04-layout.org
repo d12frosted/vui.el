@@ -487,10 +487,15 @@ Things to know before switching:
   border rows are laid out by position, not by counting glyphs: each
   junction is centred on the separator below it, and the rule between
   two junctions is whole glyphs plus a spacer for the remainder. That
-  spacer is a gap of less than one glyph in the rule; a corner wider
-  than the separator (ASCII =+= over =|=) overhangs the table by half
-  the difference. In a monospace font the output is byte-identical to
-  before.
+  spacer is a gap of less than one glyph in the rule, split evenly on
+  both sides of it; a corner wider than the separator (ASCII =+= over
+  =|=) overhangs the table by half the difference. In a monospace font
+  the output is byte-identical to before. Alignment is exact either
+  way, but a proportional font's box-drawing glyphs also do not span
+  the line height, so a unicode grid stays dotted vertically no matter
+  how it is laid out; in a proportional font =:border :ascii= looks
+  better. See =docs/examples/18-variable-pitch.el= for both side by
+  side.
 - On a tty frame a pixel is a column, so both modes render the same
   there. The same holds for =emacs --batch=, which is why tests cannot
   tell the modes apart.
