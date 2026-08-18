@@ -65,6 +65,26 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Three more =pixel= width mode unit bugs, all invisible in batch (a pixel
+  is a column there) and found by a new mocked-font test suite
+  (=test/vui-width-mode-test.el=, 37 specs, which also pins that pure ASCII
+  renders byte-identically in both modes). =vui-vstack= =:indent= was inserted
+  as N pixels instead of N columns, so an indented vstack in pixel mode
+  indented by a sliver. =vui-hstack= converted its inherited =:indent= to
+  pixels and then handed the pixel count down to nested vstacks as their
+  character =:indent=, so continuation lines under an indented hstack
+  indented about seven times too far. And =vui-flex= distributed the leftover
+  in raw pixels: =:space-between= inserted a literal space for each pixel of
+  remainder (a 20-column row came out 6px wide of its edge), and growers
+  and =:center= got fractional-column shares that char mode never produces,
+  so enabling pixel mode changed pure-ASCII flex rows by a column and
+  sprinkled display spacers into monospace layouts for no gain. Leftover is
+  now handed out in whole columns with the sub-column pixel remainder carried
+  to one place (the last grower or the last gap), and =:center= padding in
+  tables and boxes splits at column granularity too
+  (=vui--split-padding=). Net effect: byte parity with char mode on ASCII,
+  and rows still end on the exact pixel with wide glyphs (#121).
+
 - =vui-flex= growers in =pixel= width mode were scaled twice. The leftover
   is carved up in mode units (pixels), but a grower's share was then handed
   to a character-width box (which converts again) and to the width-receiving

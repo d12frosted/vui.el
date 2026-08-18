@@ -3644,6 +3644,23 @@ the mode is pixel, return pixel-based padding using vui--pixel-spaces."
         ('pixel (vui--pixel-spaces width)))
     ""))
 
+(defun vui--column-width ()
+  "Return the width of one text column in the current mode units.
+1 in `char' mode, the pixel width of a space in `pixel' mode.  Never
+less than 1, so it is safe as a divisor."
+  (max 1 (or (vui--width 1) 1)))
+
+(defun vui--split-padding (padding)
+  "Split PADDING (mode units) into (LEFT . RIGHT) for centering.
+The split happens at whole-column granularity: LEFT gets half of the
+whole columns PADDING holds, RIGHT gets the rest, including any
+sub-column pixel remainder in `pixel' mode.  So ASCII content centers
+byte-identically in both modes, and a fractional remainder only ever
+lands on the right, where it cannot shift the content."
+  (let* ((col (vui--column-width))
+         (left (* col (/ (/ padding col) 2))))
+    (cons left (- padding left))))
+
 (defun vui--normalize-width (char width)
   "Normalize WIDTH based on the pixel width of CHAR when vui-width-mode is
 pixel. If CHAR is non-nil and the mode is pixel, return WIDTH rounded up
@@ -4124,8 +4141,9 @@ Handles :truncate and overflow:
                              (insert (propertize display-content 'face face))
                            (insert display-content))))
                       (:center
-                       (let ((left-pad (/ padding 2))
-                             (right-pad (- padding (/ padding 2))))
+                       (let* ((split (vui--split-padding padding))
+                              (left-pad (car split))
+                              (right-pad (cdr split)))
                          (insert (vui--pad left-pad))
                          (if is-vnode
                              (vui--render-vnode render-cell)
@@ -4190,29 +4208,41 @@ and `window'."
                                    specs)
                     :initial-value 0))
          (sep-count (max 0 (1- (length specs))))
-         (leftover (max 0 (- total naturals (* spacing sep-count)))))
+         (leftover (max 0 (- total naturals (* spacing sep-count))))
+         ;; Everything above is in mode units.  The leftover is handed
+         ;; out in WHOLE COLUMNS, with the sub-column pixel remainder
+         ;; (always 0 in char mode) carried to one place: the last
+         ;; grower, or the last space-between gap.  Distributing raw
+         ;; pixels would give ASCII rows fractional shares that char
+         ;; mode never produces, breaking byte parity for no gain, and
+         ;; would leave a row short when a function grower rounds down.
+         (col (vui--column-width))
+         (leftover-cols (/ leftover col))
+         (leftover-rem (- leftover (* leftover-cols col))))
     ;; Distribute leftover among growers, remainder to the last one
     (when (> grow-total 0)
       (let ((growers (cl-remove-if-not (lambda (s) (plist-get s :grow)) specs))
             (assigned 0))
         (dolist (spec growers)
-          (let ((share (/ (* leftover (plist-get spec :grow)) grow-total)))
-            (plist-put spec :share share)
-            (cl-incf assigned share)))
+          (let ((share-cols (/ (* leftover-cols (plist-get spec :grow)) grow-total)))
+            (plist-put spec :share (* share-cols col))
+            (cl-incf assigned share-cols)))
         (let ((last-grower (car (last growers))))
           (plist-put last-grower :share (+ (plist-get last-grower :share)
-                                           (- leftover assigned))))))
+                                           (* (- leftover-cols assigned) col)
+                                           leftover-rem)))))
     ;; Without growers, leftover goes to justify padding
-    (let* ((extra (if (> grow-total 0) 0 leftover))
+    (let* ((extra-cols (if (> grow-total 0) 0 leftover-cols))
+           (extra-rem (if (> grow-total 0) 0 leftover-rem))
            (lead (pcase justify
-                   (:end extra)
-                   (:center (/ extra 2))
+                   (:end (+ (* extra-cols col) extra-rem))
+                   (:center (* col (/ extra-cols 2)))
                    (_ 0)))
            (gap-base (if (and (eq justify :space-between) (> sep-count 0))
-                         (/ extra sep-count)
+                         (* col (/ extra-cols sep-count))
                        0))
            (gap-remainder (if (and (eq justify :space-between) (> sep-count 0))
-                              (% extra sep-count)
+                              (% extra-cols sep-count)
                             0))
            (gap-index 0)
            (prev-rendered-p nil)
@@ -4228,8 +4258,15 @@ and `window'."
             (insert (vui--pad spacing))
             (when (> gap-base 0)
               (insert (vui--pad gap-base)))
+            ;; The first GAP-REMAINDER gaps get one extra column; the
+            ;; last gap also absorbs the pixel remainder so the final
+            ;; child lands exactly on the right edge.
             (when (< gap-index gap-remainder)
-              (insert " "))
+              (insert (vui--pad col)))
+            (when (and (eq justify :space-between)
+                       (= gap-index (1- sep-count))
+                       (> extra-rem 0))
+              (insert (vui--pad extra-rem)))
             (cl-incf gap-index))
           (setq content-start (point))
           (let ((child (plist-get spec :child))
@@ -5606,7 +5643,10 @@ wholesale render's empty-child handling)."
    ;; are skipped and don't affect spacing.
    ((vui-vnode-hstack-p vnode)
     (let ((spacing (vui--width (or (vui-vnode-hstack-spacing vnode) 1)))
-          (indent (vui--width (or (vui-vnode-hstack-indent vnode) 0)))
+          ;; Stays in characters: an hstack never inserts its own indent,
+          ;; it only hands it down to nested vstacks, and :indent is a
+          ;; character-unit slot that accumulates through nesting.
+          (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
           (container-start (point))
           (space-str nil)
@@ -5658,7 +5698,9 @@ wholesale render's empty-child handling)."
           (indent-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
-      (setq indent-str (vui--pad indent))
+      ;; INDENT stays in characters (it accumulates into nested
+      ;; children's :indent below); convert only for the inserted string.
+      (setq indent-str (vui--pad (vui--width indent)))
       (dolist (child children)
         (let ((vui--render-path (cons child-idx vui--render-path)))
           ;; newline children are intentional blank lines - always "render"
@@ -5789,8 +5831,9 @@ wholesale render's empty-child handling)."
            (insert (vui--pad padding))
            (vui--render-vnode child))
           (:center
-           (let ((left-pad (/ padding 2))
-                 (right-pad (- padding (/ padding 2))))
+           (let* ((split (vui--split-padding padding))
+                  (left-pad (car split))
+                  (right-pad (cdr split)))
              (insert (vui--pad left-pad))
              (vui--render-vnode child)
              (insert (vui--pad right-pad)))))
