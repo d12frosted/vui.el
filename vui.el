@@ -941,6 +941,11 @@ Two levels: the outer table is keyed by a buffer's `face-remapping-alist'
 Cleared wholesale by `vui--reset-text-pixel-cache' when the frame font
 changes.  See `vui--string-pixel-width'.")
 
+(defvar vui--space-pixel-memo nil
+  "One-entry memo for `vui--space-pixel-width': (CONTEXT . WIDTH).
+CONTEXT is the measuring buffer's `face-remapping-alist'.  Cleared with
+the main cache by `vui--reset-text-pixel-cache'.")
+
 (defvar vui--measure-buffer nil
   "The buffer whose face context pixel measurements should use.
 Layout containers measure content by rendering it into a temp buffer,
@@ -3638,8 +3643,15 @@ mode the number of space-width columns that fit in WIDTH pixels
 contract is characters, such as a `vui-flex' grower's WIDTH argument."
   (pcase vui-width-mode
     ('char width)
-    ('pixel (let ((space (vui--string-pixel-width " ")))
+    ('pixel (let ((space (vui--space-pixel-width)))
               (if (and width (> space 0)) (/ width space) 0)))))
+
+(defun vui--faced (str face)
+  "Return STR wearing FACE, or STR itself when FACE is nil.
+Where FACE is non-nil the result is a copy: STR is often a caller's
+literal.  Used so a string is measured with the same face it is
+inserted with."
+  (if face (propertize str 'face face) str))
 
 (defun vui--text-width (text &optional multi-line-p)
   "Calculate the width of TEXT according to the value of vui-width-mode. If
@@ -3742,17 +3754,48 @@ CHAR and returns a string of that length."
 
 ;; Render Pixel Width
 
+(defconst vui--width-properties '(face display)
+  "Text properties that can change how wide a string renders.
+The pixel cache keys on these and nothing else.")
+
+(defun vui--width-key (str)
+  "Return a cache key for STR covering exactly what determines its width.
+A string with no text properties is its own key, so the common case
+allocates nothing.  Otherwise the key is (CHARS . RUNS): the bare
+characters plus the runs of `face' and `display' properties
+\(`vui--width-properties') as (START END PROP VALUE) lists, and every
+other property is dropped.
+
+Two reasons not to key on the string as it comes.  Keying on the raw
+string under `equal' ignores properties, so a plain cell and a bold
+header with the same text would share one width, wrong wherever bold
+is wider (any proportional font).  Keying on every property, or through
+a property-aware hash test, is both slow (a user-defined test runs
+through Lisp for every probe, where `equal' is a C fast path) and
+unsafe: rendered buttons carry keymaps and action closures that do not
+affect width and hold references back into the component tree."
+  (let ((len (length str)))
+    (if (and (null (text-properties-at 0 str))
+             (null (next-property-change 0 str)))
+        str
+      (let ((runs nil))
+        (dolist (prop vui--width-properties)
+          (let ((pos 0))
+            (while (< pos len)
+              (let ((next (or (next-single-property-change pos prop str) len))
+                    (val (get-text-property pos prop str)))
+                (when val (push (list pos next prop val) runs))
+                (setq pos next)))))
+        (cons (substring-no-properties str) runs)))))
+
 (defun vui--reset-text-pixel-cache ()
   "Empty `vui--text-pixel-cache'.
 Runs from `after-setting-font-hook', since every cached width is stale
 once the frame font changes.  Face remappings do not need this: they
-are part of the cache key.
-
-Known approximation: the inner tables use `equal', which ignores text
-properties, so a bold header and a plain cell with the same text share
-one entry.  Right when the faces keep the same metrics, off when a face
-changes the font or its size."
-  (setq vui--text-pixel-cache (make-hash-table :test #'equal)))
+are part of the cache key, as are the width-relevant text properties
+\(see `vui--width-key')."
+  (setq vui--space-pixel-memo nil
+        vui--text-pixel-cache (make-hash-table :test #'equal)))
 
 (defun vui--measure-buffer ()
   "Return the buffer to measure in: `vui--measure-buffer' or the current one."
@@ -3774,9 +3817,10 @@ contexts."
            (context (buffer-local-value 'face-remapping-alist buf))
            (table (or (gethash context vui--text-pixel-cache)
                       (puthash context (make-hash-table :test #'equal)
-                               vui--text-pixel-cache))))
-      (or (gethash str table)
-          (puthash str
+                               vui--text-pixel-cache)))
+           (key (vui--width-key str)))
+      (or (gethash key table)
+          (puthash key
                    (if vui--string-pixel-width-takes-buffer
                        ;; Two-arg form is Emacs 31+; the flag guards it
                        ;; at run time, so silence the compile-time arity
@@ -3785,6 +3829,22 @@ contexts."
                          (string-pixel-width str buf))
                      (string-pixel-width str))
                    table)))))
+
+(defun vui--space-pixel-width ()
+  "Return the pixel width of a space in the current measuring context.
+Every pad and every character-to-pixel conversion asks for this, more
+than half of all width lookups on a table render, so it gets its own
+one-entry memo in front of `vui--string-pixel-width' rather than a hash
+walk each time.  Falls through to the main cache when the context (the
+measuring buffer's face remapping) differs from the memoized one."
+  (let ((context (buffer-local-value 'face-remapping-alist
+                                     (vui--measure-buffer))))
+    (if (and vui--space-pixel-memo
+             (eq (car vui--space-pixel-memo) context))
+        (cdr vui--space-pixel-memo)
+      (let ((width (vui--string-pixel-width " ")))
+        (setq vui--space-pixel-memo (cons context width))
+        width))))
 
 (defun vui--pixel-binary-search (str pixel-width)
   "Automatically calculate the boundary and return the truncation position."
@@ -3808,7 +3868,7 @@ contexts."
 the specified PIXEL width. It calculates the number of standard space
 characters that fit and appends the remaining pixel width using
 vui--pixel-spacing."
-  (let* ((space-pixel (vui--string-pixel-width " "))
+  (let* ((space-pixel (vui--space-pixel-width))
          (space-count (/ pixel space-pixel)))
     (concat
      (make-string space-count ?\s)
@@ -3830,7 +3890,7 @@ does and the row keeps its proportions.  Emacs rounds F * width, so the
 float division is exact for every remainder below one space."
   (if (<= pixel 0)
       ""
-    (let ((space-pixel (or space-pixel (vui--string-pixel-width " "))))
+    (let ((space-pixel (or space-pixel (vui--space-pixel-width))))
       (propertize " " 'display
                   `(space :relative-width ,(/ (float pixel) space-pixel))))))
 
@@ -3839,7 +3899,7 @@ float division is exact for every remainder below one space."
   (when width
     (if (<= width 0)
         0
-      (* width (vui--string-pixel-width " ")))))
+      (* width (vui--space-pixel-width)))))
 
 ;; Table rendering helpers
 
@@ -3909,9 +3969,12 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
             (vui--render-vnode cell))
           (buffer-string))))))
 
-(defun vui--calculate-table-widths (columns rows border)
+(defun vui--calculate-table-widths (columns rows border &optional header-face)
   "Calculate column widths from COLUMNS specs and ROWS data.
 Uses two-pass rendering: cells are rendered to measure their visual width.
+Headers are measured wearing HEADER-FACE (default `vui-table-header'),
+the face they render with: in a proportional font bold is wider than
+regular, so measuring the plain text would size the column short.
 
 Column options:
   :width W    - Target width for the VALUE portion of cell
@@ -3922,7 +3985,8 @@ Width calculation:
   - :width nil           -> auto-size to max(content)
   - :width W :grow t     -> column width = W (enforced minimum)
   - :width W :grow nil   -> column width = max(content) if all fit, else W"
-  (let* ((col-count (length columns))
+  (let* ((header-face (or header-face 'vui-table-header))
+         (col-count (length columns))
          (widths (make-vector col-count 0)))
     (cl-loop for col in columns
              for i from 0
@@ -3934,7 +3998,7 @@ Width calculation:
                       ;; No :width - auto-size to max content
                       (let ((max-w 1))
                         (when header
-                          (setq max-w (max max-w (vui--text-width header))))
+                          (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
                             (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -3948,7 +4012,7 @@ Width calculation:
                           ;; (unless :truncate is set)
                           (unless truncate-p
                             (when header
-                              (setq max-w (max max-w (vui--text-width header))))
+                              (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                             (dolist (row rows)
                               (when (and (listp row) (< i (length row)))
                                 (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -3958,7 +4022,7 @@ Width calculation:
                       (let ((max-w 1)
                             (has-overflow nil))
                         (when header
-                          (setq max-w (max max-w (vui--text-width header))))
+                          (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
                             (let ((cell-w (vui--cell-visual-width (nth i row))))
@@ -4142,8 +4206,10 @@ Handles :truncate and overflow:
                        (grow (plist-get col :grow))
                        (declared-width (vui--width (plist-get col :width)))
                        (face (when header-p (or header-face 'vui-table-header)))
-                       ;; Get content as string (works for both vnodes and strings)
-                       (content (vui--cell-to-string cell))
+                       ;; Get content as string (works for both vnodes and strings).
+                       ;; A header wears its face from here on, so it is
+                       ;; measured, truncated and inserted as the same text.
+                       (content (vui--faced (vui--cell-to-string cell) face))
                        (content-width (vui--text-width content))
                        ;; Check for overflow (content exceeds declared width)
                        ;; No overflow if :grow t (column expands) or :truncate t (content truncated)
@@ -4165,6 +4231,9 @@ Handles :truncate and overflow:
                        (overflow-content
                         (when has-overflow
                           (substring content (length display-content))))
+                       ;; A truncated header gets its face back on the
+                       ;; ellipsis, before it is measured
+                       (display-content (vui--faced display-content face))
                        (display-width (vui--text-width display-content))
                        (padding (max 0 (- width display-width))))
                   ;; Left cell padding
@@ -4201,17 +4270,13 @@ Handles :truncate and overflow:
                       (:left
                        (if is-vnode
                            (vui--render-vnode render-cell)
-                         (if face
-                             (insert (propertize display-content 'face face))
-                           (insert display-content)))
+                         (insert display-content))
                        (insert (vui--pad padding)))
                       (:right
                        (insert (vui--pad padding))
                        (if is-vnode
                            (vui--render-vnode render-cell)
-                         (if face
-                             (insert (propertize display-content 'face face))
-                           (insert display-content))))
+                         (insert display-content)))
                       (:center
                        (let* ((split (vui--split-padding padding))
                               (left-pad (car split))
@@ -4219,9 +4284,7 @@ Handles :truncate and overflow:
                          (insert (vui--pad left-pad))
                          (if is-vnode
                              (vui--render-vnode render-cell)
-                           (if face
-                               (insert (propertize display-content 'face face))
-                             (insert display-content)))
+                           (insert display-content))
                          (insert (vui--pad right-pad))))))
                   ;; Right cell padding and column separator
                   ;; When overflow, use padding + overflow separator + trimmed overflow content
@@ -5932,7 +5995,7 @@ wholesale render's empty-child handling)."
            (has-header (cl-some (lambda (c) (plist-get c :header)) columns))
            (sticky (and (vui-vnode-table-sticky-header vnode) has-header))
            ;; Calculate column widths
-           (col-widths (vui--calculate-table-widths columns rows border)))
+           (col-widths (vui--calculate-table-widths columns rows border header-face)))
       ;; The pinned copy of a sticky header is display-only text in the
       ;; header line, out of reach of vui navigation and buttons -
       ;; require plain string headers so nothing looks interactive

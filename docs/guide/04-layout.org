@@ -468,11 +468,11 @@ Things to know before switching:
   benchmarks pixel mode runs at about 1.1x char mode; very large tables
   allocate more and lean harder on GC. That is why =char= is the
   default.
-- The cache keys on string content only, so a bold header and a plain
-  cell with the same text share one measurement. Fine when faces keep
-  the same metrics, off when a face changes the font or its size. In a
-  proportional font that shows up as a bold table header a few pixels
-  wider than its column.
+- Measurements are cached per face context and per width-relevant
+  property (=face= and =display=), so a bold header and a plain cell
+  with the same text are measured separately, and table headers are
+  measured wearing their header face. Other text properties (button
+  keymaps, actions) are ignored by the cache, as they should be.
 - Bordered tables in a proportional font depend on the font's
   box-drawing glyphs having consistent widths, and they often do not:
   Helvetica on macOS draws =─= and =│= at 12px but falls back to Arial

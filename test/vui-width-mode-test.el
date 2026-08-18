@@ -77,21 +77,44 @@ context; `(space :width (N))' is N absolute pixels regardless of it."
          (col (nth 0 metrics))
          (wide (nth 1 metrics))
          (box (nth 2 metrics))
+         ;; In a proportional font bold glyphs are wider than regular
+         ;; ones (Helvetica Bold vs Helvetica); in a monospace font they
+         ;; are not.  Model that as +1px per bold glyph under
+         ;; variable-pitch, so a face changes a width only where a real
+         ;; font would.
+         (bold-extra (if (= col 4) 1 0))
          (widest 0) (line 0) (i 0) (n (length s)))
     (while (< i n)
       (let ((c (aref s i))
-            (d (get-text-property i 'display s)))
+            (d (get-text-property i 'display s))
+            (bold (vui-test--bold-face-p (get-text-property i 'face s))))
         (if (eq c ?\n)
             (setq widest (max widest line) line 0)
           (setq line (+ line
                         (pcase d
                           (`(space :width (,px)) px)
                           (`(space :relative-width ,f) (round (* f col)))
-                          (_ (cond ((= 2 (char-width c)) wide)
-                                   ((<= #x2500 c #x257F) box)
-                                   (t col)))))))
+                          (_ (+ (if bold bold-extra 0)
+                                (cond ((= 2 (char-width c)) wide)
+                                      ((<= #x2500 c #x257F) box)
+                                      (t col))))))))
         (setq i (1+ i))))
     (max widest line)))
+
+(defun vui-test--bold-face-p (face)
+  "Non-nil when FACE (a face property value) resolves to bold.
+Handles a symbol, a list of faces, and `vui-table-header', which
+inherits `bold'."
+  (cond ((null face) nil)
+        ((memq face '(bold vui-table-header)) t)
+        ((symbolp face)
+         (let ((parent (face-attribute face :inherit nil nil)))
+           (and parent (not (eq parent 'unspecified))
+                (vui-test--bold-face-p parent))))
+        ((and (listp face) (keywordp (car face)))
+         (eq (plist-get face :weight) 'bold))
+        ((listp face) (cl-some #'vui-test--bold-face-p face))
+        (t nil)))
 
 (defmacro vui-test--with-pixel-font (&rest body)
   "Run BODY in pixel mode under the mocked font.
@@ -190,6 +213,16 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
           (vui--truncate-string "abcdef" 35 "..."))
         (vui--reset-text-pixel-cache))
       (expect called :to-be t)))
+
+  (it "a frame font change (reset) also drops the memoized space width"
+    ;; Same face context, new frame font: only `after-setting-font-hook'
+    ;; (which calls the reset) can know, so the reset must clear the
+    ;; one-entry space memo along with the main cache.
+    (vui-test--with-pixel-font
+      (expect (vui--width 1) :to-equal 7)
+      (let ((vui-test--col-px 9))
+        (vui--reset-text-pixel-cache)
+        (expect (vui--width 1) :to-equal 9))))
 
   (it "caches pixel measurements per face context and reset clears them"
     (vui-test--with-pixel-font
@@ -546,10 +579,14 @@ bites; the tests just have to respect it."
     (vui-test--with-pixel-font
       (with-temp-buffer
         (expect (vui--text-width "abc") :to-equal 21)
+        (expect (vui--width 1) :to-equal 7)
         (vui-test--remap-default (current-buffer) 2.0)
         (expect (vui--text-width "abc") :to-equal 42)
+        ;; the space width has its own memo; it must follow the context too
+        (expect (vui--width 1) :to-equal 14)
         (setq-local face-remapping-alist nil)
-        (expect (vui--text-width "abc") :to-equal 21))))
+        (expect (vui--text-width "abc") :to-equal 21)
+        (expect (vui--width 1) :to-equal 7))))
 
   (it "aligns a table rendered inside a scaled buffer"
     (vui-test--with-pixel-font
@@ -622,6 +659,69 @@ bites; the tests just have to respect it."
                               (split-string (buffer-string) "\n"))))
           (expect (length widths) :to-equal 7)
           (expect (length (seq-uniq widths)) :to-equal 1))))))
+
+;;; Faces: the cache and the measurement both have to see them
+
+(describe "pixel mode and faces"
+  (it "caches a plain and a faced string separately"
+    ;; Only observable where the measurement sees the buffer's font
+    ;; (Emacs 31+): in the mock, as in real monospace fonts, bold is not
+    ;; wider than regular, so only the variable-pitch context can tell.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        ;; measured in this buffer's context: plain 4px/col, bold 5px/col
+        (expect (vui--text-width "Name") :to-equal 16)
+        (expect (vui--text-width (propertize "Name" 'face 'bold)) :to-equal 20)
+        ;; and again the other way round, so neither order poisons the other
+        (expect (vui--text-width "Name") :to-equal 16))))
+
+  (it "keys the cache on width-relevant properties only"
+    ;; A button-like string carries a keymap and an action closure; those
+    ;; do not affect width and must not defeat the cache (or worse, be
+    ;; compared structurally).  Same text, same face, other props differ:
+    ;; one measurement.
+    (vui-test--with-pixel-font
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'string-pixel-width)
+                   (lambda (s &optional b) (cl-incf calls) (vui-test--px s b))))
+          (vui--reset-text-pixel-cache)
+          (vui--text-width (propertize "Go" 'face 'link 'action (lambda () 1)))
+          (vui--text-width (propertize "Go" 'face 'link 'action (lambda () 2)
+                                       'keymap (make-sparse-keymap)))
+          (expect calls :to-equal 1)))))
+
+  (it "measures a table header with its face so a bold header fits its column"
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        ;; header "Name" bold = 20px, longest cell "plain" = 20px:
+        ;; measured without its face the header would be 16 and the
+        ;; header row would overflow its column by 4px
+        (vui-render (vui-table :columns '((:header "Name") (:header "N"))
+                               :rows '(("plain" "1") ("ok" "2"))))
+        (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "measures a custom :header-face too"
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :columns '((:header "Name") (:header "N"))
+                               :header-face 'bold
+                               :rows '(("plain" "1") ("ok" "2"))))
+        (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "keeps char mode byte-identical with a bold header"
+    (vui-test--parity
+     (lambda () (vui-table :columns '((:header "Name") (:header "N"))
+                           :rows '(("plain" "1") ("ok" "2")))))))
 
 (provide 'vui-width-mode-test)
 ;;; vui-width-mode-test.el ends here
