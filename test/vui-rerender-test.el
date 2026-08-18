@@ -798,5 +798,79 @@
                               :to-equal w2-before))))))
           (kill-buffer "*rr-vpm*"))))))
 
+(describe "re-render and the undo list"
+  ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
+  ;; nothing recorded during a render survives; recording it anyway
+  ;; copies the whole erased buffer, text properties included, into undo
+  ;; only to drop it, which is most of the garbage a large re-render
+  ;; makes.  The render must not record undo in the first place.
+  (it "records nothing in the undo list while re-rendering a mounted buffer"
+    (vui-defcomponent vui-rr-undo-probe (n)
+      :render (apply #'vui-vstack
+                     (mapcar (lambda (i) (vui-text (format "row %d" i) :face 'bold))
+                             (number-sequence 1 n))))
+    (let* ((buf (get-buffer-create "*vui-rr-undo*"))
+           (inst (vui-mount (vui-component 'vui-rr-undo-probe :n 200) buf))
+           (peak 0))
+      (unwind-protect
+          (progn
+            (with-current-buffer buf (buffer-enable-undo))
+            ;; erase-buffer is where the copy would be made; sample the
+            ;; undo list right after it, before widget-setup wipes it
+            (cl-letf* ((real (symbol-function 'erase-buffer))
+                       ((symbol-function 'erase-buffer)
+                        (lambda ()
+                          (funcall real)
+                          (setq peak (max peak (if (listp buffer-undo-list)
+                                                   (length buffer-undo-list)
+                                                 0))))))
+              (vui-rerender inst))
+            (expect peak :to-equal 0))
+        (vui-unmount inst)
+        (kill-buffer buf))))
+
+  (it "leaves the undo list empty after a re-render, as widget-setup always has"
+    ;; Entries from before the render describe text that no longer
+    ;; exists; keeping them would let C-/ in a field edit the wrong
+    ;; place.  `widget-setup' has always cleared the list at the end of
+    ;; a render, and that must still hold once the render itself stops
+    ;; recording.
+    (vui-defcomponent vui-rr-undo-probe3 ()
+      :render (vui-vstack (vui-text "a") (vui-field :value "" :size 4)))
+    (let* ((buf (get-buffer-create "*vui-rr-undo3*"))
+           (inst (vui-mount (vui-component 'vui-rr-undo-probe3) buf)))
+      (unwind-protect
+          (with-current-buffer buf
+            (buffer-enable-undo)
+            (setq buffer-undo-list '((1 . 2) nil (t . 0)))
+            (vui-rerender inst)
+            (expect buffer-undo-list :to-be nil))
+        (vui-unmount inst)
+        (kill-buffer buf))))
+
+  (it "records nothing in the undo list on the initial mount render"
+    (vui-defcomponent vui-rr-undo-probe2 (n)
+      :render (apply #'vui-vstack
+                     (mapcar (lambda (i) (vui-text (format "row %d" i)))
+                             (number-sequence 1 n))))
+    (let* ((buf (get-buffer-create "*vui-rr-undo2*"))
+           (peak 0)
+           inst)
+      (unwind-protect
+          (progn
+            (with-current-buffer buf (buffer-enable-undo))
+            (cl-letf* ((real (symbol-function 'widget-setup))
+                       ((symbol-function 'widget-setup)
+                        (lambda ()
+                          ;; sample just before the clear
+                          (setq peak (max peak (if (listp buffer-undo-list)
+                                                   (length buffer-undo-list)
+                                                 0)))
+                          (funcall real))))
+              (setq inst (vui-mount (vui-component 'vui-rr-undo-probe2 :n 200) buf)))
+            (expect peak :to-equal 0))
+        (when inst (vui-unmount inst))
+        (kill-buffer buf)))))
+
 (provide 'vui-rerender-test)
 ;;; vui-rerender-test.el ends here

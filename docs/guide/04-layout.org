@@ -465,9 +465,10 @@ Things to know before switching:
 
 - Pixel measurement is more expensive per call. Results are memoized
   (the cache clears when the frame font changes), and on the table
-  benchmarks pixel mode runs at about 1.1x char mode; very large tables
-  allocate more and lean harder on GC. That is why =char= is the
-  default.
+  benchmarks pixel mode runs at about 1.2x char mode with the same
+  allocation per render, so garbage collection is not a factor in the
+  choice. =char= stays the default because it is what a terminal does
+  and what existing tests and text-processing consumers expect.
 - Measurements are cached per face context and per width-relevant
   property (=face= and =display=), so a bold header and a plain cell
   with the same text are measured separately, and table headers are
