@@ -1419,6 +1419,26 @@
               'vui-table-border))))
 
 (describe "measurement side effects"
+  (it "renders a vnode cell into a temp buffer once per table render, not twice"
+    ;; The sizing pass has to render each vnode cell to measure it; the
+    ;; row pass then needs the same string for width and truncation and
+    ;; must reuse the sizing pass's render rather than render again.
+    ;; So a table render costs each vnode cell one measuring render plus
+    ;; the real one: two calls to its render function, not three.
+    (let ((renders 0))
+      (vui-defcomponent measure-count-cell (n)
+        :render (progn (cl-incf renders) (vui-text (format "cell %d" n))))
+      (with-temp-buffer
+        (vui-render (vui-table :columns '((:header "A") (:header "B"))
+                               :rows (list (list (vui-component 'measure-count-cell :n 1)
+                                                 (vui-component 'measure-count-cell :n 2))
+                                           (list (vui-component 'measure-count-cell :n 3)
+                                                 "plain"))))
+        ;; 3 vnode cells x (1 measure + 1 real render)
+        (expect renders :to-equal 6)
+        (expect (buffer-string) :to-match "cell 1 +cell 2")
+        (expect (buffer-string) :to-match "cell 3 +plain"))))
+
   (it "mounts a component in a table cell exactly once"
     (let ((mounts 0)
           (effect-runs 0))

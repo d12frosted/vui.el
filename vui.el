@@ -3941,13 +3941,17 @@ float division is exact for every remainder below one space."
 
 ;; Table rendering helpers
 
-(defun vui--cell-visual-width (cell)
-  "Get the visual width of CELL by rendering it.
-This is the two-pass approach: render to measure, then render for real.
-Simple cases (string, nil) are optimized to avoid temp buffer overhead."
+(defun vui--cell-measure (cell)
+  "Measure CELL: return (STRING . WIDTH), rendering CELL if it is a vnode.
+STRING is the cell as text (a string cell as is, a vnode cell as its
+rendered text) and WIDTH its width in mode units.  This is the two-pass
+approach: render to measure, then render for real; the sizing pass
+keeps this pair so the row pass can reuse it instead of rendering and
+measuring the cell a second time.  Simple cases (string, nil) are
+optimized to avoid temp buffer overhead."
   (cond
-   ((null cell) 0)
-   ((stringp cell) (vui--text-width cell))
+   ((null cell) (cons "" 0))
+   ((stringp cell) (cons cell (vui--text-width cell)))
    ;; For any vnode: render to temp buffer and measure
    ;; This is the universal approach that works for any component
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
@@ -3964,7 +3968,12 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
                 (vui--measuring-p t)
                 (vui--pending-effects nil))
             (vui--render-vnode cell))
-          (vui--text-width (buffer-string)))))))
+          (let ((str (buffer-string)))
+            (cons str (vui--text-width str))))))))
+
+(defun vui--cell-visual-width (cell)
+  "Get the visual width of CELL by rendering it.  See `vui--cell-measure'."
+  (cdr (vui--cell-measure cell)))
 
 (defun vui--measure-vnode-width (vnode)
   "Measure VNODE's rendered width as the width of its widest line.
@@ -4007,9 +4016,24 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
             (vui--render-vnode cell))
           (buffer-string))))))
 
-(defun vui--calculate-table-widths (columns rows border &optional header-face)
+(defun vui--table-measure-cell (row i measures)
+  "Measure cell I of ROW, recording it in MEASURES when non-nil.
+Returns the width.  MEASURES maps a row to a vector of (STRING . WIDTH)
+covering the row's cells; a cell already measured (a column can be
+sized in more than one pass) is not measured again."
+  (if (null measures)
+      (vui--cell-visual-width (nth i row))
+    (let ((vec (or (gethash row measures)
+                   (puthash row (make-vector (length row) nil) measures))))
+      (cdr (or (aref vec i)
+               (aset vec i (vui--cell-measure (nth i row))))))))
+
+(defun vui--calculate-table-widths (columns rows border &optional header-face measures)
   "Calculate column widths from COLUMNS specs and ROWS data.
 Uses two-pass rendering: cells are rendered to measure their visual width.
+When MEASURES is a hash table it is filled with what the pass measured,
+one vector of (STRING . WIDTH) per row (see `vui--cell-measure'), keyed
+by the row object, so the row pass can reuse it (`vui--render-table-row').
 Headers are measured wearing HEADER-FACE (default `vui-table-header'),
 the face they render with: in a proportional font bold is wider than
 regular, so measuring the plain text would size the column short.
@@ -4039,7 +4063,7 @@ Width calculation:
                           (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
-                            (let ((cell-w (vui--cell-visual-width (nth i row))))
+                            (let ((cell-w (vui--table-measure-cell row i measures)))
                               (setq max-w (max max-w cell-w)))))
                         (aset widths i max-w))
                     ;; Has :width
@@ -4053,7 +4077,7 @@ Width calculation:
                               (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                             (dolist (row rows)
                               (when (and (listp row) (< i (length row)))
-                                (let ((cell-w (vui--cell-visual-width (nth i row))))
+                                (let ((cell-w (vui--table-measure-cell row i measures)))
                                   (setq max-w (max max-w cell-w))))))
                           (aset widths i max-w))
                       ;; :grow nil - column is max(content), overflow/truncate at :width
@@ -4063,7 +4087,7 @@ Width calculation:
                           (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
-                            (let ((cell-w (vui--cell-visual-width (nth i row))))
+                            (let ((cell-w (vui--table-measure-cell row i measures)))
                               (if (> cell-w declared-width)
                                   (setq has-overflow t)
                                 (setq max-w (max max-w cell-w))))))
@@ -4209,7 +4233,28 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
     (put-text-property start (point) 'face (or border-face 'vui-table-border))
     (insert "\n")))
 
-(defun vui--render-table-row (cells col-widths columns border-style header-p &optional row-idx header-face border-face)
+(defvar vui--table-separators-memo nil
+  "Alist of ((BORDER-STYLE . FACE) . (SEP . OVERFLOW-SEP)) strings.
+Table rows insert the same two propertized separator strings for every
+row of every table; building them per row was a measurable share of a
+large render.  Inserting copies, so the strings can be shared.")
+
+(defun vui--table-separators (border-style face)
+  "Return (SEP . OVERFLOW-SEP) for BORDER-STYLE drawn in FACE, memoized."
+  (let ((key (cons border-style face)))
+    (or (cdr (assoc key vui--table-separators-memo))
+        (let ((seps (cons (pcase border-style
+                            (:ascii (propertize "|" 'face face))
+                            (:unicode (propertize "│" 'face face))
+                            (_ " "))
+                          (pcase border-style
+                            (:ascii (propertize "¦" 'face face))
+                            (:unicode (propertize "¦" 'face face))
+                            (_ " ")))))
+          (push (cons key seps) vui--table-separators-memo)
+          seps))))
+
+(defun vui--render-table-row (cells col-widths columns border-style header-p &optional row-idx header-face border-face measured)
   "Render a table row.
 CELLS is list of cell contents.
 COL-WIDTHS is list of column widths.
@@ -4219,20 +4264,21 @@ HEADER-P indicates if this is a header row.
 ROW-IDX is the row index for cursor tracking (nil for headers).
 HEADER-FACE overrides `vui-table-header' for header cells.
 BORDER-FACE overrides `vui-table-border' for column separators.
+MEASURED, when given, is the vector of (STRING . WIDTH) the sizing pass
+recorded for this row (see `vui--calculate-table-widths'); cells found
+there are not rendered to text and measured again.
 
 Handles :truncate and overflow:
 - If content > width and :truncate t: truncate with ...
 - If content > width and no :truncate: show up to width, use ¦ separator"
   (let* ((sep-face (or border-face 'vui-table-border))
-         (sep (pcase border-style
-                (:ascii (propertize "|" 'face sep-face))
-                (:unicode (propertize "│" 'face sep-face))
-                (_ " ")))
-         (overflow-sep (pcase border-style
-                         (:ascii (propertize "¦" 'face sep-face))
-                         (:unicode (propertize "¦" 'face sep-face))
-                         (_ " ")))
-         (cell-padding (if border-style (vui--text-width " ") 0)))
+         (seps (vui--table-separators border-style sep-face))
+         (sep (car seps))
+         (overflow-sep (cdr seps))
+         (cell-padding (if border-style (vui--text-width " ") 0))
+         ;; The same padding string goes on both sides of every cell in
+         ;; the row; build it once (it is shared, see `vui--spaces')
+         (cell-pad-str (if (> cell-padding 0) (vui--pad cell-padding) "")))
     (when border-style
       (insert sep))
     (cl-loop for cell in cells
@@ -4247,8 +4293,14 @@ Handles :truncate and overflow:
                        ;; Get content as string (works for both vnodes and strings).
                        ;; A header wears its face from here on, so it is
                        ;; measured, truncated and inserted as the same text.
-                       (content (vui--faced (vui--cell-to-string cell) face))
-                       (content-width (vui--text-width content))
+                       (measure (and measured (< i (length measured))
+                                     (aref measured i)))
+                       (content (if measure
+                                    (car measure)
+                                  (vui--faced (vui--cell-to-string cell) face)))
+                       (content-width (if measure
+                                          (cdr measure)
+                                        (vui--text-width content)))
                        ;; Check for overflow (content exceeds declared width)
                        ;; No overflow if :grow t (column expands) or :truncate t (content truncated)
                        (has-overflow (and declared-width
@@ -4272,11 +4324,15 @@ Handles :truncate and overflow:
                        ;; A truncated header gets its face back on the
                        ;; ellipsis, before it is measured
                        (display-content (vui--faced display-content face))
-                       (display-width (vui--text-width display-content))
+                       ;; Untruncated content (the common case) is the
+                       ;; string already measured above
+                       (display-width (if (eq display-content content)
+                                          content-width
+                                        (vui--text-width display-content)))
                        (padding (max 0 (- width display-width))))
                   ;; Left cell padding
                   (when (> cell-padding 0)
-                    (insert (vui--pad cell-padding)))
+                    (insert cell-pad-str))
                   ;; Render cell content with alignment
                   ;; For vnodes (buttons, etc.), render directly to preserve interactivity
                   ;; For strings, insert with optional face
@@ -4330,13 +4386,13 @@ Handles :truncate and overflow:
                    ;; Overflow case: padding + overflow separator + overflow content (trimmed)
                    ((and border-style has-overflow)
                     (when (> cell-padding 0)
-                      (insert (vui--pad cell-padding)))
+                      (insert cell-pad-str))
                     (insert overflow-sep)
                     (insert (string-trim-left overflow-content)))
                    ;; Normal case with border: padding + separator
                    (border-style
                     (when (> cell-padding 0)
-                      (insert (vui--pad cell-padding)))
+                      (insert cell-pad-str))
                     (insert sep))
                    ;; No border: space between cells
                    (t
@@ -6033,7 +6089,11 @@ wholesale render's empty-child handling)."
            (has-header (cl-some (lambda (c) (plist-get c :header)) columns))
            (sticky (and (vui-vnode-table-sticky-header vnode) has-header))
            ;; Calculate column widths
-           (col-widths (vui--calculate-table-widths columns rows border header-face)))
+           ;; The sizing pass renders and measures every cell; keep that
+           ;; per row so the row pass does not do it a second time
+           (measures (make-hash-table :test #'eq))
+           (col-widths (vui--calculate-table-widths columns rows border
+                                                    header-face measures)))
       ;; The pinned copy of a sticky header is display-only text in the
       ;; header line, out of reach of vui navigation and buttons -
       ;; require plain string headers so nothing looks interactive
@@ -6073,7 +6133,7 @@ wholesale render's empty-child handling)."
                                             cell-padding border-face))
               ;; Render data row with row index for path tracking
               (vui--render-table-row row col-widths columns border nil row-idx
-                                     nil border-face)
+                                     nil border-face (gethash row measures))
               (cl-incf row-idx)))
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding

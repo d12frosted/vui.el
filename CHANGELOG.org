@@ -47,6 +47,25 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- Table rendering measures each cell once per render instead of two or
+  three times. The sizing pass already renders every vnode cell into a temp
+  buffer to measure it; the row pass then rendered it again to get the same
+  text for width and truncation, and measured that text twice (once as
+  content, once as display content, the same string when nothing is
+  truncated). The sizing pass now records what it measured per row and the
+  row pass reuses it (=vui--cell-measure=), the untruncated display width
+  is the content width, the cell padding string is built once per row, and
+  the two propertized separator strings are memoized instead of rebuilt per
+  row (they were 8 percent of a large render on their own). Per 1000x5
+  re-render on the compiled table benchmarks: pixel mode 18.4ms to 14.6ms,
+  char 14.7ms to 12.7ms, and a table of vnode cells 18.2ms to 11.8ms (one
+  temp-buffer render per cell fewer). Pixel mode now costs about 1.15x char
+  on that table; the remainder is one cache lookup per cell against a C
+  =string-width=. Whether pixel becomes the default is not a performance
+  question any more but a compatibility one: it changes =buffer-string=
+  (display spacers in padding), which anyone parsing or snapshotting vui
+  output would notice, so =char= stays (#121).
+
 - The =vui-stream-update-last= extend fast path checks the prefix without
   copying it. The property-aware check from #125 did =(substring n 0 (length
   o))= on every call just to compare it with =equal-including-properties=,
