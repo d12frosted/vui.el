@@ -2737,6 +2737,14 @@ ephemeral chrome, not document content."
         (let* ((inhibit-read-only t)
                (inhibit-redisplay t)  ; Prevent flicker
                (inhibit-modification-hooks t)  ; Prevent widget-after-change errors
+               ;; Do not record the render in undo: `widget-setup' clears
+               ;; the undo list at the end of every render, so nothing
+               ;; recorded here survives, and recording it copies the
+               ;; whole erased buffer, text properties included, only to
+               ;; drop it.  On a large table that copy is a third of the
+               ;; garbage a re-render makes.  Inline mounts already do
+               ;; this (their region is ephemeral UI, not document text).
+               (buffer-undo-list t)
                ;; Save widget-relative cursor position
                (cursor-info (vui--save-cursor-position))
                ;; Save viewport (window-start) for all windows showing this buffer
@@ -2763,6 +2771,11 @@ ephemeral chrome, not document content."
                 ;; Run effects after commit
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil)))
+        ;; `widget-setup' cleared the undo list inside the binding above,
+        ;; so that clear was undone with it; redo it here.  Entries from
+        ;; before the render describe text that no longer exists, and an
+        ;; undo in a field would edit the wrong place.
+        (setq buffer-undo-list nil)
         ;; Run any re-renders requested during render/effects
         (vui--flush-queued-rerenders)))))
 
@@ -3664,13 +3677,34 @@ the mode is pixel, return the pixel width of TEXT."
              (string-width text)))
     ('pixel (vui--string-pixel-width text))))
 
+(defconst vui--spaces-memo-size 129
+  "How many space-run lengths `vui--spaces' keeps ready-made (0 to N-1).")
+
+(defvar vui--spaces-memo (make-vector vui--spaces-memo-size nil)
+  "Ready-made strings of N spaces, indexed by N.  See `vui--spaces'.")
+
+(defun vui--spaces (n)
+  "Return a string of N spaces, shared for small N.
+Padding is the most allocated string on a table render (two runs per
+cell), and every one of them is inserted or concatenated, both of which
+copy, so the run itself can be a shared string: for N below
+`vui--spaces-memo-size' the same string is returned every time and the
+render allocates nothing for it.  Callers must not mutate the result."
+  (cond ((<= n 0) "")
+        ((< n vui--spaces-memo-size)
+         (or (aref vui--spaces-memo n)
+             (aset vui--spaces-memo n (make-string n ?\s))))
+        (t (make-string n ?\s))))
+
 (defun vui--pad (width)
   "Return a padding string of the specified WIDTH based on the current
 vui-width-mode. If the mode is char, return a string of WIDTH spaces. If
-the mode is pixel, return pixel-based padding using vui--pixel-spaces."
+the mode is pixel, return pixel-based padding using vui--pixel-spaces.
+The result may be shared (see `vui--spaces'); insert or concat it, do
+not mutate it."
   (if (and width (> width 0))
       (pcase vui-width-mode
-        ('char (make-string width ?\s))
+        ('char (vui--spaces width))
         ('pixel (vui--pixel-spaces width)))
     ""))
 
@@ -3869,10 +3903,14 @@ the specified PIXEL width. It calculates the number of standard space
 characters that fit and appends the remaining pixel width using
 vui--pixel-spacing."
   (let* ((space-pixel (vui--space-pixel-width))
-         (space-count (/ pixel space-pixel)))
-    (concat
-     (make-string space-count ?\s)
-     (vui--pixel-spacing (- pixel (* space-pixel space-count)) space-pixel))))
+         (space-count (/ pixel space-pixel))
+         (remainder (- pixel (* space-pixel space-count))))
+    ;; No sub-space remainder (every pad in a monospace font): the run
+    ;; of spaces alone, shared, with no concat copy.
+    (if (zerop remainder)
+        (vui--spaces space-count)
+      (concat (vui--spaces space-count)
+              (vui--pixel-spacing remainder space-pixel)))))
 
 (defun vui--pixel-spacing (pixel &optional space-pixel)
   "Return a spacer PIXEL pixels wide, or \"\" when PIXEL is not positive.
@@ -6250,7 +6288,13 @@ Returns the root instance."
     ;; Store buffer reference in instance for re-rendering
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf
-      (let ((inhibit-read-only t))
+      (let ((inhibit-read-only t)
+            ;; The render is not something to undo, and `widget-setup'
+            ;; clears the undo list at the end of it anyway; recording
+            ;; it would only copy the erased text, properties included,
+            ;; into undo to be thrown away.  Same for re-renders, see
+            ;; `vui--rerender-buffer'.
+            (buffer-undo-list t))
         ;; Tear down any previously mounted tree first so its lifecycle
         ;; cleanups run and its stale async callbacks detach.  Without
         ;; this, the old tree stays live and a timer created by it can
@@ -6299,7 +6343,10 @@ Returns the root instance."
             (setq vui--rendering-p nil))
           ;; Run any re-renders requested during render/effects
           (vui--flush-queued-rerenders))
-        (goto-char (point-min))))
+        (goto-char (point-min)))
+      ;; Outside the `buffer-undo-list' binding: leave the list empty, as
+      ;; `widget-setup' did before the render stopped recording.
+      (setq buffer-undo-list nil))
     (switch-to-buffer buf)
     instance))
 

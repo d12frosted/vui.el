@@ -23,8 +23,9 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =:indent=) are still in characters in both modes; pixel mode converts them
   internally. Pixel measurements are memoized in a global cache cleared on
   =after-setting-font-hook=. Measured on the table benchmarks pixel mode
-  costs about 1.1x char mode at 1000x5, and it is GC-heavier on very large
-  tables, which is why it stays opt in for now. On a tty frame the two modes
+  costs about 1.2x char mode at 1000x5 and allocates the same, and it stays
+  opt in for now because =char= is what a tty does and what existing tests
+  and text-processing consumers expect. On a tty frame the two modes
   render identically. Emacs 29 and 30 use a binary-search fallback for
   =truncate-string-pixelwise=. Contributed by ginqi7 (#120, #121).
 
@@ -62,6 +63,26 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   (=vui-bench-stream-update-last-extend=) measures both payloads (#127).
 
 ** Fixed
+
+- Whole-buffer renders no longer record themselves in the undo list. Every
+  =vui-mount= render and re-render erased and rebuilt the buffer with undo
+  enabled, so Emacs copied the whole erased text, text properties included,
+  into =buffer-undo-list= (and then every re-inserted piece), and
+  =widget-setup= threw it all away at the end of the render, as it always
+  has. On a 1000x5 table that copy was a third of the garbage a re-render
+  made. The render now binds =buffer-undo-list= to =t= like inline mounts
+  already did, and clears the list afterwards so nothing from before the
+  render can be undone against text that no longer exists (that is what
+  =widget-setup= did, and it still holds). Padding strings are also shared
+  now: a run of N spaces is inserted or concatenated, both of which copy,
+  so =vui--spaces= hands out one string per length instead of a fresh
+  =make-string= per pad, and pixel mode skips its concat when a pad has no
+  sub-space remainder. Per re-render of a 1000x5 table, in both modes:
+  strings 32k to 2k, string chars 130k to 6k, intervals halved. At Emacs's
+  stock =gc-cons-threshold= that is 4.0 to 1.9 GCs and 84ms to 47ms per
+  pixel-mode re-render (63ms to 47ms in char mode), and pixel mode now
+  allocates exactly what char mode does. This was the "GC cliff" on large
+  pixel tables reported during #121: mostly not pixel-specific at all (#121).
 
 - =pixel= width mode measures faced text as faced text. Table headers were
   measured plain and rendered bold, and the pixel cache keyed on string
