@@ -65,6 +65,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-flex= growers in =pixel= width mode were scaled twice. The leftover
+  is carved up in mode units (pixels), but a grower's share was then handed
+  to a character-width box (which converts again) and to the width-receiving
+  callback whose contract is characters, so a =:grow= vnode padded to roughly
+  seven times its share and =(lambda (width) (vui-field :size width))= got a
+  pixel count. Callbacks now receive whole columns (=vui--width-to-chars=,
+  rounding down) and vnode growers are padded directly in mode units, which
+  also keeps the sub-column remainder so the row's right edge lands exactly.
+  Byte-identical in =char= mode. Invisible in batch, where a pixel is a
+  column; the regression tests mock =string-pixel-width= (#121).
+
 - =vui-stream-update-last= (and the node-path =vui-stream-update= /
   =vui-stream-append-to=) patched the item region in place even when the
   replacement left the whole stream region zero-width, so the separator the

@@ -3612,6 +3612,17 @@ vui--to-pixel-width."
     ('char width)
     ('pixel (vui--to-pixel-width width))))
 
+(defun vui--width-to-chars (width)
+  "Convert WIDTH, a measurement in the current mode units, to characters.
+The inverse of `vui--width': identity in `char' mode, and in `pixel'
+mode the number of space-width columns that fit in WIDTH pixels
+\(rounding down).  For handing a mode-unit measurement to code whose
+contract is characters, such as a `vui-flex' grower's WIDTH argument."
+  (pcase vui-width-mode
+    ('char width)
+    ('pixel (let ((space (vui--string-pixel-width " ")))
+              (if (and width (> space 0)) (/ width space) 0)))))
+
 (defun vui--text-width (text &optional multi-line-p)
   "Calculate the width of TEXT according to the value of vui-width-mode. If
 the mode is char, return the maximum width of all lines when
@@ -4223,18 +4234,24 @@ and `window'."
           (setq content-start (point))
           (let ((child (plist-get spec :child))
                 (share (plist-get spec :share)))
+            ;; SHARE is in mode units (pixels under `pixel'), like
+            ;; `total' and the naturals it was carved from.
             (cond
-             ;; Grower with a width-receiving function
+             ;; Grower with a width-receiving function.  Its WIDTH is
+             ;; characters by contract (it feeds things like :size), so
+             ;; convert once here; pixel mode rounds down to whole
+             ;; columns, which is the best a character count can do.
              ((and share (functionp child))
-              (vui--render-vnode (funcall child share)))
-             ;; Grower with a plain vnode: pad it to its share
+              (vui--render-vnode (funcall child (vui--width-to-chars share))))
+             ;; Grower with a plain vnode: render it, then pad out to
+             ;; its share.  Padding directly in mode units keeps the
+             ;; sub-column remainder in pixel mode; going through a
+             ;; character-width box would drop it (and would convert
+             ;; the share a second time).
              (share
-              (vui--render-vnode
-               (vui-vnode-box--create :child child
-                                      :width share
-                                      :align :left
-                                      :padding-left 0
-                                      :padding-right 0)))
+              (let ((natural (vui--measure-vnode-width child)))
+                (vui--render-vnode child)
+                (insert (vui--pad (max 0 (- share natural))))))
              ;; Natural-width child
              (t
               (vui--render-vnode child))))
