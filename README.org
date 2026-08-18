@@ -50,6 +50,20 @@ See it in action (click any demo to enlarge):
       <a href="docs/images/10-pomodoro.png"><img src="docs/images/10-pomodoro.png" alt="Pomodoro timer" width="400"/></a>
     </td>
   </tr>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/17-pixel-width.el"><strong>Pixel Width</strong></a> <sub>(<code>vui-width-mode</code> = <code>char</code>)</sub><br/>
+      <sub>emoji, CJK and proportional text drift when widths are counted in characters</sub>
+      <br/><br/>
+      <a href="docs/images/17-pixel-width-char.png"><img src="docs/images/17-pixel-width-char.png" alt="Pixel width demo in char mode: columns drift" width="400"/></a>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <a href="docs/examples/17-pixel-width.el"><strong>Pixel Width</strong></a> <sub>(<code>vui-width-mode</code> = <code>pixel</code>)</sub><br/>
+      <sub>the same table, boxes and flex rows measured in pixels</sub>
+      <br/><br/>
+      <a href="docs/images/17-pixel-width-pixel.png"><img src="docs/images/17-pixel-width-pixel.png" alt="Pixel width demo in pixel mode: everything aligned" width="400"/></a>
+    </td>
+  </tr>
 </table>
 #+end_html
 
@@ -62,6 +76,7 @@ More runnable examples are listed [[#examples][below]].
 - *Hooks* — vui-use-effect, vui-use-ref, vui-use-memo, vui-use-callback
 - *Context* — Share data across component trees without prop drilling
 - *Layout Primitives* — hstack, vstack, flex, box, table, list
+- *Pixel-Accurate Layout* — Opt-in =vui-width-mode= keeps tables and boxes aligned with emoji, CJK, and proportional fonts
 - *Inline Mounting* — Ephemeral forms inside existing buffers, without taking them over
 - *Error Boundaries* — Graceful error handling with fallback UI
 - *Developer Tools* — Component inspector, timing profiler, debug logging
