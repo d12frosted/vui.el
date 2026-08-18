@@ -934,8 +934,26 @@ loaders are not started, so the measurement has no side effects.")
 Each entry is a vui-context-binding.")
 
 (defvar vui--text-pixel-cache nil
-  "A hash table used to store and retrieve the pixel width of text strings
-for performance optimization through caching.")
+  "Memo of pixel widths for `pixel' width mode, or nil until first use.
+Two levels: the outer table is keyed by a buffer's `face-remapping-alist'
+\(the face context a string is measured in: `text-scale-mode' and
+`variable-pitch-mode' both live there), the inner by string content.
+Cleared wholesale by `vui--reset-text-pixel-cache' when the frame font
+changes.  See `vui--string-pixel-width'.")
+
+(defvar vui--measure-buffer nil
+  "The buffer whose face context pixel measurements should use.
+Layout containers measure content by rendering it into a temp buffer,
+which has no face remappings, so a table inside a `variable-pitch-mode'
+or `text-scale-mode' buffer would otherwise be measured in the frame's
+default font and laid out for the wrong widths.  Bound to the render
+target around those temp-buffer passes; nil means the current buffer.
+Honoured on Emacs 31 and later, where `string-pixel-width' takes the
+buffer whose remappings to use.")
+
+(defconst vui--string-pixel-width-takes-buffer
+  (>= (or (cdr (func-arity #'string-pixel-width)) 1) 2)
+  "Non-nil when `string-pixel-width' accepts a BUFFER argument (Emacs 31+).")
 
 (add-hook 'after-setting-font-hook #'vui--reset-text-pixel-cache)
 
@@ -3725,23 +3743,48 @@ CHAR and returns a string of that length."
 ;; Render Pixel Width
 
 (defun vui--reset-text-pixel-cache ()
-  "Reset the text pixel width cache by reinitializing vui--text-pixel-cache
-as a new hash table using equal as the comparison test. NOTE: `equal'
-compare strings will ignores text properties. There will be cache issue
-when a face changes the font or size. If necessary, you will implement a
-user-supplied test and hash functions using
-`equal-including-properties'."
+  "Empty `vui--text-pixel-cache'.
+Runs from `after-setting-font-hook', since every cached width is stale
+once the frame font changes.  Face remappings do not need this: they
+are part of the cache key.
+
+Known approximation: the inner tables use `equal', which ignores text
+properties, so a bold header and a plain cell with the same text share
+one entry.  Right when the faces keep the same metrics, off when a face
+changes the font or its size."
   (setq vui--text-pixel-cache (make-hash-table :test #'equal)))
 
+(defun vui--measure-buffer ()
+  "Return the buffer to measure in: `vui--measure-buffer' or the current one."
+  (let ((buf vui--measure-buffer))
+    (if (and buf (buffer-live-p buf)) buf (current-buffer))))
+
 (defun vui--string-pixel-width (str)
-  "Return the pixel width of string STR while utilizing a cache for
-optimization. It looks up the width in vui--text-pixel-cache and, if
-missing, calculates it using string-pixel-width and stores the result."
+  "Return the pixel width of STR, memoized in `vui--text-pixel-cache'.
+Measured in the face context of `vui--measure-buffer' (see there), so a
+buffer under `text-scale-mode' or `variable-pitch-mode' gets widths that
+match what it displays.  Before Emacs 31 `string-pixel-width' cannot
+take a buffer, so the measurement is in the frame's default face; the
+cache is still keyed by the remapping so nothing is served across
+contexts."
   (when str
     (unless vui--text-pixel-cache
       (vui--reset-text-pixel-cache))
-    (or (gethash str vui--text-pixel-cache)
-        (puthash str (string-pixel-width str) vui--text-pixel-cache))))
+    (let* ((buf (vui--measure-buffer))
+           (context (buffer-local-value 'face-remapping-alist buf))
+           (table (or (gethash context vui--text-pixel-cache)
+                      (puthash context (make-hash-table :test #'equal)
+                               vui--text-pixel-cache))))
+      (or (gethash str table)
+          (puthash str
+                   (if vui--string-pixel-width-takes-buffer
+                       ;; Two-arg form is Emacs 31+; the flag guards it
+                       ;; at run time, so silence the compile-time arity
+                       ;; check on older Emacs.
+                       (with-suppressed-warnings ((callargs string-pixel-width))
+                         (string-pixel-width str buf))
+                     (string-pixel-width str))
+                   table)))))
 
 (defun vui--pixel-binary-search (str pixel-width)
   "Automatically calculate the boundary and return the truncation position."
@@ -3769,13 +3812,27 @@ vui--pixel-spacing."
          (space-count (/ pixel space-pixel)))
     (concat
      (make-string space-count ?\s)
-     (vui--pixel-spacing (- pixel (* space-pixel space-count))))))
+     (vui--pixel-spacing (- pixel (* space-pixel space-count)) space-pixel))))
 
-(defun vui--pixel-spacing (pixel)
-  "Return a pixel spacing with a PIXEL pixel width."
+(defun vui--pixel-spacing (pixel &optional space-pixel)
+  "Return a spacer PIXEL pixels wide, or \"\" when PIXEL is not positive.
+SPACE-PIXEL is the width of a space in the measuring context (looked up
+when omitted).
+
+The spacer is a space carrying `(space :relative-width F)' with F =
+PIXEL / SPACE-PIXEL, not `(space :width (PIXEL))'.  Both render PIXEL
+wide at the time of the render, but an absolute pixel count is frozen:
+under `text-scale-mode' the text around it grows and the spacer does
+not, and the padding is off until the next render.  `:relative-width'
+is a multiple of the width of the space it sits on, in that space's
+face, so it follows the buffer's face remapping the way a real space
+does and the row keeps its proportions.  Emacs rounds F * width, so the
+float division is exact for every remainder below one space."
   (if (<= pixel 0)
       ""
-    (propertize " " 'display `(space :width (,pixel)))))
+    (let ((space-pixel (or space-pixel (vui--string-pixel-width " "))))
+      (propertize " " 'display
+                  `(space :relative-width ,(/ (float pixel) space-pixel))))))
 
 (defun vui--to-pixel-width (width)
   "Convert characters width to pixel width."
@@ -3798,15 +3855,18 @@ Simple cases (string, nil) are optimized to avoid temp buffer overhead."
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
    ;; orphaned instances from polluting the parent's children list, and
    ;; isolate side effects via vui--measuring-p / vui--pending-effects
-   (t (with-temp-buffer
-        (let ((vui--current-instance nil)
-              (vui--root-instance nil)
-              (vui--new-children nil)
-              (vui--child-index 0)
-              (vui--measuring-p t)
-              (vui--pending-effects nil))
-          (vui--render-vnode cell))
-        (vui--text-width (buffer-string))))))
+   ;; Capture the render target before entering the temp buffer, so
+   ;; pixel measurements keep its face context (see `vui--measure-buffer').
+   (t (let ((vui--measure-buffer (vui--measure-buffer)))
+        (with-temp-buffer
+          (let ((vui--current-instance nil)
+                (vui--root-instance nil)
+                (vui--new-children nil)
+                (vui--child-index 0)
+                (vui--measuring-p t)
+                (vui--pending-effects nil))
+            (vui--render-vnode cell))
+          (vui--text-width (buffer-string)))))))
 
 (defun vui--measure-vnode-width (vnode)
   "Measure VNODE's rendered width as the width of its widest line.
@@ -3817,15 +3877,16 @@ widest line rather than the sum of all lines."
    ((null vnode) 0)
    ((stringp vnode)
     (vui--text-width vnode t))
-   (t (with-temp-buffer
-        (let ((vui--current-instance nil)
-              (vui--root-instance nil)
-              (vui--new-children nil)
-              (vui--child-index 0)
-              (vui--measuring-p t)
-              (vui--pending-effects nil))
-          (vui--render-vnode vnode))
-        (vui--text-width (buffer-string) t)))))
+   (t (let ((vui--measure-buffer (vui--measure-buffer)))
+        (with-temp-buffer
+          (let ((vui--current-instance nil)
+                (vui--root-instance nil)
+                (vui--new-children nil)
+                (vui--child-index 0)
+                (vui--measuring-p t)
+                (vui--pending-effects nil))
+            (vui--render-vnode vnode))
+          (vui--text-width (buffer-string) t))))))
 
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
@@ -3837,15 +3898,16 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
    ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
    ;; orphaned instances from polluting the parent's children list, and
    ;; isolate side effects via vui--measuring-p / vui--pending-effects
-   (t (with-temp-buffer
-        (let ((vui--current-instance nil)
-              (vui--root-instance nil)
-              (vui--new-children nil)
-              (vui--child-index 0)
-              (vui--measuring-p t)
-              (vui--pending-effects nil))
-          (vui--render-vnode cell))
-        (buffer-string)))))
+   (t (let ((vui--measure-buffer (vui--measure-buffer)))
+        (with-temp-buffer
+          (let ((vui--current-instance nil)
+                (vui--root-instance nil)
+                (vui--new-children nil)
+                (vui--child-index 0)
+                (vui--measuring-p t)
+                (vui--pending-effects nil))
+            (vui--render-vnode cell))
+          (buffer-string))))))
 
 (defun vui--calculate-table-widths (columns rows border)
   "Calculate column widths from COLUMNS specs and ROWS data.
@@ -3907,10 +3969,20 @@ Width calculation:
                         (aset widths i (if has-overflow
                                            declared-width
                                          max-w)))))))
-    (mapcar
-     (apply-partially #'vui--normalize-width
-                      (pcase border (:ascii "-") (:unicode "─")))
-     (append widths nil))))
+    ;; A bordered column's border segment spans the content width plus
+    ;; the cell padding on both sides, and it is drawn with whole fill
+    ;; glyphs, so it is that PADDED width that has to be a multiple of
+    ;; the fill glyph.  Rounding only the content width is enough in a
+    ;; monospace font (padding is two glyph widths already) but not when
+    ;; the fill glyph comes from a fallback font wider than the space,
+    ;; as it does under `variable-pitch-mode': the border row would then
+    ;; come out short of the data rows.  Char mode is unaffected
+    ;; (`vui--normalize-width' is the identity there).
+    (let* ((fill (pcase border (:ascii "-") (:unicode "─")))
+           (padding (if border (vui--width 2) 0)))
+      (mapcar (lambda (w)
+                (- (vui--normalize-width fill (+ w padding)) padding))
+              (append widths nil)))))
 
 (defvar-local vui--table-sticky-registry nil
   "Sticky table regions in this buffer, newest first.
@@ -5807,15 +5879,16 @@ wholesale render's empty-child handling)."
            ;; rebindings, a component inside the box would be reconciled
            ;; twice per render (duplicate child entries, shifted indexes
            ;; for keyless siblings) and would mount inside the temp buffer.
-           (content-width (with-temp-buffer
-                            (let ((vui--current-instance nil)
-                                  (vui--root-instance nil)
-                                  (vui--new-children nil)
-                                  (vui--child-index 0)
-                                  (vui--measuring-p t)
-                                  (vui--pending-effects nil))
-                              (vui--render-vnode child))
-                            (vui--text-width (buffer-string))))
+           (content-width (let ((vui--measure-buffer (vui--measure-buffer)))
+                            (with-temp-buffer
+                              (let ((vui--current-instance nil)
+                                    (vui--root-instance nil)
+                                    (vui--new-children nil)
+                                    (vui--child-index 0)
+                                    (vui--measuring-p t)
+                                    (vui--pending-effects nil))
+                                (vui--render-vnode child))
+                              (vui--text-width (buffer-string)))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding

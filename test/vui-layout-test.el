@@ -1271,7 +1271,7 @@
   (it "pads a vnode grower to its share in pixel mode without double conversion"
     (with-temp-buffer
       (cl-letf (((symbol-function 'string-pixel-width)
-                 (lambda (s) (* 7 (string-width s)))))
+                 (lambda (s &rest _) (* 7 (string-width s)))))
         (let ((vui-width-mode 'pixel))
           (vui-render (vui-flex :width 10
                         (vui-flex-item :grow 1 (vui-text "hi"))
@@ -1282,7 +1282,7 @@
   (it "hands a function grower its share in characters in pixel mode"
     (with-temp-buffer
       (cl-letf (((symbol-function 'string-pixel-width)
-                 (lambda (s) (* 7 (string-width s)))))
+                 (lambda (s &rest _) (* 7 (string-width s)))))
         (let ((vui-width-mode 'pixel)
               (got nil))
           (vui-render (vui-flex :width 10
