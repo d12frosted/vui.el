@@ -9,6 +9,27 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-width-mode=: choose how layout measures and pads text. The default,
+  =char=, is the existing behaviour (=string-width= columns). Setting it to
+  =pixel= switches every layout primitive (=vui-table=, =vui-box=,
+  =vui-flex=, =vui-hstack= / =vui-vstack= indent, =vui-space=, button
+  =:max-width=, field placeholders) to measure with =string-pixel-width= and
+  pad with real spaces plus a sub-space =(space :width (N))= spacer for the
+  remainder, so a table stays aligned when a cell mixes fonts: CJK, emoji,
+  Nerd Font glyphs, or anything the font renders at a width =string-width=
+  does not predict. All width-aware code goes through two internal
+  primitives (=vui--text-width= / =vui--pad=), so the mode is one switch
+  rather than a per-component choice. Widths you pass in (=:width=, =:size=,
+  =:indent=) are still in characters in both modes; pixel mode converts them
+  internally. Pixel measurements are memoized in a global cache cleared on
+  =after-setting-font-hook=; the cache keys on string content only, so two
+  faces with different font metrics but identical text share an entry (a
+  documented approximation). Measured on the table benchmarks pixel mode
+  costs about 1.1x char mode at 1000x5, and it is GC-heavier on very large
+  tables, which is why it stays opt in for now. On a tty frame the two modes
+  render identically. Emacs 29 and 30 use a binary-search fallback for
+  =truncate-string-pixelwise=. Contributed by ginqi7 (#120, #121).
+
 - =vui-table= accepts =:sticky-header t=: while the window is scrolled
   into the table's body (the in-buffer header row above the window start,
   rows still visible), a copy of the header row is pinned in
