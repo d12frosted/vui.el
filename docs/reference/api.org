@@ -1223,6 +1223,12 @@ Handler values:
 - =ignore= - Silently ignore
 - function - Custom =(lambda (hook-name err instance) ...)=
 
+** Layout
+
+| Variable           | Default | Description                                                     |
+|--------------------+---------+-----------------------------------------------------------------|
+| =vui-width-mode=   | char    | How layout measures and pads text: =char= (=string-width=, tty-faithful) or =pixel= (=string-pixel-width=, aligns mixed fonts, emoji, CJK). Applies to every layout primitive at once; declared widths stay in characters. See the layout guide. |
+
 ** Performance
 
 | Variable               | Default | Description                                 |

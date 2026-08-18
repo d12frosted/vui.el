@@ -408,6 +408,59 @@ See =docs/examples/05-wine-tasting.el= for a complete example with:
 - Dynamic column width calculation
 - Real-time statistics updates
 
+** Pixel-Accurate Alignment
+
+By default vui measures text in characters (=string-width=). That is
+what a terminal does, and it is right as long as every glyph in the
+buffer is one or two columns wide as Unicode says. It breaks the moment
+a cell mixes fonts: CJK through a fallback font, emoji, Nerd Font
+icons, or a proportional face. The characters count fine, but the font
+renders them at a different width, so the columns drift:
+
+#+begin_src elisp
+(vui-table
+ :columns '((:header "ID" :align :right)
+            (:header "Product" :align :center)
+            (:header "Price" :align :center))
+ :rows '(("1" "Widget hello" "$9.99")
+         ("2" "😀hello" "$19.99")
+         ("3" "Gizmo 你好" "$29.99"))
+ :border :unicode)
+#+end_src
+
+Set =vui-width-mode= to =pixel= and every layout primitive measures with
+=string-pixel-width= instead and pads to the exact pixel:
+
+#+begin_src elisp
+(setq vui-width-mode 'pixel)
+#+end_src
+
+The switch is global. It covers =vui-table=, =vui-box=, =vui-flex=,
+=vui-hstack= / =vui-vstack= indentation, =vui-space=, button
+=:max-width= truncation and field placeholders in one go, so a table
+inside a box inside a flex row stays consistent. Widths you pass in
+(=:width=, =:size=, =:indent=, =:spacing=) are still characters in both
+modes; pixel mode converts them using the width of a space.
+
+Padding in pixel mode is real spaces for the bulk of the gap plus one
+spacer carrying a =(space :width (N))= display property for the
+sub-space remainder, so a table yanked out of the buffer keeps roughly
+its shape.
+
+Things to know before switching:
+
+- Pixel measurement is more expensive per call. Results are memoized
+  (the cache clears when the frame font changes), and on the table
+  benchmarks pixel mode runs at about 1.1x char mode; very large tables
+  allocate more and lean harder on GC. That is why =char= is the
+  default.
+- The cache keys on string content only, so a bold header and a plain
+  cell with the same text share one measurement. Fine when faces keep
+  the same metrics, off when a face changes the font or its size.
+- On a tty frame a pixel is a column, so both modes render the same
+  there. The same holds for =emacs --batch=, which is why tests cannot
+  tell the modes apart.
+
 * Dynamic Lists - =vui-list=
 
 Renders a list of items using a render function. Returns a =vstack= for vertical
