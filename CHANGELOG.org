@@ -14,7 +14,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =pixel= switches every layout primitive (=vui-table=, =vui-box=,
   =vui-flex=, =vui-hstack= / =vui-vstack= indent, =vui-space=, button
   =:max-width=, field placeholders) to measure with =string-pixel-width= and
-  pad with real spaces plus a sub-space =(space :width (N))= spacer for the
+  pad with real spaces plus a sub-space =(space :relative-width F)= spacer for the
   remainder, so a table stays aligned when a cell mixes fonts: CJK, emoji,
   Nerd Font glyphs, or anything the font renders at a width =string-width=
   does not predict. All width-aware code goes through two internal
@@ -64,6 +64,32 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   (=vui-bench-stream-update-last-extend=) measures both payloads (#127).
 
 ** Fixed
+
+- =pixel= width mode now survives =text-scale-mode= and measures correctly
+  under =variable-pitch-mode=. Measured in a GUI frame: a pixel-aligned
+  table drifted after =C-x C-+= and stayed off even after a re-render. Two
+  causes. Padding spacers were =(space :width (N))=, an absolute pixel count
+  that stays put while the text around it scales; they are now =(space
+  :relative-width F)=, a fraction of the space they sit on, which follows
+  the buffer's face remapping the way a real space does (Emacs rounds F
+  times the width, so every sub-space remainder is exact). And containers
+  measure content by rendering it into a temp buffer, which has no face
+  remapping, so a table in a scaled or proportional buffer was measured in
+  the frame's default font; measurement now happens in the render target's
+  face context (=vui--measure-buffer=, using =string-pixel-width='s BUFFER
+  argument on Emacs 31 and later), and the pixel cache is keyed by that
+  context (=face-remapping-alist=) so a scaled buffer never reuses plain
+  widths. Bordered tables also normalize the padded column width to a
+  multiple of the fill glyph, not just the content width, since a fill
+  glyph from a fallback font need not be as wide as the space. Result in a
+  GUI frame: exact after a re-render at any scale, within a pixel before
+  one; boxes, flex rows and borderless tables exact under
+  =variable-pitch-mode=. Known limits: a proportional font whose box-drawing
+  junctions come from a different fallback than its rules (Helvetica draws
+  =─= at 12px and =┼= at 9px) cannot have a glyph-built border row match the
+  data rows, so use =:border nil= there; and a bold header in a
+  proportional font is still measured without its face (see the cache note
+  in the layout guide). Byte-identical in char mode (#121).
 
 - Three more =pixel= width mode unit bugs, all invisible in batch (a pixel
   is a column there) and found by a new mocked-font test suite

@@ -443,9 +443,23 @@ inside a box inside a flex row stays consistent. Widths you pass in
 modes; pixel mode converts them using the width of a space.
 
 Padding in pixel mode is real spaces for the bulk of the gap plus one
-spacer carrying a =(space :width (N))= display property for the
+spacer carrying a =(space :relative-width F)= display property for the
 sub-space remainder, so a table yanked out of the buffer keeps roughly
-its shape.
+its shape. The spacer is a fraction of a space, not an absolute pixel
+count, so it grows and shrinks with the text around it: scaling the
+buffer with =text-scale-adjust= keeps the layout in proportion, and the
+next re-render (which measures in the scaled face) makes it exact
+again.
+
+Measurements are taken in the face context of the buffer being
+rendered into. That matters for =text-scale-mode= and
+=variable-pitch-mode=, both of which remap the buffer's default face:
+containers measure content by rendering it into a temp buffer, and
+without this a table in a scaled or proportional buffer would be laid
+out for the frame's default font. Emacs 31 or later is needed for this
+(=string-pixel-width= gained its BUFFER argument there); before that
+the measurement is in the frame's default face, so a remapped buffer is
+laid out approximately.
 
 Things to know before switching:
 
@@ -456,7 +470,16 @@ Things to know before switching:
   default.
 - The cache keys on string content only, so a bold header and a plain
   cell with the same text share one measurement. Fine when faces keep
-  the same metrics, off when a face changes the font or its size.
+  the same metrics, off when a face changes the font or its size. In a
+  proportional font that shows up as a bold table header a few pixels
+  wider than its column.
+- Bordered tables in a proportional font depend on the font's
+  box-drawing glyphs having consistent widths, and they often do not:
+  Helvetica on macOS draws =─= and =│= at 12px but falls back to Arial
+  for the junctions (=┼=, =├=, =┬=) at 9px, and no count of whole fill
+  glyphs can make such a border row match the data rows. Data rows,
+  boxes and flex rows align exactly; if a border drifts under
+  =variable-pitch-mode=, use =:border nil=.
 - On a tty frame a pixel is a column, so both modes render the same
   there. The same holds for =emacs --batch=, which is why tests cannot
   tell the modes apart.

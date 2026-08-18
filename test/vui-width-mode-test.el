@@ -18,7 +18,7 @@
 ;;   mode has no reason to differ; any difference is a unit bug.
 ;; - ALIGNMENT: with wide glyphs in play, char mode drifts (its columns
 ;;   are off by 3px per wide glyph) and pixel mode must not.  Measured
-;;   with `vui-test--px', which honours the (space :width (N)) spacers
+;;   with `vui-test--px', which honours the `:relative-width' spacers
 ;;   pixel padding emits.
 ;;
 ;; The mock is deliberately not 1px-per-column-multiplied: if pixel were a
@@ -42,13 +42,42 @@
 Not 14, so pixel and char disagree on exactly the glyphs pixel mode is
 for.")
 
-(defun vui-test--px (s)
-  "Mocked pixel width of string S, honouring pixel padding spacers.
-Like the real `string-pixel-width', a multi-line string measures as its
-widest line.  A char carrying (space :width (N)) display counts N
-pixels; otherwise a wide char counts `vui-test--wide-px' and anything
-else `vui-test--col-px'."
-  (let ((widest 0) (line 0) (i 0) (n (length s)))
+(defun vui-test--metrics (buffer)
+  "Return (COL WIDE BOX) glyph widths for BUFFER's face context in the mock.
+COL is a plain glyph, WIDE one `string-width' calls two columns, BOX a
+box-drawing glyph.  Mirrors real remappings: `text-scale-mode' puts
+`(default (:height H) default)' on `face-remapping-alist' and the mock
+scales everything by H; `variable-pitch-mode' puts `(default
+variable-pitch default)' there and the mock switches to a narrower font
+\(4px columns, 9px wide glyphs) while box-drawing glyphs, which a
+proportional font rarely has, keep coming from the monospace fallback
+at 7px.  Only integer widths, like a real font."
+  (let ((remap (and buffer (buffer-live-p buffer)
+                    (buffer-local-value 'face-remapping-alist buffer))))
+    (pcase (assq 'default remap)
+      (`(default (:height ,h) . ,_)
+       (list (round (* vui-test--col-px h)) (round (* vui-test--wide-px h))
+             (round (* vui-test--col-px h))))
+      (`(default variable-pitch . ,_) (list 4 9 vui-test--col-px))
+      (_ (list vui-test--col-px vui-test--wide-px vui-test--col-px)))))
+
+(defun vui-test--px (s &optional buffer)
+  "Mocked pixel width of string S in BUFFER's face context.
+Like the real `string-pixel-width': a multi-line string measures as its
+widest line, and BUFFER, when given, supplies the face remapping, here
+reduced to three glyph widths (see `vui-test--metrics'); without it
+the frame's default face applies.
+Padding spacers are honoured the way the display engine does
+it: `(space :relative-width F)' is F times the width of a space in this
+context; `(space :width (N))' is N absolute pixels regardless of it."
+  ;; No BUFFER means the frame's default face, exactly like the real
+  ;; function, which measures in a work buffer with no remappings.  Only
+  ;; an explicit BUFFER (Emacs 31+ callers) brings a remapping in.
+  (let* ((metrics (vui-test--metrics buffer))
+         (col (nth 0 metrics))
+         (wide (nth 1 metrics))
+         (box (nth 2 metrics))
+         (widest 0) (line 0) (i 0) (n (length s)))
     (while (< i n)
       (let ((c (aref s i))
             (d (get-text-property i 'display s)))
@@ -57,9 +86,10 @@ else `vui-test--col-px'."
           (setq line (+ line
                         (pcase d
                           (`(space :width (,px)) px)
-                          (_ (if (= 2 (char-width c))
-                                 vui-test--wide-px
-                               vui-test--col-px))))))
+                          (`(space :relative-width ,f) (round (* f col)))
+                          (_ (cond ((= 2 (char-width c)) wide)
+                                   ((<= #x2500 c #x257F) box)
+                                   (t col)))))))
         (setq i (1+ i))))
     (max widest line)))
 
@@ -135,7 +165,7 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
         (expect (vui-test--px p) :to-equal 17)
         (expect (length p) :to-equal 3)
         (expect (get-text-property 2 'display p)
-                :to-equal '(space :width (3))))
+                :to-equal `(space :relative-width ,(/ 3.0 7))))
       (expect (vui--pad 0) :to-equal "")
       (expect (vui--pad -5) :to-equal "")))
 
@@ -161,12 +191,14 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
         (vui--reset-text-pixel-cache))
       (expect called :to-be t)))
 
-  (it "caches pixel measurements and reset clears them"
+  (it "caches pixel measurements per face context and reset clears them"
     (vui-test--with-pixel-font
       (vui--text-width "cached?")
-      (expect (gethash "cached?" vui--text-pixel-cache) :to-equal 49)
+      (let ((table (gethash face-remapping-alist vui--text-pixel-cache)))
+        (expect table :not :to-be nil)
+        (expect (gethash "cached?" table) :to-equal 49))
       (vui--reset-text-pixel-cache)
-      (expect (gethash "cached?" vui--text-pixel-cache) :to-be nil))))
+      (expect (gethash face-remapping-alist vui--text-pixel-cache) :to-be nil))))
 
 ;;; Parity: ASCII renders identically in both modes
 
@@ -473,6 +505,123 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
                (display (overlay-get ov 'display)))
           (expect (vui-test--px display) :to-be-less-than 29)
           (expect (vui-test--px display) :to-be-greater-than 0))))))
+
+;;; Face remapping: text-scale-mode and variable-pitch-mode
+
+(defun vui-test--remap-default (buffer height)
+  "Give BUFFER the `face-remapping-alist' `text-scale-mode' would set for HEIGHT.
+Puts the buffer in `vui-mode' first: the first `vui-render' in a buffer
+enables the mode, and a mode switch kills buffer-local variables.  In
+real life the UI is up before anyone scales it, so that ordering never
+bites; the tests just have to respect it."
+  (with-current-buffer buffer
+    (unless (derived-mode-p 'vui-mode) (vui-mode))
+    (setq-local face-remapping-alist `((default (:height ,height) default)))))
+
+(defun vui-test--remap-variable-pitch (buffer)
+  "Give BUFFER the `face-remapping-alist' `variable-pitch-mode' would set."
+  (with-current-buffer buffer
+    (unless (derived-mode-p 'vui-mode) (vui-mode))
+    (setq-local face-remapping-alist '((default variable-pitch default)))))
+
+(describe "pixel mode under face remapping"
+  (it "measures strings in the render target's face context, not the temp buffer's"
+    ;; Exact only where vui can hand the buffer to string-pixel-width
+    ;; (Emacs 31+); before that the measurement is in the frame default.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-default (current-buffer) 2.0)
+        ;; direct measurement in this buffer sees the remap
+        (expect (vui--text-width "abc") :to-equal 42)
+        ;; a vnode cell is rendered into a temp buffer to be measured;
+        ;; without the capture it would measure at 21
+        (expect (vui--cell-visual-width (vui-text "abc")) :to-equal 42)
+        (expect (vui--measure-vnode-width (vui-text "abc")) :to-equal 42))))
+
+  (it "keys the cache by face context so a remapped buffer never reuses plain widths"
+    ;; Exact only where vui can hand the buffer to string-pixel-width
+    ;; (Emacs 31+); before that the measurement is in the frame default.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (expect (vui--text-width "abc") :to-equal 21)
+        (vui-test--remap-default (current-buffer) 2.0)
+        (expect (vui--text-width "abc") :to-equal 42)
+        (setq-local face-remapping-alist nil)
+        (expect (vui--text-width "abc") :to-equal 21))))
+
+  (it "aligns a table rendered inside a scaled buffer"
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-default (current-buffer) 2.0)
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Name") (:header "N"))
+                               :rows '(("plain" "1") ("你好" "2") ("😀 hi" "3"))))
+        (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "keeps a rendered table aligned after the buffer is scaled without a re-render"
+    ;; The spacers are `:relative-width', so they grow with the space
+    ;; they sit on when the face is remapped later.  Absolute pixel
+    ;; spacers would stay put while the text around them grew.
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Name") (:header "N"))
+                               :rows '(("plain" "1") ("你好" "2") ("😀 hi" "3"))))
+        (let ((before (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          (expect (length (seq-uniq before)) :to-equal 1)
+          ;; now the user hits C-x C-+ twice
+          (vui-test--remap-default (current-buffer) 2.0)
+          (let ((after (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                               (split-string (buffer-string) "\n"))))
+            (expect (length (seq-uniq after)) :to-equal 1)
+            (expect (car after) :to-equal (* 2 (car before))))))))
+
+  (it "sizes boxes and tables in a variable-pitch buffer by that font's widths"
+    ;; The case pixel mode is really for: a proportional font.  Declared
+    ;; widths are still characters, converted with THAT font's space.
+    ;; Exact only where vui can hand the buffer to string-pixel-width
+    ;; (Emacs 31+); before that the measurement is in the frame default.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-vstack
+                     (vui-box (vui-text "你好") :width 10 :align :right)
+                     (vui-box (vui-text "hi") :width 10 :align :right)
+                     (vui-table :border :ascii
+                                :columns '((:header "Name" :width 8 :grow t))
+                                :rows '(("你好") ("plain")))))
+        (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          ;; boxes: 10 columns at 4px = 40; table: 8 + 2 padding + 2 borders = 12 columns = 48
+          (expect (seq-take widths 2) :to-equal '(40 40))
+          (expect (length (seq-uniq (seq-drop widths 2))) :to-equal 1)
+          (expect (nth 2 widths) :to-equal 48)))))
+
+  (it "keeps unicode border rows as wide as the data rows in a variable-pitch buffer"
+    ;; Box-drawing glyphs come from a monospace fallback (7px) while the
+    ;; space is 4px, so a border segment of whole fill glyphs can only
+    ;; match the padded data row if the PADDED width is a multiple of
+    ;; the fill glyph.  Every row, borders and separators included, must
+    ;; measure the same.
+    ;; Exact only where vui can hand the buffer to string-pixel-width
+    ;; (Emacs 31+); before that the measurement is in the frame default.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Name") (:header "N"))
+                               :rows '(("plain" "1") ("你好" "2") ("longer one" "3"))))
+        (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                              (split-string (buffer-string) "\n"))))
+          (expect (length widths) :to-equal 7)
+          (expect (length (seq-uniq widths)) :to-equal 1))))))
 
 (provide 'vui-width-mode-test)
 ;;; vui-width-mode-test.el ends here
