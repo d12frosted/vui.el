@@ -473,6 +473,13 @@ Things to know before switching:
   with the same text are measured separately, and table headers are
   measured wearing their header face. Other text properties (button
   keymaps, actions) are ignored by the cache, as they should be.
+- Truncation (a =:truncate= column, a button =:max-width=, a field
+  placeholder) cuts at a character index and can split a grapheme
+  cluster such as a ZWJ emoji sequence, leaving a partial glyph at the
+  cut. Emacs 31's =truncate-string-pixelwise= stops at cluster
+  boundaries and pixel mode uses it where available; the pre-31
+  fallback, the button path and char mode do not yet. Tracked in
+  [[https://github.com/d12frosted/vui.el/issues/140][#140]].
 - Bordered tables in a proportional font depend on the font's
   box-drawing glyphs having consistent widths, and they often do not:
   Helvetica on macOS draws =─= and =│= at 12px but falls back to Arial
