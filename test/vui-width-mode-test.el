@@ -42,24 +42,33 @@
 Not 14, so pixel and char disagree on exactly the glyphs pixel mode is
 for.")
 
+(defconst vui-test--vp-glyphs
+  '((?\s . 4) (?- . 4) (?| . 5) (?+ . 9) (?¦ . 5)
+    (?─ . 12) (?│ . 12) (?┌ . 12) (?┐ . 12) (?└ . 12) (?┘ . 12)
+    (?┬ . 9) (?├ . 9) (?┼ . 9) (?┤ . 9) (?┴ . 9))
+  "Per-glyph widths in the mock's proportional font, measured from a real
+one: Helvetica on macOS draws the box-drawing rules and corners at 12px
+but falls back to Arial for the junctions at 9px, the ASCII border
+characters are proportional, and a space is 4px.  This is the case a
+glyph-counted border row cannot match, and what #8 is about.")
+
 (defun vui-test--metrics (buffer)
-  "Return (COL WIDE BOX) glyph widths for BUFFER's face context in the mock.
-COL is a plain glyph, WIDE one `string-width' calls two columns, BOX a
-box-drawing glyph.  Mirrors real remappings: `text-scale-mode' puts
-`(default (:height H) default)' on `face-remapping-alist' and the mock
-scales everything by H; `variable-pitch-mode' puts `(default
-variable-pitch default)' there and the mock switches to a narrower font
-\(4px columns, 9px wide glyphs) while box-drawing glyphs, which a
-proportional font rarely has, keep coming from the monospace fallback
-at 7px.  Only integer widths, like a real font."
+  "Return (COL WIDE GLYPHS) for BUFFER's face context in the mock.
+COL is a plain glyph, WIDE one `string-width' calls two columns, GLYPHS
+an alist of per-character widths that override both.  Mirrors real
+remappings: `text-scale-mode' puts `(default (:height H) default)' on
+`face-remapping-alist' and the mock scales COL and WIDE by H;
+`variable-pitch-mode' puts `(default variable-pitch default)' there and
+the mock switches to a narrower font (4px columns, 9px wide glyphs) with
+`vui-test--vp-glyphs' for the box-drawing and border characters.  Only
+integer widths, like a real font."
   (let ((remap (and buffer (buffer-live-p buffer)
                     (buffer-local-value 'face-remapping-alist buffer))))
     (pcase (assq 'default remap)
       (`(default (:height ,h) . ,_)
-       (list (round (* vui-test--col-px h)) (round (* vui-test--wide-px h))
-             (round (* vui-test--col-px h))))
-      (`(default variable-pitch . ,_) (list 4 9 vui-test--col-px))
-      (_ (list vui-test--col-px vui-test--wide-px vui-test--col-px)))))
+       (list (round (* vui-test--col-px h)) (round (* vui-test--wide-px h)) nil))
+      (`(default variable-pitch . ,_) (list 4 9 vui-test--vp-glyphs))
+      (_ (list vui-test--col-px vui-test--wide-px nil)))))
 
 (defun vui-test--px (s &optional buffer)
   "Mocked pixel width of string S in BUFFER's face context.
@@ -76,7 +85,7 @@ context; `(space :width (N))' is N absolute pixels regardless of it."
   (let* ((metrics (vui-test--metrics buffer))
          (col (nth 0 metrics))
          (wide (nth 1 metrics))
-         (box (nth 2 metrics))
+         (glyphs (nth 2 metrics))
          ;; In a proportional font bold glyphs are wider than regular
          ;; ones (Helvetica Bold vs Helvetica); in a monospace font they
          ;; are not.  Model that as +1px per bold glyph under
@@ -95,9 +104,8 @@ context; `(space :width (N))' is N absolute pixels regardless of it."
                           (`(space :width (,px)) px)
                           (`(space :relative-width ,f) (round (* f col)))
                           (_ (+ (if bold bold-extra 0)
-                                (cond ((= 2 (char-width c)) wide)
-                                      ((<= #x2500 c #x257F) box)
-                                      (t col))))))))
+                                (or (cdr (assq c glyphs))
+                                    (if (= 2 (char-width c)) wide col))))))))
         (setq i (1+ i))))
     (max widest line)))
 
@@ -630,24 +638,24 @@ bites; the tests just have to respect it."
         (vui-render (vui-vstack
                      (vui-box (vui-text "你好") :width 10 :align :right)
                      (vui-box (vui-text "hi") :width 10 :align :right)
-                     (vui-table :border :ascii
+                     (vui-table :border :unicode
                                 :columns '((:header "Name" :width 8 :grow t))
                                 :rows '(("你好") ("plain")))))
         (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
                               (split-string (buffer-string) "\n"))))
-          ;; boxes: 10 columns at 4px = 40; table: 8 + 2 padding + 2 borders = 12 columns = 48
+          ;; boxes: 10 columns at 4px = 40.  Table: 8 columns + 2 padding
+          ;; at 4px = 40, normalized up to a multiple of the 12px rule
+          ;; glyph = 48, plus two 12px separators = 72
           (expect (seq-take widths 2) :to-equal '(40 40))
           (expect (length (seq-uniq (seq-drop widths 2))) :to-equal 1)
-          (expect (nth 2 widths) :to-equal 48)))))
+          (expect (nth 2 widths) :to-equal 72)))))
 
   (it "keeps unicode border rows as wide as the data rows in a variable-pitch buffer"
-    ;; Box-drawing glyphs come from a monospace fallback (7px) while the
-    ;; space is 4px, so a border segment of whole fill glyphs can only
-    ;; match the padded data row if the PADDED width is a multiple of
-    ;; the fill glyph.  Every row, borders and separators included, must
-    ;; measure the same.
-    ;; Exact only where vui can hand the buffer to string-pixel-width
-    ;; (Emacs 31+); before that the measurement is in the frame default.
+    ;; The font draws rules and corners at 12px but junctions at 9px, and
+    ;; the space at 4px, so no count of whole fill glyphs matches a data
+    ;; row on its own; each border segment has to make up for the width
+    ;; of the junction before it.  Every row, borders and separators
+    ;; included, must measure the same.
     (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
     (vui-test--with-pixel-font
       (with-temp-buffer
@@ -658,7 +666,92 @@ bites; the tests just have to respect it."
         (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
                               (split-string (buffer-string) "\n"))))
           (expect (length widths) :to-equal 7)
-          (expect (length (seq-uniq widths)) :to-equal 1))))))
+          (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "lines border junctions up with the data rows' separators in a variable-pitch buffer"
+    ;; Equal row widths are necessary, not sufficient: the vertical
+    ;; strokes have to be on the same pixel.  For every column boundary,
+    ;; the junction on each border row is centred where the separator on
+    ;; each data row is centred (a 9px junction under a 12px separator).
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Name") (:header "N") (:header "Z"))
+                               :rows '(("plain" "1" "x") ("你好" "2" "y"))))
+        (cl-flet ((stroke-xs (line chars)
+                    ;; twice the pixel x of the stroke centre of every
+                    ;; CHARS char in LINE (twice, to stay in integers)
+                    (let (xs)
+                      (dotimes (i (length line))
+                        (when (memq (aref line i) chars)
+                          (push (+ (* 2 (vui-test--px (substring line 0 i) (current-buffer)))
+                                   (vui-test--px (substring line i (1+ i)) (current-buffer)))
+                                xs)))
+                      (nreverse xs))))
+          (let* ((lines (split-string (buffer-string) "\n"))
+                 (data (cl-remove-if (lambda (l) (string-match-p "[┌├└]" l)) lines))
+                 (borders (cl-remove-if-not (lambda (l) (string-match-p "[┌├└]" l)) lines))
+                 (data-xs (mapcar (lambda (l) (stroke-xs l '(?│))) data))
+                 (border-xs (mapcar (lambda (l) (stroke-xs l '(?┌ ?┬ ?┐ ?├ ?┼ ?┤ ?└ ?┴ ?┘))) borders)))
+            (expect (length data) :to-equal 3)
+            (expect (length borders) :to-equal 3)
+            (expect (length (seq-uniq data-xs)) :to-equal 1)
+            ;; within half a pixel: a 9px glyph cannot sit centred on a
+            ;; 12px one in whole pixels, and half a pixel is the optimum.
+            ;; The units are doubled, so that is a difference of 1.
+            (dolist (b border-xs)
+              (expect (length b) :to-equal (length (car data-xs)))
+              (cl-mapc (lambda (bx dx) (expect (abs (- bx dx)) :to-be-less-than 2))
+                       b (car data-xs))))))))
+
+  (it "centres ascii border junctions on the data rows' separators in a variable-pitch buffer"
+    ;; ASCII borders are proportional too: + is 9px, - is 4px, | is 5px.
+    ;; A + is wider than the | it sits over, so the corners overhang the
+    ;; data rows by half the difference on each side (that is the glyph),
+    ;; but every + is centred on its |.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :ascii
+                               :columns '((:header "Name") (:header "N"))
+                               :rows '(("plain" "1") ("你好" "2"))))
+        (cl-flet ((centres (line chars)
+                    (let (xs)
+                      (dotimes (i (length line))
+                        (when (memq (aref line i) chars)
+                          (push (+ (* 2 (vui-test--px (substring line 0 i) (current-buffer)))
+                                   (vui-test--px (substring line i (1+ i)) (current-buffer)))
+                                xs)))
+                      (nreverse xs))))
+          (let* ((lines (split-string (buffer-string) "\n"))
+                 (data (cl-remove-if (lambda (l) (string-prefix-p "+" l)) lines))
+                 (borders (cl-remove-if-not (lambda (l) (string-prefix-p "+" l)) lines))
+                 (data-cs (mapcar (lambda (l) (centres l '(?|))) data))
+                 (border-cs (mapcar (lambda (l) (centres l '(?+))) borders))
+                 (data-w (vui-test--px (car data) (current-buffer)))
+                 (overhang (- 9 5)))
+            (expect (length (seq-uniq data-cs)) :to-equal 1)
+            ;; interior junctions and the right corner centred exactly;
+            ;; the first corner is clamped to the row start, so its
+            ;; centre sits half the overhang right of ideal (x2 units:
+            ;; the overhang), and the row is half the overhang wider
+            (dolist (b border-cs)
+              (expect (cdr b) :to-equal (cdr (car data-cs)))
+              (expect (- (car b) (car (car data-cs))) :to-equal overhang))
+            (dolist (l borders)
+              (expect (- (vui-test--px l (current-buffer)) data-w)
+                      :to-equal (/ overhang 2))))))))
+
+  (it "renders monospace unicode borders byte-identically in both modes"
+    ;; In a monospace font every border glyph is one column wide, so the
+    ;; junction compensation is zero and no spacer appears: parity holds.
+    (vui-test--parity
+     (lambda () (vui-table :border :unicode
+                           :columns '((:header "Name") (:header "N" :align :right))
+                           :rows '(("plain" "1") ("ok" "22")))))))
 
 ;;; Faces: the cache and the measurement both have to see them
 

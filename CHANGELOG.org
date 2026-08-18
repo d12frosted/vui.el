@@ -83,6 +83,26 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Bordered tables line up in a proportional font under =pixel= width mode.
+  A font's box-drawing glyphs rarely share a width: Helvetica on macOS
+  draws =─= and =│= at 12px but falls back to Arial for the junctions =┼=,
+  =├=, =┬= at 9px, and ASCII =+= =-= =|= are 9, 4 and 5px, so a border row
+  built by counting whole fill glyphs could not match the data rows (rows
+  came out 105 to 137px wide for a 132px table in a GUI frame). Border rows
+  are now laid out by position: each junction is centred on the separator
+  it belongs to, computed from the separator's centre in half-pixels and
+  absolute from the row start so rounding never accumulates, and the rule
+  between two junctions is whole glyphs plus a spacer for the sub-glyph
+  remainder (=vui--border-segment=). A left corner narrower than the
+  separator starts a little in; a right corner narrower than it is padded
+  out, so every row measures the same. In a monospace font all of this is
+  zero and the output is byte-identical. Measured in Helvetica: unicode
+  borders, every row 168px and every junction within half a pixel of its
+  =│= (a 9px glyph cannot sit dead centre on a 12px one, half a pixel is
+  the optimum); ASCII borders, every interior =+= exactly centred on its
+  =|=, the corners overhanging by the 2px their glyph is wider. The layout
+  guide no longer says to use =:border nil= there (#121).
+
 - Whole-buffer renders no longer record themselves in the undo list. Every
   =vui-mount= render and re-render erased and rebuilt the buffer with undo
   enabled, so Emacs copied the whole erased text, text properties included,
@@ -139,10 +159,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   glyph from a fallback font need not be as wide as the space. Result in a
   GUI frame: exact after a re-render at any scale, within a pixel before
   one; boxes, flex rows and borderless tables exact under
-  =variable-pitch-mode=. Known limits: a proportional font whose box-drawing
-  junctions come from a different fallback than its rules (Helvetica draws
-  =─= at 12px and =┼= at 9px) cannot have a glyph-built border row match the
-  data rows, so use =:border nil= there. Byte-identical in char mode (#121).
+  =variable-pitch-mode=. Byte-identical in char mode (#121).
 
 - Three more =pixel= width mode unit bugs, all invisible in batch (a pixel
   is a column there) and found by a new mocked-font test suite
