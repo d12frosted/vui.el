@@ -481,13 +481,16 @@ Things to know before switching:
   boundaries and pixel mode uses it where available; the pre-31
   fallback, the button path and char mode do not yet. Tracked in
   [[https://github.com/d12frosted/vui.el/issues/140][#140]].
-- Bordered tables in a proportional font depend on the font's
-  box-drawing glyphs having consistent widths, and they often do not:
-  Helvetica on macOS draws =─= and =│= at 12px but falls back to Arial
-  for the junctions (=┼=, =├=, =┬=) at 9px, and no count of whole fill
-  glyphs can make such a border row match the data rows. Data rows,
-  boxes and flex rows align exactly; if a border drifts under
-  =variable-pitch-mode=, use =:border nil=.
+- Bordered tables in a proportional font: the font's box-drawing
+  glyphs rarely have consistent widths (Helvetica on macOS draws =─=
+  and =│= at 12px but falls back to Arial for =┼=, =├=, =┬= at 9px), so
+  border rows are laid out by position, not by counting glyphs: each
+  junction is centred on the separator below it, and the rule between
+  two junctions is whole glyphs plus a spacer for the remainder. That
+  spacer is a gap of less than one glyph in the rule; a corner wider
+  than the separator (ASCII =+= over =|=) overhangs the table by half
+  the difference. In a monospace font the output is byte-identical to
+  before.
 - On a tty frame a pixel is a column, so both modes render the same
   there. The same holds for =emacs --batch=, which is why tests cannot
   tell the modes apart.

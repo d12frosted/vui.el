@@ -3778,14 +3778,6 @@ is pixel."
     ('char (truncate-string-to-width str width nil nil ellipsis))
     ('pixel (vui--truncate-string-pixelwise str width nil ellipsis (vui--string-pixel-width ellipsis)))))
 
-(defun vui--make-string (width char)
-  "Create a string of CHAR repeated to fit WIDTH. It calculates the number
-of characters required by dividing the target WIDTH by the text width of
-CHAR and returns a string of that length."
-  (let* ((char-width (vui--text-width char))
-         (char-count (and (> char-width 0) (/ width char-width))))
-    (make-string char-count (string-to-char char))))
-
 ;; Render Pixel Width
 
 (defconst vui--width-properties '(face display)
@@ -4216,22 +4208,77 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
                      ('top '("┌" "─" "┬" "┐"))
                      ('bottom '("└" "─" "┴" "┘"))
                      ('separator '("├" "─" "┼" "┤"))))))
+         (face (or border-face 'vui-table-border))
          (left (nth 0 chars))
          (fill (nth 1 chars))
          (mid (nth 2 chars))
          (right (or (nth 3 chars) (nth 0 chars)))
          (padding (or cell-padding 0))
+         ;; Glyph widths, measured wearing the border face like the
+         ;; data rows' separator (`vui--table-separators').  In a
+         ;; monospace font these are all one column; in a proportional
+         ;; font they need not be: Helvetica draws the rules and corners
+         ;; at 12px and the junctions at 9px.
+         (sep-w (vui--text-width (car (vui--table-separators border-style face))))
+         (fill-w (vui--text-width (vui--faced fill face)))
+         (left-w (vui--text-width (vui--faced left face)))
+         (mid-w (vui--text-width (vui--faced mid face)))
+         (right-w (vui--text-width (vui--faced right face)))
+         (last (1- (length col-widths)))
          (start (point)))
-    (insert left)
-    (cl-loop for width in col-widths
-             for i from 0
-             do (progn
-                  (insert (vui--make-string (+ width (vui--width (* 2 padding))) fill))
-                  (if (< i (1- (length col-widths)))
-                      (insert mid)
-                    (insert right))))
-    (put-text-property start (point) 'face (or border-face 'vui-table-border))
+    ;; The vertical strokes have to line up: each junction on this row
+    ;; is centred on the data rows' separator at that boundary (centred,
+    ;; not left-aligned, so a 9px junction under a 12px separator puts
+    ;; its stroke on the same pixel).  Positions are computed from the
+    ;; separator centres in half-pixels, absolute from the row start,
+    ;; so rounding never accumulates across columns.  In a monospace
+    ;; font every glyph is one column and each rule comes out exactly
+    ;; WIDTH + 2*PADDING wide: byte-identical output.  The leftmost
+    ;; corner cannot start before the row does, so a corner wider than
+    ;; the separator is clamped there and overhangs on the right only.
+    (let ((centre sep-w)   ; twice the centre of the separator at the row start
+          (x 0))           ; pixel position after the last junction
+      ;; The left corner too: a narrow one starts a little in, so it is
+      ;; centred on the first separator like every other junction
+      (let ((at (max 0 (/ (- centre left-w) 2))))
+        (insert (vui--pad at))
+        (insert left)
+        (setq x (+ at left-w)))
+      (cl-loop for width in col-widths
+               for i from 0
+               do (let* ((junction (if (< i last) mid right))
+                         (junction-w (if (< i last) mid-w right-w))
+                         (span (+ width (vui--width (* 2 padding)))))
+                    ;; centre of the next separator, and where a junction
+                    ;; of this width must start to be centred on it
+                    (setq centre (+ centre (* 2 (+ sep-w span))))
+                    (let ((at (max x (/ (- centre junction-w) 2))))
+                      (insert (vui--border-segment (- at x) fill fill-w))
+                      (insert junction)
+                      (setq x (+ at junction-w)))))
+      ;; A right corner narrower than the separator ends the row short
+      ;; of the data rows; pad the difference so the rows measure the same
+      (let ((data-end (/ (+ centre sep-w) 2)))
+        (when (> data-end x)
+          (insert (vui--pad (- data-end x))))))
+    (put-text-property start (point) 'face face)
     (insert "\n")))
+
+(defun vui--border-segment (width fill fill-w)
+  "Return a horizontal rule WIDTH units wide drawn with FILL glyphs.
+FILL-W is one FILL glyph's width.  Whole glyphs first, and when WIDTH
+is not a multiple of FILL-W (only possible in `pixel' mode with a font
+whose border glyphs are not multiples of each other) a spacer for the
+remainder, so the rule ends exactly where the next junction must
+start.  The spacer is a gap in the rule of less than one glyph."
+  (if (or (<= width 0) (<= fill-w 0))
+      ""
+    (let* ((count (/ width fill-w))
+           (remainder (- width (* count fill-w))))
+      (if (zerop remainder)
+          (make-string count (string-to-char fill))
+        (concat (make-string count (string-to-char fill))
+                (vui--pad remainder))))))
 
 (defvar vui--table-separators-memo nil
   "Alist of ((BORDER-STYLE . FACE) . (SEP . OVERFLOW-SEP)) strings.
