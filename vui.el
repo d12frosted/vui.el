@@ -4266,19 +4266,23 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
 
 (defun vui--border-segment (width fill fill-w)
   "Return a horizontal rule WIDTH units wide drawn with FILL glyphs.
-FILL-W is one FILL glyph's width.  Whole glyphs first, and when WIDTH
-is not a multiple of FILL-W (only possible in `pixel' mode with a font
-whose border glyphs are not multiples of each other) a spacer for the
-remainder, so the rule ends exactly where the next junction must
-start.  The spacer is a gap in the rule of less than one glyph."
+FILL-W is one FILL glyph's width.  Whole glyphs, and when WIDTH is not
+a multiple of FILL-W (only possible in `pixel' mode with a font whose
+border glyphs are not multiples of each other) spacers for the
+remainder, so the rule spans exactly from one junction to the next.
+The remainder is split evenly on both sides of the glyphs: a rule
+centred between its junctions with an equal small gap at each end
+reads as spacing, where one gap of up to a whole glyph on one side
+reads as a hole."
   (if (or (<= width 0) (<= fill-w 0))
       ""
     (let* ((count (/ width fill-w))
-           (remainder (- width (* count fill-w))))
+           (remainder (- width (* count fill-w)))
+           (rule (make-string count (string-to-char fill))))
       (if (zerop remainder)
-          (make-string count (string-to-char fill))
-        (concat (make-string count (string-to-char fill))
-                (vui--pad remainder))))))
+          rule
+        (let ((before (/ remainder 2)))
+          (concat (vui--pad before) rule (vui--pad (- remainder before))))))))
 
 (defvar vui--table-separators-memo nil
   "Alist of ((BORDER-STYLE . FACE) . (SEP . OVERFLOW-SEP)) strings.
