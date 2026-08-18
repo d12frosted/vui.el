@@ -7,6 +7,8 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+* v1.4.0 - 2026-08-18
+
 ** Added
 
 - =vui-width-mode=: choose how layout measures and pads text. The default,
@@ -44,6 +46,30 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =header-line-format=. Sticky headers must be plain strings (the pinned
   copy is unreachable by vui navigation); a vnode header signals an
   error (#117).
+
+- Large-state =:memo= scenarios in the benchmark suite
+  (=benchmarks/vui-bench.el=): the =:memo= bail-out now compares state with the
+  property-aware =vui--vnode-equal= (a Lisp walk) instead of C-level =equal=,
+  and nothing measured that cost against a large state value. Three end-to-end
+  cells against a btop-snapshot-shaped state (1000 process plists plus two
+  120-sample histories): identity-stable bail (the common case, stays at
+  microseconds regardless of state size), a small scalar change (memo must not
+  bail), and the worst case - replacing the state with a fresh but =equal=
+  structure, where the walk runs to completion (~1.2ms at this size, vs
+  ~0.07ms for the C walk it replaced; the flush is comparison-dominated). A
+  micro scenario prints the raw C-vs-Lisp walk ratio. Mechanism is asserted
+  throughout: a render counter proves each cell bails or renders exactly as
+  claimed, and the bail path is checked to refresh =prev-state= so the
+  worst-case cell cannot silently degrade to the =eq= fast path (#128).
+
+- Table scenarios in the benchmark suite (=benchmarks/vui-bench.el=): re-render
+  cost vs row count, vs column count, and string cells vs vnode cells. Tables
+  are the measurement-heavy path (column widths are recomputed from scratch
+  every render, so cost tracks cells rather than rows), which is exactly where
+  the cost of the width primitive shows up, and there was no scenario covering
+  them. A fourth scenario compares =char= and =pixel= width modes; it is
+  feature-detected and does nothing until the switch exists, so the same file
+  still runs on builds without it (#121).
 
 ** Changed
 
@@ -234,32 +260,6 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   hits the cache. The cost on the hot bail-out path is negligible: identical
   values short-circuit on =eq=, and even fresh-but-equal strings add well
   under a microsecond per component (#126).
-
-** Added
-
-- Large-state =:memo= scenarios in the benchmark suite
-  (=benchmarks/vui-bench.el=): the =:memo= bail-out now compares state with the
-  property-aware =vui--vnode-equal= (a Lisp walk) instead of C-level =equal=,
-  and nothing measured that cost against a large state value. Three end-to-end
-  cells against a btop-snapshot-shaped state (1000 process plists plus two
-  120-sample histories): identity-stable bail (the common case, stays at
-  microseconds regardless of state size), a small scalar change (memo must not
-  bail), and the worst case - replacing the state with a fresh but =equal=
-  structure, where the walk runs to completion (~1.2ms at this size, vs
-  ~0.07ms for the C walk it replaced; the flush is comparison-dominated). A
-  micro scenario prints the raw C-vs-Lisp walk ratio. Mechanism is asserted
-  throughout: a render counter proves each cell bails or renders exactly as
-  claimed, and the bail path is checked to refresh =prev-state= so the
-  worst-case cell cannot silently degrade to the =eq= fast path (#128).
-
-- Table scenarios in the benchmark suite (=benchmarks/vui-bench.el=): re-render
-  cost vs row count, vs column count, and string cells vs vnode cells. Tables
-  are the measurement-heavy path (column widths are recomputed from scratch
-  every render, so cost tracks cells rather than rows), which is exactly where
-  the cost of the width primitive shows up, and there was no scenario covering
-  them. A fourth scenario compares =char= and =pixel= width modes; it is
-  feature-detected and does nothing until the switch exists, so the same file
-  still runs on builds without it (#121).
 
 * v1.3.0 - 2026-07-02
 
