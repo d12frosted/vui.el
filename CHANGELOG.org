@@ -22,9 +22,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   rather than a per-component choice. Widths you pass in (=:width=, =:size=,
   =:indent=) are still in characters in both modes; pixel mode converts them
   internally. Pixel measurements are memoized in a global cache cleared on
-  =after-setting-font-hook=; the cache keys on string content only, so two
-  faces with different font metrics but identical text share an entry (a
-  documented approximation). Measured on the table benchmarks pixel mode
+  =after-setting-font-hook=. Measured on the table benchmarks pixel mode
   costs about 1.1x char mode at 1000x5, and it is GC-heavier on very large
   tables, which is why it stays opt in for now. On a tty frame the two modes
   render identically. Emacs 29 and 30 use a binary-search fallback for
@@ -65,6 +63,23 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =pixel= width mode measures faced text as faced text. Table headers were
+  measured plain and rendered bold, and the pixel cache keyed on string
+  content only, so a bold header and a plain cell with the same text shared
+  one width; in a monospace font that is invisible, in a proportional font
+  (=variable-pitch-mode=) the header row came out wider than its column
+  (measured 75px against 70px data rows in a GUI frame). Headers are now
+  measured wearing their header face, and the cache keys on the string's
+  characters plus its =face= and =display= properties (=vui--width-key=), and
+  nothing else: rendered buttons carry keymaps and action closures that do
+  not affect width and hold references back into the component tree, so
+  keying on every property would be both slow and unsafe. A property-free
+  string is its own key, so the common case allocates nothing. The space
+  width, which more than half of all lookups on a table render ask for,
+  gets a one-entry memo in front of the cache (=vui--space-pixel-width=),
+  cleared with it on font change. Net cost on the compiled table benchmark
+  is about 5 percent on the pixel path (#121).
+
 - =pixel= width mode now survives =text-scale-mode= and measures correctly
   under =variable-pitch-mode=. Measured in a GUI frame: a pixel-aligned
   table drifted after =C-x C-+= and stayed off even after a re-render. Two
@@ -87,9 +102,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =variable-pitch-mode=. Known limits: a proportional font whose box-drawing
   junctions come from a different fallback than its rules (Helvetica draws
   =─= at 12px and =┼= at 9px) cannot have a glyph-built border row match the
-  data rows, so use =:border nil= there; and a bold header in a
-  proportional font is still measured without its face (see the cache note
-  in the layout guide). Byte-identical in char mode (#121).
+  data rows, so use =:border nil= there. Byte-identical in char mode (#121).
 
 - Three more =pixel= width mode unit bugs, all invisible in batch (a pixel
   is a column there) and found by a new mocked-font test suite
