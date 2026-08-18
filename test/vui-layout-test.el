@@ -1265,6 +1265,36 @@
                     (vui-text "end")))
       (expect (buffer-string) :to-equal "hi     end")))
 
+  ;; In batch a pixel is a column, so pixel mode is only observable with
+  ;; a mocked `string-pixel-width'.  These pin the unit handoff between
+  ;; the flex distribution (mode units) and what growers receive.
+  (it "pads a vnode grower to its share in pixel mode without double conversion"
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'string-pixel-width)
+                 (lambda (s) (* 7 (string-width s)))))
+        (let ((vui-width-mode 'pixel))
+          (vui-render (vui-flex :width 10
+                        (vui-flex-item :grow 1 (vui-text "hi"))
+                        (vui-text "end")))
+          ;; 10 cols = 70px; "hi" 14px, "end" 21px, sep 7px -> share 28px = 4 spaces
+          (expect (buffer-string) :to-equal "hi     end")))))
+
+  (it "hands a function grower its share in characters in pixel mode"
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'string-pixel-width)
+                 (lambda (s) (* 7 (string-width s)))))
+        (let ((vui-width-mode 'pixel)
+              (got nil))
+          (vui-render (vui-flex :width 10
+                        (vui-text "ab")
+                        (vui-flex-item :grow 1
+                          (lambda (width)
+                            (setq got width)
+                            (vui-text (make-string width ?x))))))
+          ;; 70px - 14px - 7px = 49px = 7 columns, same as char mode
+          (expect got :to-equal 7)
+          (expect (buffer-string) :to-equal "ab xxxxxxx")))))
+
   (it "resolves :width from a function"
     (with-temp-buffer
       (vui-render (vui-flex :width (lambda () 8)
