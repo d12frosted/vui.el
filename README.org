@@ -237,6 +237,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 | 14 | [[file:docs/examples/14-claude-chat.el][Claude Chat]]           | A live chat against the =claude -p= CLI, streamed through =vui-stream=                  |
 | 15 | [[file:docs/examples/15-ci-dashboard.el][CI Dashboard]]          | A *real* GitHub Actions dashboard over =gh=: async run table, drill-down, log streaming |
 | 16 | [[file:docs/examples/16-sticky-table.el][Sticky Table]]          | A long filterable table whose header stays visible via =:sticky-header=                 |
+| 17 | [[file:docs/examples/17-pixel-width.el][Pixel Width]]           | Emoji, CJK and proportional text in tables, boxes and flex; toggle =vui-width-mode= live |
 
 * Available Components
 
