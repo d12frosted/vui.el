@@ -27,6 +27,7 @@ meant to gate CI.
 | Widgets           | Full re-render cost vs interactive widget (button) count   |
 | Tables            | Re-render cost vs rows, vs columns, and string vs vnode cells |
 | Table width mode  | char vs pixel measurement cost (#121), where the build has the switch |
+| Responsive layout | =vui-flex= with vs without =:wrap=, =vui-grid=, and composed multi-line rows (#134) |
 
 * What to expect (the shape, not the numbers)
 
