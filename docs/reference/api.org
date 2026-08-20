@@ -608,13 +608,9 @@ text so the blocks sit side by side; buttons keep working there, but
 widget fields and per-component regions do not survive text
 composition. Give stateful components inside a wrapped flex a =:key=.
 
-For live resizing, pass =window= or a function as =:width= and enable
-=vui-rerender-on-resize= in the buffer:
-
-#+begin_src elisp
-(with-current-buffer "*my-app*"
-  (vui-rerender-on-resize))
-#+end_src
+For live resizing, pass =window= or a function as =:width=; mounted
+buffers reflow on window size changes automatically (see
+=vui-rerender-on-resize=).
 
 ** vui-grid
 
@@ -664,6 +660,13 @@ current buffer. Re-renders go through the normal deferred scheduling,
 so a burst of resize events coalesces into one re-render per instance.
 The hook is buffer-local and dies with the buffer;
 =vui-cancel-rerender-on-resize= removes it earlier.
+
+=vui-mount= and =vui-mount-inline= install the hook automatically, so
+window-width-dependent layouts (=vui-flex= and =vui-grid= with
+=:width 'window= or a function) reflow with no setup. Set the
+defcustom =vui-rerender-on-resize-default= to nil for the previous
+opt-in behavior; buffers rendered with plain =vui-render= still need
+the explicit call.
 
 ** vui-region
 

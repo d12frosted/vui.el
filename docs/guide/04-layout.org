@@ -635,15 +635,15 @@ are all single-line render exactly like a non-wrapped flex, with full
 identity. Give stateful components inside a wrapped flex a =:key=.
 =:justify= is not applied under =:wrap=.
 
-For live resizing, use =window= or a function as =:width= and enable
-=vui-rerender-on-resize= in the buffer:
+For live resizing, use =window= or a function as =:width=:
 
 #+begin_src elisp
 (vui-flex :width (lambda () (- (window-width) 2)) ...)
-
-(with-current-buffer "*my-app*"
-  (vui-rerender-on-resize))
 #+end_src
+
+Buffers set up with =vui-mount= or =vui-mount-inline= reflow on window
+size changes automatically (=vui-rerender-on-resize-default=); for a
+plain =vui-render= buffer, call =vui-rerender-on-resize= yourself.
 
 * Responsive Grid - =vui-grid=
 
@@ -671,8 +671,8 @@ a =vui-flex-item= function child:
 
 Rows follow the same identity rules as =vui-flex= =:wrap=: single-line
 rows render in place, rows with multi-line cells are composed as text.
-Use =:row-spacing= for blank lines between rows, and pair
-=:width 'window= with =vui-rerender-on-resize= for live reflow.
+Use =:row-spacing= for blank lines between rows. With
+=:width 'window=, a mounted grid reflows as the window resizes.
 
 * Nesting Layouts
 

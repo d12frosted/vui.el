@@ -2980,6 +2980,19 @@ Installed buffer-locally on `window-size-change-functions' by
         (vui--schedule-deferred-render-for instance)
       (vui--rerender-instance instance))))
 
+(defcustom vui-rerender-on-resize-default t
+  "Whether mounting installs resize re-rendering automatically.
+When non-nil, `vui-mount' and `vui-mount-inline' call
+`vui-rerender-on-resize' on their buffer, so layouts whose width
+depends on the window (`vui-flex' and `vui-grid' with :width `window'
+or a function) reflow as the window changes without any setup.  The
+hook is cheap when nothing depends on the window - it only runs on
+actual size changes of the buffer's windows - and
+`vui-cancel-rerender-on-resize' removes it from a buffer at any time.
+Set to nil to restore the previous opt-in behavior."
+  :type 'boolean
+  :group 'vui)
+
 (defun vui-rerender-on-resize (&optional buffer)
   "Re-render BUFFER's VUI instances whenever its window size changes.
 BUFFER defaults to the current buffer.  Covers both the instance
@@ -6931,6 +6944,10 @@ Returns the root instance."
         (setq-local vui--root-instance instance)
         ;; Release component resources when the buffer is killed
         (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
+        ;; Reflow window-width-dependent layouts on resize (see
+        ;; `vui-rerender-on-resize-default')
+        (when vui-rerender-on-resize-default
+          (vui-rerender-on-resize))
         (let ((vui--root-instance instance))
           ;; Queue re-render requests (sync resolve, vui-set-state with
           ;; nil delay) until commit and effects are done
@@ -7013,6 +7030,10 @@ Example - an ephemeral form that dismisses itself on submit:
       (push instance vui--inline-instances)
       ;; Release component resources when the buffer is killed
       (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
+      ;; Reflow window-width-dependent layouts on resize (see
+      ;; `vui-rerender-on-resize-default')
+      (when vui-rerender-on-resize-default
+        (vui-rerender-on-resize))
       (vui--rerender-instance instance)
       instance)))
 

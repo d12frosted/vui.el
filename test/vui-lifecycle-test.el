@@ -301,5 +301,55 @@
             (expect render-count :to-equal 1))
         (kill-buffer "*test-resize-cancel*")))))
 
+(describe "resize re-rendering by default"
+  (it "vui-mount installs the resize hook on its own"
+    (vui-defcomponent resize-default-test ()
+      :render (vui-text "x"))
+    (vui-mount (vui-component 'resize-default-test) "*test-resize-default*")
+    (unwind-protect
+        (with-current-buffer "*test-resize-default*"
+          (expect (memq #'vui--on-window-size-change
+                        window-size-change-functions)
+                  :to-be-truthy))
+      (kill-buffer "*test-resize-default*")))
+
+  (it "vui-mount-inline installs the resize hook on its own"
+    (vui-defcomponent resize-default-inline-test ()
+      :render (vui-text "[x]"))
+    (with-current-buffer (get-buffer-create "*test-resize-default-inline*")
+      (insert "HOST")
+      (goto-char (point-max))
+      (vui-mount-inline (vui-component 'resize-default-inline-test))
+      (expect (memq #'vui--on-window-size-change
+                    window-size-change-functions)
+              :to-be-truthy))
+    (kill-buffer "*test-resize-default-inline*"))
+
+  (it "stays off when vui-rerender-on-resize-default is nil"
+    (vui-defcomponent resize-default-off-test ()
+      :render (vui-text "x"))
+    (let ((vui-rerender-on-resize-default nil))
+      (vui-mount (vui-component 'resize-default-off-test)
+                 "*test-resize-default-off*"))
+    (unwind-protect
+        (with-current-buffer "*test-resize-default-off*"
+          (expect (memq #'vui--on-window-size-change
+                        window-size-change-functions)
+                  :to-be nil))
+      (kill-buffer "*test-resize-default-off*")))
+
+  (it "can still be cancelled after the default install"
+    (vui-defcomponent resize-default-cancel-test ()
+      :render (vui-text "x"))
+    (vui-mount (vui-component 'resize-default-cancel-test)
+               "*test-resize-default-cancel*")
+    (unwind-protect
+        (with-current-buffer "*test-resize-default-cancel*"
+          (vui-cancel-rerender-on-resize)
+          (expect (memq #'vui--on-window-size-change
+                        window-size-change-functions)
+                  :to-be nil))
+      (kill-buffer "*test-resize-default-cancel*"))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here
