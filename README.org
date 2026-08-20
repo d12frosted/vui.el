@@ -254,6 +254,7 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 | 16 | [[file:docs/examples/16-sticky-table.el][Sticky Table]]          | A long filterable table whose header stays visible via =:sticky-header=                 |
 | 17 | [[file:docs/examples/17-pixel-width.el][Pixel Width]]           | Emoji, CJK and proportional text in tables, boxes and flex; toggle =vui-width-mode= live |
 | 18 | [[file:docs/examples/18-variable-pitch.el][Variable Pitch]]        | Pixel layout in a proportional font: bordered tables, boxes and flex under =variable-pitch-mode=, live toggles |
+| 19 | [[file:docs/examples/19-responsive-dashboard.el][Responsive Dashboard]]  | Bordered cards reflowing through =vui-grid= and =vui-flex= =:wrap=: columns drop and panels stack as the width shrinks |
 
 * Available Components
 

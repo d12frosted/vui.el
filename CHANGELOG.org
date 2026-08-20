@@ -49,6 +49,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =:row-spacing= inserts blank lines between rows. Identity follows
   =vui-flex= =:wrap=: single-line rows render in place, rows with
   multi-line cells are composed as text. Works in both width modes.
+  Example 19 (=vui-example-responsive-dashboard=) shows the containers
+  together: a grid of bordered stat cards that drops columns as the
+  width shrinks, panels of different heights stacking, a width-filling
+  gauge, and a collapsible section whose body is itself a grid.
 
 - =vui-flex= accepts =:wrap t=: children flow into rows in source order
   when their widths stop fitting the total, instead of overflowing the
