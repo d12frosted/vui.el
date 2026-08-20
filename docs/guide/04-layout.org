@@ -629,10 +629,12 @@ shrink down to a floor before its row gives up and wraps:
 
 Multi-line children become proper blocks: a row places them side by
 side line by line, as tall as its tallest block. Such composed rows
-are text (like table cells): buttons keep working, but widget fields
-and component regions do not survive composition. Rows whose children
-are all single-line render exactly like a non-wrapped flex, with full
-identity. Give stateful components inside a wrapped flex a =:key=.
+are text (like table cells): buttons keep working, but components in
+them never mount - no state, no lifecycle, no working
+=vui-set-state= - and widget fields do not survive composition. Rows
+whose children are all single-line render exactly like a non-wrapped
+flex, with full identity, so that is where stateful components
+belong. Give components a =:key= so measurement matches them exactly.
 =:justify= is not applied under =:wrap=.
 
 For live resizing, use =window= or a function as =:width=:

@@ -11,8 +11,8 @@
 ;;   M-x vui-example-flex-justify   ; the four :justify modes
 ;;   M-x vui-example-flex-split     ; proportional :grow panels
 ;;
-;; In the form, try resizing the window: it enables
-;; vui-rerender-on-resize, so the fields restretch live.
+;; In the form, try resizing the window: mounted buffers reflow on
+;; window resize by default, so the fields restretch live.
 
 ;;; Code:
 
@@ -65,11 +65,9 @@ ON-CHANGE is called with the new value."
 (defun vui-example-flex-form ()
   "Run the flex form example (fields stretch to the window width)."
   (interactive)
-  (let ((buf "*vui-flex-form*"))
-    (vui-mount (vui-component 'flex-form) buf)
-    ;; Keep the fields stretched as the window is resized.
-    (with-current-buffer buf
-      (vui-rerender-on-resize))))
+  ;; Mounted buffers reflow on window resize by default, so the
+  ;; fields stay stretched with no extra setup.
+  (vui-mount (vui-component 'flex-form) "*vui-flex-form*"))
 
 ;;; Example 2: the four :justify modes
 ;;

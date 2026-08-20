@@ -277,7 +277,8 @@ See [[file:docs/examples/][docs/examples/]] for complete, runnable examples:
 |--------------+-----------------------------------------|
 | =vui-hstack= | Horizontal layout with spacing          |
 | =vui-vstack= | Vertical layout with spacing/indent     |
-| =vui-flex=   | Row distributing width among children   |
+| =vui-flex=   | Row distributing width among children; =:wrap= flows them into rows |
+| =vui-grid=   | Responsive equal-track grid             |
 | =vui-box=    | Fixed-width container with alignment    |
 | =vui-table=  | Table with headers (optionally sticky), borders, alignment |
 | =vui-list=   | Dynamic list with key-based reconcile   |
