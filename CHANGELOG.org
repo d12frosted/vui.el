@@ -26,6 +26,23 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-flex= accepts =:wrap t=: children flow into rows in source order
+  when their widths stop fitting the total, instead of overflowing the
+  line (#134). Each row distributes width independently through the
+  pure core in =vui-layout.el=: growers grow into their row's leftover,
+  and the new =vui-flex-item= =:min-width= lets a child shrink down to
+  a floor before the row wraps (for a function child it is also the
+  width it occupies during partitioning). Multi-line children become
+  real blocks: a row containing one lays its children side by side,
+  line by line, as tall as its tallest block - so panels and boxes sit
+  next to each other when the buffer is wide and stack when it is
+  narrow. Identity is per row: a row whose children are all single-line
+  renders in place exactly like a non-wrapped flex (components, fields,
+  and buttons keep their identity), while a composed multi-line row is
+  text like a table cell (buttons work; widget fields and component
+  regions do not survive composition). =:justify= is not applied under
+  =:wrap=. Works in both =char= and =pixel= width modes.
+
 - =vui-layout.el=: the pure layout core behind the responsive containers
   planned in #134. Pure functions over integers, plists, and lists of
   strings, with no dependency on vui.el: proportional integer shares with

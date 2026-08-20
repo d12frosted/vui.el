@@ -816,5 +816,29 @@ bites; the tests just have to respect it."
      (lambda () (vui-table :columns '((:header "Name") (:header "N"))
                            :rows '(("plain" "1") ("ok" "2")))))))
 
+;;; Wrapping flex
+
+(describe "pixel mode and vui-flex :wrap"
+  (it "keeps char mode byte-identical on wrapped ASCII rows"
+    (vui-test--parity
+     (lambda () (vui-flex :width 7 :wrap t
+                  (vui-text "aaa") (vui-text "bbb") (vui-text "ccc")))))
+
+  (it "keeps char mode byte-identical on a composed ASCII row"
+    (vui-test--parity
+     (lambda () (vui-flex :width 9 :wrap t
+                  (vui-vstack (vui-text "a") (vui-text "bb"))
+                  (vui-text "ccc")))))
+
+  (it "pads composed rows to equal pixel width with wide glyphs"
+    (vui-test--with-pixel-font
+      (let ((out (vui-test--render-string
+                  (vui-flex :width 10 :wrap t
+                    (vui-vstack (vui-text "你") (vui-text "ab"))
+                    (vui-flex-item :grow 1 (vui-text "c"))))))
+        ;; 你 measures 11px, not the 14px char mode assumes; every
+        ;; composed line must still land on the full 70px row.
+        (expect (vui-test--line-px out) :to-equal '(70 70))))))
+
 (provide 'vui-width-mode-test)
 ;;; vui-width-mode-test.el ends here
