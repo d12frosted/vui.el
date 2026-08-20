@@ -740,6 +740,20 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   face       ; Face applied beneath the children's own faces
   keymap)    ; Keymap cascading beneath the children's own keymaps
 
+;; Layout: responsive equal-track grid
+(cl-defstruct (vui-vnode-grid (:include vui-vnode)
+                              (:constructor vui-vnode-grid--create))
+  "Responsive grid: equal tracks, column count falls with the width."
+  children         ; List of cell vnodes, or functions of the track width
+  columns          ; Requested (maximum) column count
+  min-column-width ; Smallest acceptable track (chars), or nil
+  width            ; Total width: number, function, `fill-column', `window'
+  spacing          ; Gap between tracks (default 1)
+  row-spacing      ; Blank lines between rows (default 0)
+  indent           ; Inherited indent from parent (subtracted from width)
+  face             ; Face applied beneath the cells' own faces
+  keymap)          ; Keymap cascading beneath the cells' own keymaps
+
 ;; Wrapper marking a flex child that takes a share of leftover width
 (cl-defstruct (vui-vnode-flex-item (:include vui-vnode)
                                    (:constructor vui-vnode-flex-item--create))
@@ -1598,6 +1612,84 @@ Outside of `vui-flex', the child renders at its natural width."
      :child child
      :grow grow
      :min-width min-width
+     :key key)))
+
+(defun vui-grid (&rest args)
+  "Create a responsive grid of equal-width tracks.
+ARGS can start with keyword options, followed by the cells.
+
+Options:
+  :columns N          - the column count to aim for (default 2)
+  :min-column-width M - smallest acceptable track, in characters; the
+                        column count falls until tracks of at least M
+                        fit the total, never below one column
+  :width W            - the total width, like `vui-flex' :width
+                        (default `fill-column')
+  :spacing N          - gap between tracks (default 1)
+  :row-spacing N      - blank lines between rows (default 0)
+  :indent N           - inherited indent, set by a parent vstack;
+                        subtracted from the total width
+  :face FACE          - applied beneath the cells' own faces
+  :keymap MAP         - cascades beneath the cells' own keymaps
+  :key KEY            - for reconciliation
+
+Cells fill rows in source order, so the final row may be incomplete.
+Every track is the same width, remainders going to the earlier tracks;
+a cell wider than its track widens that whole column, across every
+row, so columns stay aligned.  A cell may be a function: it is called
+with the track width in characters and must return a vnode - how a
+table or field fills its track exactly.
+
+Identity follows `vui-flex' :wrap: a row of single-line cells renders
+in place (components and widgets keep their identity), a row with a
+multi-line cell is composed as text (buttons keep working; widget
+fields and per-component regions do not survive composition).  Give
+stateful components in a grid a :key.
+
+Usage:
+  (vui-grid :width \\='window :columns 3 :min-column-width 24
+    (panel-1) (panel-2) (panel-3))"
+  (let ((columns 2)
+        (min-column-width nil)
+        (width 'fill-column)
+        (spacing 1)
+        (row-spacing 0)
+        (indent 0)
+        (face nil)
+        (keymap nil)
+        (key nil)
+        (children nil))
+    (while (and args (keywordp (car args)))
+      (pcase (pop args)
+        (:columns (setq columns (pop args)))
+        (:min-column-width (setq min-column-width (pop args)))
+        (:width (setq width (pop args)))
+        (:spacing (setq spacing (pop args)))
+        (:row-spacing (setq row-spacing (pop args)))
+        (:indent (setq indent (pop args)))
+        (:face (setq face (pop args)))
+        (:keymap (setq keymap (pop args)))
+        (:key (setq key (pop args)))))
+    ;; Flatten nested lists of cells, but keep functions whole: an
+    ;; interpreted closure is itself a list and must not be flattened.
+    (dolist (arg args)
+      (cond
+       ((null arg))
+       ((functionp arg) (push arg children))
+       ((and (listp arg) (not (vui-vnode-p arg)))
+        (dolist (sub (remq nil (flatten-list arg)))
+          (push sub children)))
+       (t (push arg children))))
+    (vui-vnode-grid--create
+     :children (nreverse children)
+     :columns columns
+     :min-column-width min-column-width
+     :width width
+     :spacing spacing
+     :row-spacing row-spacing
+     :indent indent
+     :face face
+     :keymap keymap
      :key key)))
 
 (cl-defun vui-error-boundary (&key fallback on-error id children)
@@ -4837,6 +4929,108 @@ new line, indented by the flex's :indent."
                              (vui-vnode-flex-face vnode)
                              (vui-vnode-flex-keymap vnode))))
 
+(defun vui--render-grid (vnode)
+  "Render a `vui-grid' VNODE: cells on equal tracks, rows in source order.
+Measures every static cell once (mounted components at their current
+state), asks the pure core for the responsive column count and track
+widths, widens any column whose content overflows its track - across
+all rows, so columns stay aligned - then renders row by row with the
+same identity rules as `vui--render-flex-wrap': single-line rows
+in place, rows containing a multi-line cell composed as text."
+  (let* ((children (vui-vnode-grid-children vnode))
+         (spacing (vui--width (or (vui-vnode-grid-spacing vnode) 1)))
+         (row-spacing (or (vui-vnode-grid-row-spacing vnode) 0))
+         (indent (vui--width (or (vui-vnode-grid-indent vnode) 0)))
+         (total (max 0 (- (vui--flex-resolve-width (vui-vnode-grid-width vnode))
+                          indent)))
+         (columns (max 1 (or (vui-vnode-grid-columns vnode) 2)))
+         (min-chars (vui-vnode-grid-min-column-width vnode))
+         (count (vui-layout-grid-columns
+                 columns (and min-chars (vui--width min-chars))
+                 total spacing))
+         (tracks (vui-layout-grid-tracks count total spacing))
+         (grid-start (point))
+         ;; Measure every static cell once, under a reconciliation
+         ;; cursor so mounted components measure at current state.
+         (cells (let ((vui--measure-reconcile
+                       (and vui--current-instance
+                            (cons vui--current-instance vui--child-index))))
+                  (mapcar (lambda (child)
+                            (if (functionp child)
+                                (list :child child :function t)
+                              (let ((block (vui--measure-block child)))
+                                (list :child child :block (car block)
+                                      :natural (cdr block)))))
+                          children)))
+         ;; Effective column widths: content wider than its track
+         ;; widens the whole column, for every row.
+         (widths (copy-sequence tracks))
+         (first-row t)
+         (index 0))
+    (let ((col 0))
+      (dolist (cell cells)
+        (let ((natural (plist-get cell :natural)))
+          (when (and natural (> natural (nth col widths)))
+            (setcar (nthcdr col widths) natural)))
+        (setq col (% (1+ col) count))))
+    (dolist (row (seq-partition cells count))
+      (unless first-row
+        (insert "\n")
+        (dotimes (_ row-spacing) (insert "\n"))
+        (when (> indent 0)
+          (insert (vui--pad indent))))
+      (setq first-row nil)
+      (if (cl-some (lambda (cell) (cdr (plist-get cell :block))) row)
+          ;; Composed row: static cells reuse their measured lines,
+          ;; function cells render at their track width.
+          (let* ((col -1)
+                 (blocks
+                  (mapcar (lambda (cell)
+                            (cl-incf col)
+                            (if (plist-get cell :function)
+                                (car (vui--measure-block
+                                      (funcall (plist-get cell :child)
+                                               (vui--width-to-chars
+                                                (nth col tracks)))))
+                              (plist-get cell :block)))
+                          row))
+                 (lines (vui-layout-compose
+                         blocks (cl-subseq widths 0 (length row)) spacing
+                         #'vui--text-width #'vui--pad))
+                 (first-line t))
+            (dolist (line lines)
+              (unless first-line
+                (insert "\n")
+                (when (> indent 0)
+                  (insert (vui--pad indent))))
+              (setq first-line nil)
+              (insert line)))
+        ;; Single-line row: render cells in place, padded to their
+        ;; column, identity preserved.
+        (let ((col 0))
+          (dolist (cell row)
+            (let ((vui--render-path (cons (+ index col) vui--render-path))
+                  (content-start nil))
+              (when (> col 0)
+                (insert (vui--pad spacing)))
+              (setq content-start (point))
+              (if (plist-get cell :function)
+                  (vui--render-vnode
+                   (funcall (plist-get cell :child)
+                            (vui--width-to-chars (nth col tracks))))
+                (vui--render-vnode (plist-get cell :child)))
+              (let ((rendered
+                     (if (plist-get cell :function)
+                         (vui--text-width
+                          (buffer-substring content-start (point)) t)
+                       (plist-get cell :natural))))
+                (insert (vui--pad (max 0 (- (nth col widths) rendered))))))
+            (cl-incf col))))
+      (cl-incf index (length row)))
+    (vui--apply-region-props grid-start (point)
+                             (vui-vnode-grid-face vnode)
+                             (vui-vnode-grid-keymap vnode))))
+
 ;;; Incremental rendering (issue #82)
 
 (defun vui--incremental-content-child-p (vnode)
@@ -6301,6 +6495,23 @@ wholesale render's empty-child handling)."
                   :face (vui-vnode-flex-face child)
                   :keymap (vui-vnode-flex-keymap child)
                   :key (vui-vnode-flex-key child))))
+               ;; Propagate indent to grids the same way
+               ((and (vui-vnode-grid-p child) (> indent 0))
+                (unless skip-this-indent
+                  (insert indent-str))
+                (setq content-start (point))
+                (vui--render-vnode
+                 (vui-vnode-grid--create
+                  :children (vui-vnode-grid-children child)
+                  :columns (vui-vnode-grid-columns child)
+                  :min-column-width (vui-vnode-grid-min-column-width child)
+                  :width (vui-vnode-grid-width child)
+                  :spacing (vui-vnode-grid-spacing child)
+                  :row-spacing (vui-vnode-grid-row-spacing child)
+                  :indent (+ indent (or (vui-vnode-grid-indent child) 0))
+                  :face (vui-vnode-grid-face child)
+                  :keymap (vui-vnode-grid-keymap child)
+                  :key (vui-vnode-grid-key child))))
                ;; Tables: render with indent, then add indent after internal newlines
                ((and (vui-vnode-table-p child) (> indent 0))
                 (unless skip-this-indent
@@ -6509,6 +6720,10 @@ wholesale render's empty-child handling)."
     (if (vui-vnode-flex-wrap vnode)
         (vui--render-flex-wrap vnode)
       (vui--render-flex vnode)))
+
+   ;; Responsive grid
+   ((vui-vnode-grid-p vnode)
+    (vui--render-grid vnode))
 
    ;; Flex item outside vui-flex: render the child at natural width
    ((vui-vnode-flex-item-p vnode)

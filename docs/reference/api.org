@@ -616,6 +616,41 @@ For live resizing, pass =window= or a function as =:width= and enable
   (vui-rerender-on-resize))
 #+end_src
 
+** vui-grid
+
+#+begin_src elisp
+(vui-grid [OPTIONS...] CELLS...) -> vnode
+#+end_src
+
+Responsive grid of equal-width tracks. Cells fill rows in source order
+(the final row may be incomplete); the column count falls with the
+available width.
+
+| Option               | Type            | Default       | Description                          |
+|----------------------+-----------------+---------------+--------------------------------------|
+| =:columns=           | integer         | 2             | Column count to aim for              |
+| =:min-column-width=  | integer         | nil           | Smallest acceptable track (chars); columns drop until tracks fit, never below one |
+| =:width=             | number/fn/symbol | =fill-column= | Total width, like =vui-flex= =:width= |
+| =:spacing=           | integer         | 1             | Gap between tracks                   |
+| =:row-spacing=       | integer         | 0             | Blank lines between rows             |
+| =:face=              | face            | nil           | Applied beneath cells' faces         |
+| =:keymap=            | keymap          | nil           | Cascades beneath cells' keymaps      |
+| =:key=               | any             | nil           | Reconciliation key                   |
+
+Tracks are equal integer widths, remainders on the earlier tracks. A
+cell wider than its track widens that whole column, across every row,
+so columns stay aligned. A cell may be a function: it is called with
+the track width in characters and returns a vnode. Identity follows
+=vui-flex= =:wrap=: single-line rows render in place, rows containing
+a multi-line cell are composed as text (buttons work; widget fields
+and per-component regions do not survive composition). Give stateful
+components in a grid a =:key=.
+
+#+begin_src elisp
+(vui-grid :width 'window :columns 3 :min-column-width 24
+  (panel-1) (panel-2) (panel-3))
+#+end_src
+
 ** vui-rerender-on-resize
 
 #+begin_src elisp
