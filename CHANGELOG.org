@@ -7,6 +7,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Changed
+
+- Mounted buffers reflow on window resize by default: =vui-mount= and
+  =vui-mount-inline= now install =vui-rerender-on-resize= themselves,
+  so =vui-flex= and =vui-grid= layouts whose :width follows the window
+  respond to resizes with no setup. The hook only runs on actual size
+  changes of the buffer's windows and coalesces through the normal
+  deferred scheduling. Set =vui-rerender-on-resize-default= to nil for
+  the previous opt-in behavior; plain =vui-render= buffers still need
+  the explicit call (#134).
+
 ** Fixed
 
 - Measuring a mounted component now sees its current state. Layout
