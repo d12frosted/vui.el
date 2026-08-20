@@ -74,6 +74,21 @@
                (vui-text "b")))
             :to-equal "xxxx b   "))
 
+  (it "composes a row whose function cell renders multi-line"
+    (expect (vui-grid-test--render
+             (vui-grid :width 9 :columns 2
+               (lambda (_w) (vui-vstack (vui-text "a") (vui-text "bb")))
+               (vui-text "c")))
+            :to-equal "a    c   \nbb       "))
+
+  (it "widens a column for an oversized function cell"
+    (expect (vui-grid-test--render
+             (vui-grid :width 9 :columns 2
+               (lambda (_w) (vui-text "xxxxxx"))
+               (vui-text "b")
+               (vui-text "c") (vui-text "d")))
+            :to-equal "xxxxxx b   \nc      d   "))
+
   (it "separates rows by :row-spacing blank lines"
     (expect (vui-grid-test--render
              (vui-grid :width 9 :columns 2 :row-spacing 1
