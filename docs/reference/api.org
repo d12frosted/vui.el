@@ -604,9 +604,12 @@ row runs out of space. A row whose children are all single-line
 renders them in place, exactly like a non-wrapped flex - components
 and widgets keep their identity. A row containing a multi-line child
 (a box, a vstack, a table) is composed from the children's rendered
-text so the blocks sit side by side; buttons keep working there, but
-widget fields and per-component regions do not survive text
-composition. Give stateful components inside a wrapped flex a =:key=.
+text so the blocks sit side by side. Composed rows are content:
+buttons keep working, but components in them never mount - no state,
+no lifecycle, and =vui-set-state= from inside them does nothing - and
+widget fields do not survive composition. Keep stateful components on
+single-line rows (or outside =:wrap=), and give components a =:key=
+so measurement matches them exactly.
 
 For live resizing, pass =window= or a function as =:width=; mounted
 buffers reflow on window size changes automatically (see
@@ -638,9 +641,11 @@ cell wider than its track widens that whole column, across every row,
 so columns stay aligned. A cell may be a function: it is called with
 the track width in characters and returns a vnode. Identity follows
 =vui-flex= =:wrap=: single-line rows render in place, rows containing
-a multi-line cell are composed as text (buttons work; widget fields
-and per-component regions do not survive composition). Give stateful
-components in a grid a =:key=.
+a multi-line cell are composed as text (buttons work; components in
+composed rows never mount, and widget fields do not survive
+composition). Keep stateful components in single-line cells, and give
+components a =:key= so measurement matches them exactly. An empty
+cell keeps its track, so columns stay aligned.
 
 #+begin_src elisp
 (vui-grid :width 'window :columns 3 :min-column-width 24
