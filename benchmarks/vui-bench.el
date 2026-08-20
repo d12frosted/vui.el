@@ -245,6 +245,27 @@ render path instead of measuring the string directly."
                             for s = (format "r%dc%d value" r c)
                             collect (if vnode (vui-text s) s))))
 
+(vui-defcomponent vui-bench-flex-row (n wrap)
+  ;; Single-line children: with :wrap the rows still render inline, so
+  ;; this isolates the cost of the measure + placement pass itself.
+  :render (apply #'vui-flex :width 80 :wrap wrap
+                 (mapcar (lambda (i) (vui-text (format "item-%03d" i)))
+                         (number-sequence 1 n))))
+
+(vui-defcomponent vui-bench-grid-view (n)
+  :render (apply #'vui-grid :width 80 :columns 4
+                 (mapcar (lambda (i) (vui-text (format "cell-%03d" i)))
+                         (number-sequence 1 n))))
+
+(vui-defcomponent vui-bench-panel-row (n)
+  ;; Multi-line children: every row takes the composed (string) path.
+  :render (apply #'vui-flex :width 80 :wrap t
+                 (mapcar (lambda (i)
+                           (vui-vstack (vui-text (format "Panel %d" i))
+                                       (vui-text "line one")
+                                       (vui-text "line two")))
+                         (number-sequence 1 n))))
+
 ;;; Scenarios
 
 (defconst vui-bench--sizes '(50 200 500 1000 2000 4000)
@@ -1290,6 +1311,29 @@ comparison takes the extra mode argument."
 ;; Back-compat alias for the entry point referenced in docs/changelog.
 (defalias 'vui-bench-compare-all #'vui-bench-compare-run)
 
+(defun vui-bench-responsive ()
+  "Wrapped flex and grid layout cost vs child count (issue #134).
+Renders at width 80.  The flex rows compare the same single-line
+children with and without :wrap (the wrap overhead is the measure +
+placement pass; rows still render inline), the grid sweeps cells over
+4 columns, and the panel rows force every row down the composed
+(string) path with 3-line blocks."
+  (vui-bench--header "Responsive layout (mount at width 80)")
+  (dolist (n '(10 50 100 200))
+    (dolist (case `(("flex" vui-bench-flex-row (:n ,n :wrap nil))
+                    ("flex :wrap" vui-bench-flex-row (:n ,n :wrap t))
+                    ("grid 4-col" vui-bench-grid-view (:n ,n))
+                    ("panels :wrap" vui-bench-panel-row (:n ,n))))
+      (let ((buf (format "*vui-bench-resp-%d*" n)))
+        (vui-bench--result-row
+         (format "%-13s %4d" (nth 0 case) n)
+         (vui-bench--measure
+          5 (lambda () (vui-mount (apply #'vui-component (nth 1 case)
+                                         (nth 2 case))
+                                  buf))))
+        (vui-unmount buf)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
 (defun vui-bench-run ()
   "Run the full vui benchmark suite and print a report."
   (interactive)
@@ -1311,6 +1355,7 @@ comparison takes the extra mode argument."
     (vui-bench-table-columns)
     (vui-bench-table-cells)
     (vui-bench-table-width-mode)
+    (vui-bench-responsive)
     (vui-bench-component-bailout)
     (vui-bench-memo-state)
     (vui-bench-memo-state-micro)
