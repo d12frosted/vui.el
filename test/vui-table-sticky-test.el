@@ -96,26 +96,29 @@
 
   (it "returns the header with border prefix and faces intact"
     (with-temp-buffer
-      (vui-render (vui-table
-                   :sticky-header t
-                   :columns '((:header "A" :width 3 :grow t)
-                              (:header "B" :width 3 :grow t))
-                   :rows '(("1" "2"))
-                   :border :ascii))
-      (let* ((row-pos (vui-sticky--pos-of "| 1"))
-             (pinned (vui--table-sticky-header row-pos)))
-        (expect (substring-no-properties pinned 1) :to-equal "| A   | B   |")
-        ;; Alignment prefix over the fringe
-        (expect (get-text-property 0 'display pinned)
-                :to-equal '(space :align-to 0))
-        ;; Faces come straight from the buffer text
-        (let* ((plain (substring-no-properties pinned))
-               (cell-pos (cl-position ?A plain))
-               (border-pos (cl-position ?| plain)))
-          (expect (get-text-property cell-pos 'face pinned)
-                  :to-equal 'vui-table-header)
-          (expect (get-text-property border-pos 'face pinned)
-                  :to-equal 'vui-table-border)))))
+      ;; Mock line-number-display-width
+      (cl-letf (((symbol-function 'line-number-display-width)
+                 (lambda (&optional type) (if (eq type 'columns) 4.0 28))))
+        (vui-render (vui-table
+                     :sticky-header t
+                     :columns '((:header "A" :width 3 :grow t)
+                                (:header "B" :width 3 :grow t))
+                     :rows '(("1" "2"))
+                     :border :ascii))
+        (let* ((row-pos (vui-sticky--pos-of "| 1"))
+               (pinned (vui--table-sticky-header row-pos)))
+          (expect (substring-no-properties pinned 1) :to-equal "| A   | B   |")
+          ;; Alignment prefix over the fringe, margin, and line numbers.
+          (expect (get-text-property 0 'display pinned)
+                  :to-equal '(space :align-to 4.0))
+          ;; Faces come straight from the buffer text
+          (let* ((plain (substring-no-properties pinned))
+                 (cell-pos (cl-position ?A plain))
+                 (border-pos (cl-position ?| plain)))
+            (expect (get-text-property cell-pos 'face pinned)
+                    :to-equal 'vui-table-header)
+            (expect (get-text-property border-pos 'face pinned)
+                    :to-equal 'vui-table-border))))))
 
   (it "hands the pin over between multiple sticky tables"
     (with-temp-buffer

@@ -56,6 +56,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   in instead of the global default. Other buffer-local variables are
   still not carried; composed content should not depend on them.
 
+- the alignment of the sticky header in =vui-table= when
+  =display-line-numbers-mode= is enabled. =:align-to 0= marks the physical
+  start of the text area. However, Emacs may insert virtual content at the
+  beginning of the text area, such as =line-numbers=. Using =:align-to
+  ,(line-number-display-width 'columns)= will align the sticky header correctly.
+
 ** Added
 
 - =vui-grid=: a responsive grid of equal-width tracks (#134). Cells
