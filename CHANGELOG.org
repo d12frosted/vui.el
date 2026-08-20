@@ -7,6 +7,26 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Added
+
+- =vui-layout.el=: the pure layout core behind the responsive containers
+  planned in #134. Pure functions over integers, plists, and lists of
+  strings, with no dependency on vui.el: proportional integer shares with
+  deterministic remainder distribution (=vui-layout-shares=), source-order
+  row partitioning at minimum widths (=vui-layout-partition=), per-row
+  allocation with grow, shrink toward =:min=, =:rigid= floors, and a lone
+  oversized child clamped to the row unless rigid (=vui-layout-allocate=),
+  end-to-end placements (=vui-layout-solve=), responsive equal-track grid
+  math (=vui-layout-grid-columns=, =vui-layout-grid-tracks=,
+  =vui-layout-grid=), and a block composer that widens a column
+  deterministically when a block overflows its assignment
+  (=vui-layout-compose=). Widths are unit-agnostic integers: the core
+  never measures, and the composer measures and pads through
+  caller-supplied functions (cells by default), so cells vs pixels is the
+  consumer's choice. The semantics deliberately match yibie/textui's
+  engine where sensible, so the conformance comparison explored in
+  yibie/textui#1 stays meaningful.
+
 * v1.4.0 - 2026-08-18
 
 ** Added
