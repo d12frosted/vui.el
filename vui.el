@@ -4963,17 +4963,27 @@ in place, rows containing a multi-line cell composed as text."
                  total spacing))
          (tracks (vui-layout-grid-tracks count total spacing))
          (grid-start (point))
-         ;; Measure every static cell once, under a reconciliation
-         ;; cursor so mounted components measure at current state.
+         ;; Measure every cell once, under a reconciliation cursor so
+         ;; mounted components measure at current state.  Unlike flex,
+         ;; the tracks are known before anything renders, so function
+         ;; cells measure too - at their track width - and multi-line
+         ;; function output composes like any other block.
          (cells (let ((vui--measure-reconcile
                        (and vui--current-instance
-                            (cons vui--current-instance vui--child-index))))
+                            (cons vui--current-instance vui--child-index)))
+                     (col 0))
                   (mapcar (lambda (child)
-                            (if (functionp child)
-                                (list :child child :function t)
-                              (let ((block (vui--measure-block child)))
-                                (list :child child :block (car block)
-                                      :natural (cdr block)))))
+                            (let* ((track (nth col tracks))
+                                   (block (vui--measure-block
+                                           (if (functionp child)
+                                               (funcall child
+                                                        (vui--width-to-chars track))
+                                             child))))
+                              (setq col (% (1+ col) count))
+                              (list :child child
+                                    :function (and (functionp child) t)
+                                    :block (car block)
+                                    :natural (cdr block))))
                           children)))
          ;; Effective column widths: content wider than its track
          ;; widens the whole column, for every row.
@@ -4994,19 +5004,8 @@ in place, rows containing a multi-line cell composed as text."
           (insert (vui--pad indent))))
       (setq first-row nil)
       (if (cl-some (lambda (cell) (cdr (plist-get cell :block))) row)
-          ;; Composed row: static cells reuse their measured lines,
-          ;; function cells render at their track width.
-          (let* ((col -1)
-                 (blocks
-                  (mapcar (lambda (cell)
-                            (cl-incf col)
-                            (if (plist-get cell :function)
-                                (car (vui--measure-block
-                                      (funcall (plist-get cell :child)
-                                               (vui--width-to-chars
-                                                (nth col tracks)))))
-                              (plist-get cell :block)))
-                          row))
+          ;; Composed row: every cell reuses its measured lines.
+          (let* ((blocks (mapcar (lambda (cell) (plist-get cell :block)) row))
                  (lines (vui-layout-compose
                          blocks (cl-subseq widths 0 (length row)) spacing
                          #'vui--text-width #'vui--pad))
@@ -5019,25 +5018,21 @@ in place, rows containing a multi-line cell composed as text."
               (setq first-line nil)
               (insert line)))
         ;; Single-line row: render cells in place, padded to their
-        ;; column, identity preserved.
+        ;; column, identity preserved.  A function cell renders again
+        ;; here (the same output it measured as), so a field or button
+        ;; it returns lands in the real buffer.
         (let ((col 0))
           (dolist (cell row)
-            (let ((vui--render-path (cons (+ index col) vui--render-path))
-                  (content-start nil))
+            (let ((vui--render-path (cons (+ index col) vui--render-path)))
               (when (> col 0)
                 (insert (vui--pad spacing)))
-              (setq content-start (point))
               (if (plist-get cell :function)
                   (vui--render-vnode
                    (funcall (plist-get cell :child)
                             (vui--width-to-chars (nth col tracks))))
                 (vui--render-vnode (plist-get cell :child)))
-              (let ((rendered
-                     (if (plist-get cell :function)
-                         (vui--text-width
-                          (buffer-substring content-start (point)) t)
-                       (plist-get cell :natural))))
-                (insert (vui--pad (max 0 (- (nth col widths) rendered))))))
+              (insert (vui--pad (max 0 (- (nth col widths)
+                                          (plist-get cell :natural))))))
             (cl-incf col))))
       (cl-incf index (length row)))
     (vui--apply-region-props grid-start (point)
