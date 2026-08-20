@@ -4416,6 +4416,23 @@ header-line machinery on first use, saving the previous
     (setq vui--table-saved-header-line (cons t header-line-format)))
   (setq header-line-format '("" (:eval (vui--table-sticky-header)))))
 
+(defun vui--table-sticky-header-padding ()
+  "Return a stretch space aligning sticky headers with buffer text.
+A window’s content consists of the fringe, margin, and text area.
+
+  ┌────────┬────────┬───────────────────────────────────────────┐
+  │ Fringe │ Margin │             Buffer Text Area              │
+  ├────────┼────────┼───────────────────────────────────────────┤
+  |        |        | (line-num) (line-prefix) (...) (REAL TEXT)|
+  └────────┴────────┴───────────────────────────────────────────┘
+
+Emacs inserts some virtual content at the beginning of the text
+area,such as `display-line-numbers', `line-prefix', or `wrap-prefix'.
+The current implementation only aligns `display-line-numbers', since it
+is the most common case. :align-to N refers to the Nth canonical column
+from the start of the text area."
+  (propertize " " 'display `(space :align-to ,(line-number-display-width 'columns))))
+
 (defun vui--table-sticky-header (&optional pos)
   "Return the header to pin for a window starting at POS.
 POS defaults to `window-start'; redisplay evaluates this per window,
@@ -4443,7 +4460,7 @@ this on every frame update, and an error here would loop."
             ""
           (save-excursion
             (goto-char (car entry))
-            (concat (propertize " " 'display '(space :align-to 0))
+            (concat (vui--table-sticky-header-padding)
                     (replace-regexp-in-string
                      "%" "%%"
                      (buffer-substring (line-beginning-position)
