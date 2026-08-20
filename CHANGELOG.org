@@ -7,6 +7,23 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 * Unreleased
 
+** Fixed
+
+- Measuring a mounted component now sees its current state. Layout
+  containers measure children by rendering them into a temp buffer;
+  a component child used to measure as a throwaway instance with
+  INITIAL state, so e.g. an expanded collapsible measured as collapsed
+  and =vui-flex= computed its row from the wrong width. Measurement now
+  reconciles against the live tree (same key/index rules as rendering)
+  and renders a matched instance's render function over its current
+  state, without touching the instance - the real render still does the
+  actual reconciliation. Wired into =vui-flex='s child measurement;
+  matching is exact for keyed children and for unkeyed children in
+  measure order (a =vui-flex-item= wrapping a component earlier in the
+  row can skew unkeyed index matching; give such children a =:key=).
+  Groundwork for the responsive layout pass of #134, which measures
+  every layout child this way (=vui--measure-block=).
+
 ** Added
 
 - =vui-layout.el=: the pure layout core behind the responsive containers

@@ -929,6 +929,27 @@ measure, once for real.  During the measure pass, component lifecycle
 hooks are skipped, effect registrations are discarded, and async
 loaders are not started, so the measurement has no side effects.")
 
+(defvar vui--measure-reconcile nil
+  "Reconciliation cursor carried into measure passes, or nil.
+A cons (PARENT . INDEX) bound by a layout container around the
+measurement of its children, where PARENT is the live instance whose
+children the measured vnodes will reconcile against and INDEX the
+`vui--child-index' the next component vnode would receive.  Measure
+passes advance INDEX exactly as the real render will, so a component
+measured mid-sequence still matches its own live instance.  Nil (the
+default) measures with throwaway instances only, as before.")
+
+(defvar vui--measure-live-parent nil
+  "During a measure pass, the live instance the walk is measuring under.
+Component vnodes encountered while it is non-nil reconcile against its
+children (key or index, like `vui--reconcile-component'), and a match
+measures as its live instance's render over CURRENT state (see
+`vui--measure-instance-vtree') instead of a throwaway initial-state
+render.  Bound from `vui--measure-reconcile' at the measure entry and
+rebound to each matched instance while descending its vtree; nil
+across unmatched (genuinely new) subtrees, which keep throwaway
+rendering.")
+
 (defvar vui--context-stack nil
   "Stack of context bindings during render.
 Each entry is a vui-context-binding.")
@@ -3933,6 +3954,76 @@ float division is exact for every remainder below one space."
 
 ;; Table rendering helpers
 
+(defun vui--measure-render-to-string (vnode)
+  "Render VNODE into a temp buffer for measurement; return its text.
+Rebinds vui--new-children and vui--child-index so orphaned instances
+cannot pollute the parent's children list, and isolates side effects
+via `vui--measuring-p' / `vui--pending-effects'.  The render target is
+captured before entering the temp buffer, so pixel measurements keep
+its face context (see `vui--measure-buffer').
+
+When the caller bound `vui--measure-reconcile', mounted components
+measure as their live current state (see `vui--measure-live-parent')
+and the cursor's index advances exactly as the real render will."
+  (let ((vui--measure-buffer (vui--measure-buffer))
+        (reconcile vui--measure-reconcile))
+    (with-temp-buffer
+      (let ((vui--current-instance nil)
+            (vui--root-instance nil)
+            (vui--new-children nil)
+            (vui--child-index (if reconcile (cdr reconcile) 0))
+            (vui--measure-live-parent (car reconcile))
+            ;; The cursor is meaningful only at this entry's level; a
+            ;; nested measure (a table sizing its cells inside this
+            ;; subtree) must not consume it.
+            (vui--measure-reconcile nil)
+            (vui--measuring-p t)
+            (vui--pending-effects nil))
+        (vui--render-vnode vnode)
+        (when reconcile (setcdr reconcile vui--child-index)))
+      (buffer-string))))
+
+(defun vui--measure-live-match (vnode)
+  "Return the live mounted instance component VNODE measures as, or nil.
+Matches VNODE against `vui--measure-live-parent's children with the
+reconciliation rules (type plus key, or type at the current
+`vui--child-index').  Only a mounted instance counts; anything else
+measures as a throwaway render."
+  (let ((live (vui--find-matching-child
+               vui--measure-live-parent
+               (vui-vnode-component-type vnode)
+               (vui-vnode-key vnode)
+               vui--child-index)))
+    (and live
+         (vui-instance-mounted-p live)
+         live)))
+
+(defun vui--measure-instance-vtree (instance vnode)
+  "Compute the vtree INSTANCE will render for component VNODE.
+Calls the component's render function with VNODE's props and
+INSTANCE's current state - what the real render that follows this
+measure pass will produce.  The instance's cached vtree cannot be used
+instead: when the measured re-render was triggered by this very
+instance's state change, the cached vtree still shows the previous
+state.  Nothing is written back to INSTANCE: no cached vtree, no
+children, no prev props/state, no lifecycle - the real render does all
+of that."
+  (let* ((def (vui-instance-def instance))
+         (render-fn (vui-component-def-render-fn def))
+         (props (vui-vnode-component-props vnode))
+         (children (vui-vnode-component-children vnode))
+         (props-wc (if children
+                       (plist-put (copy-sequence props) :children children)
+                     props))
+         (vui--current-instance instance)
+         (vui--consumed-contexts nil)
+         (vui--effect-index 0)
+         (vui--ref-index 0)
+         (vui--callback-index 0)
+         (vui--memo-index 0)
+         (vui--async-index 0))
+    (funcall render-fn props-wc (vui-instance-state instance))))
+
 (defun vui--cell-measure (cell)
   "Measure CELL: return (STRING . WIDTH), rendering CELL if it is a vnode.
 STRING is the cell as text (a string cell as is, a vnode cell as its
@@ -3946,22 +4037,8 @@ optimized to avoid temp buffer overhead."
    ((stringp cell) (cons cell (vui--text-width cell)))
    ;; For any vnode: render to temp buffer and measure
    ;; This is the universal approach that works for any component
-   ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
-   ;; orphaned instances from polluting the parent's children list, and
-   ;; isolate side effects via vui--measuring-p / vui--pending-effects
-   ;; Capture the render target before entering the temp buffer, so
-   ;; pixel measurements keep its face context (see `vui--measure-buffer').
-   (t (let ((vui--measure-buffer (vui--measure-buffer)))
-        (with-temp-buffer
-          (let ((vui--current-instance nil)
-                (vui--root-instance nil)
-                (vui--new-children nil)
-                (vui--child-index 0)
-                (vui--measuring-p t)
-                (vui--pending-effects nil))
-            (vui--render-vnode cell))
-          (let ((str (buffer-string)))
-            (cons str (vui--text-width str))))))))
+   (t (let ((str (vui--measure-render-to-string cell)))
+        (cons str (vui--text-width str))))))
 
 (defun vui--cell-visual-width (cell)
   "Get the visual width of CELL by rendering it.  See `vui--cell-measure'."
@@ -3976,16 +4053,21 @@ widest line rather than the sum of all lines."
    ((null vnode) 0)
    ((stringp vnode)
     (vui--text-width vnode t))
-   (t (let ((vui--measure-buffer (vui--measure-buffer)))
-        (with-temp-buffer
-          (let ((vui--current-instance nil)
-                (vui--root-instance nil)
-                (vui--new-children nil)
-                (vui--child-index 0)
-                (vui--measuring-p t)
-                (vui--pending-effects nil))
-            (vui--render-vnode vnode))
-          (vui--text-width (buffer-string) t))))))
+   (t (vui--text-width (vui--measure-render-to-string vnode) t))))
+
+(defun vui--measure-block (vnode)
+  "Render VNODE once and return its block: (LINES . WIDTH).
+LINES is the rendered text split into lines and WIDTH the widest
+line's width in mode units - the measured-block input of the pure
+layout core in vui-layout.el (issue #134).  Strings and nil skip the
+render; anything else renders like `vui--measure-vnode-width',
+including live-state measurement of mounted components when
+`vui--measure-reconcile' is bound."
+  (let ((text (cond
+               ((null vnode) "")
+               ((stringp vnode) vnode)
+               (t (vui--measure-render-to-string vnode)))))
+    (cons (split-string text "\n") (vui--text-width text t))))
 
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
@@ -3993,20 +4075,7 @@ For strings, returns as-is. For vnodes, renders to temp buffer."
   (cond
    ((null cell) "")
    ((stringp cell) cell)
-   ;; For vnodes, render to temp buffer and get string
-   ;; IMPORTANT: Rebind vui--new-children and vui--child-index to prevent
-   ;; orphaned instances from polluting the parent's children list, and
-   ;; isolate side effects via vui--measuring-p / vui--pending-effects
-   (t (let ((vui--measure-buffer (vui--measure-buffer)))
-        (with-temp-buffer
-          (let ((vui--current-instance nil)
-                (vui--root-instance nil)
-                (vui--new-children nil)
-                (vui--child-index 0)
-                (vui--measuring-p t)
-                (vui--pending-effects nil))
-            (vui--render-vnode cell))
-          (buffer-string))))))
+   (t (vui--measure-render-to-string cell))))
 
 (defun vui--table-measure-cell (row i measures)
   "Measure cell I of ROW, recording it in MEASURES when non-nil.
@@ -4473,14 +4542,21 @@ and `window'."
                           indent)))
          (flex-start (point))
          ;; Classify children: growers carry a weight, the rest are
-         ;; measured at natural width
-         (specs (mapcar (lambda (child)
-                          (if (vui-vnode-flex-item-p child)
-                              (list :child (vui-vnode-flex-item-child child)
-                                    :grow (or (vui-vnode-flex-item-grow child) 1))
-                            (list :child child
-                                  :natural (vui--measure-vnode-width child))))
-                        children))
+         ;; measured at natural width.  The measure runs under a
+         ;; reconciliation cursor so a mounted component child measures
+         ;; at its current state (see `vui--measure-reconcile'); the
+         ;; cursor is a scratch copy, so the real pass below re-counts
+         ;; from the same starting index.
+         (specs (let ((vui--measure-reconcile
+                       (and vui--current-instance
+                            (cons vui--current-instance vui--child-index))))
+                  (mapcar (lambda (child)
+                            (if (vui-vnode-flex-item-p child)
+                                (list :child (vui-vnode-flex-item-child child)
+                                      :grow (or (vui-vnode-flex-item-grow child) 1))
+                              (list :child child
+                                    :natural (vui--measure-vnode-width child))))
+                          children)))
          (grow-total (cl-reduce #'+ (mapcar (lambda (s) (or (plist-get s :grow) 0))
                                      specs)
                       :initial-value 0))
@@ -4564,9 +4640,14 @@ and `window'."
              ;; its share.  Padding directly in mode units keeps the
              ;; sub-column remainder in pixel mode; going through a
              ;; character-width box would drop it (and would convert
-             ;; the share a second time).
+             ;; the share a second time).  Measured under a cursor at
+             ;; the index this child is about to render at, so a
+             ;; mounted component grower measures at its current state.
              (share
-              (let ((natural (vui--measure-vnode-width child)))
+              (let* ((vui--measure-reconcile
+                      (and vui--current-instance
+                           (cons vui--current-instance vui--child-index)))
+                     (natural (vui--measure-vnode-width child)))
                 (vui--render-vnode child)
                 (insert (vui--pad (max 0 (- share natural))))))
              ;; Natural-width child
@@ -6272,17 +6353,38 @@ wholesale render's empty-child handling)."
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
-    (let ((instance (vui--reconcile-component vnode vui--current-instance)))
-      ;; Track this child for future reconciliation
-      (push instance vui--new-children)
-      ;; Record the instance's rendered length so the component-list
-      ;; incremental patcher can skip or replace it by position - only
-      ;; needed (and only paid for) when the flag is on.
-      (if vui-incremental-render
-          (let ((start (point)))
-            (vui--render-instance instance)
-            (setf (vui-instance-r-len instance) (- (point) start)))
-        (vui--render-instance instance))))
+    (let ((live (and vui--measuring-p
+                     vui--measure-live-parent
+                     (vui--measure-live-match vnode))))
+      (if live
+          ;; Measure pass over a mounted component: render what the
+          ;; instance will render - its render function over current
+          ;; state - instead of a throwaway initial-state instance.
+          ;; The live instance is only read, never touched; the real
+          ;; render still reconciles and re-renders it.  The descent
+          ;; rebinds the live parent so nested components match the
+          ;; instance's own children the same way.
+          (progn
+            (cl-incf vui--child-index)
+            (let ((vtree (vui--measure-instance-vtree live vnode)))
+              (let ((vui--measure-live-parent live)
+                    (vui--child-index 0))
+                (vui--render-vnode vtree))))
+        ;; No live counterpart (real render, or measuring a component
+        ;; that is not mounted here): reconcile and render.  A
+        ;; throwaway subtree has no live children to match below it.
+        (let* ((vui--measure-live-parent nil)
+               (instance (vui--reconcile-component vnode vui--current-instance)))
+          ;; Track this child for future reconciliation
+          (push instance vui--new-children)
+          ;; Record the instance's rendered length so the component-list
+          ;; incremental patcher can skip or replace it by position - only
+          ;; needed (and only paid for) when the flag is on.
+          (if vui-incremental-render
+              (let ((start (point)))
+                (vui--render-instance instance)
+                (setf (vui-instance-r-len instance) (- (point) start)))
+            (vui--render-instance instance))))))
 
    ;; Stream - (re-)emit the handle's items and bind its region
    ((vui-vnode-stream-p vnode)
