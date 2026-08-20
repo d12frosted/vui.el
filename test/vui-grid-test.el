@@ -101,6 +101,13 @@
                (vui-text "a") (vui-text "b") (vui-text "c")))
             :to-equal "a    b   \n  c   "))
 
+  (it "keeps an empty cell's track so columns stay aligned"
+    (expect (vui-grid-test--render
+             (vui-grid :width 9 :columns 2
+               (vui-text "a") (vui-text "")
+               (vui-text "c") (vui-text "d")))
+            :to-equal "a        \nc    d   "))
+
   (it "keeps buttons clickable in grid cells"
     (with-temp-buffer
       (let ((clicked nil))

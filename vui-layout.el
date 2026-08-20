@@ -208,7 +208,9 @@ separated by GAP fit TOTAL.  Never returns fewer than one column."
   (max 1
        (min columns
             (if min-width
-                (/ (+ total gap) (+ min-width gap))
+                ;; A minimum and gap summing to zero (or less) cannot
+                ;; constrain the count; guard the division.
+                (/ (+ total gap) (max 1 (+ min-width gap)))
               columns))))
 
 (defun vui-layout-grid-tracks (count total gap)

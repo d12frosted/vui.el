@@ -211,7 +211,11 @@
     (expect (vui-layout-grid-columns 4 10 3 1) :to-equal 1))
 
   (it "uses the requested columns when no minimum is given"
-    (expect (vui-layout-grid-columns 3 nil 10 1) :to-equal 3)))
+    (expect (vui-layout-grid-columns 3 nil 10 1) :to-equal 3))
+
+  (it "survives a minimum and gap that sum to zero or less"
+    (expect (vui-layout-grid-columns 3 0 40 0) :to-equal 3)
+    (expect (vui-layout-grid-columns 3 -1 40 1) :to-equal 3)))
 
 (describe "vui-layout-grid-tracks"
   (it "splits the width net of gaps into equal tracks"

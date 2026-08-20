@@ -92,6 +92,38 @@
                (vui-text "aaa") (vui-text "bbb")))
             :to-equal "aaa\n  bbb"))
 
+  (it "composes a row whose function child renders multi-line"
+    (expect (vui-flex-wrap-test--render
+             (vui-flex :width 20 :wrap t
+               (vui-text "AA")
+               (vui-flex-item :grow 1 :min-width 8
+                 (lambda (_w) (vui-vstack (vui-text "f1") (vui-text "f2"))))
+               (vui-text "ZZ")))
+            :to-equal (concat "AA f1             ZZ\n"
+                              "   f2               ")))
+
+  (it "drops a child that renders nothing, like a non-wrapped flex"
+    (expect (vui-flex-wrap-test--render
+             (vui-flex :width 20 :wrap t
+               (vui-text "aa")
+               (vui-text "")
+               (vui-vstack (vui-text "m1") (vui-text "m2"))))
+            :to-equal "aa m1\n   m2"))
+
+  (it "measures composed content against the buffer's fill-column"
+    (with-temp-buffer
+      ;; vui-mode (enabled by the first render) kills buffer-locals,
+      ;; so set fill-column after a priming render.
+      (vui-render (vui-text ""))
+      (setq-local fill-column 12)
+      (vui-render (vui-flex :width 30 :wrap t
+                    (vui-vstack (vui-text "p") (vui-text "q"))
+                    (vui-flex :width 'fill-column :justify :end
+                      (vui-text "R"))))
+      (expect (buffer-substring-no-properties (point-min) (point-max))
+              :to-equal (concat "p            R\n"
+                                "q             "))))
+
   (it "keeps buttons clickable on wrapped rows"
     (with-temp-buffer
       (let ((clicked nil))

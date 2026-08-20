@@ -28,12 +28,25 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   reconciles against the live tree (same key/index rules as rendering)
   and renders a matched instance's render function over its current
   state, without touching the instance - the real render still does the
-  actual reconciliation. Wired into =vui-flex='s child measurement;
-  matching is exact for keyed children and for unkeyed children in
-  measure order (a =vui-flex-item= wrapping a component earlier in the
-  row can skew unkeyed index matching; give such children a =:key=).
-  Groundwork for the responsive layout pass of #134, which measures
-  every layout child this way (=vui--measure-block=).
+  actual reconciliation. Concretely, "without touching" means: the
+  render runs against a shim copy, so render-time ref, memo, and
+  callback writes are discarded (the previous-value ref pattern still
+  fires once per committed render); a component whose =:should-update=
+  says skip measures as its cached vtree, exactly what the real render
+  commits; a =vui-stream= region is never re-bound while measuring, so
+  live handles keep their real buffer; and static =vui-flex-item=
+  children are measured in the same pass, so the reconciliation cursor
+  advances past them exactly as the real render will. Matching is
+  exact for keyed children; unkeyed same-type siblings around a
+  function grower or a composed row should carry a =:key=. Groundwork
+  for the responsive layout pass of #134, which measures every layout
+  child this way (=vui--measure-block=).
+
+- Measurement carries the origin buffer's =fill-column= into its temp
+  buffer, so content resolving =:width 'fill-column= (a nested flex in
+  a table cell, a wrapped panel) measures against the buffer it lands
+  in instead of the global default. Other buffer-local variables are
+  still not carried; composed content should not depend on them.
 
 ** Added
 
@@ -46,9 +59,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   than its track widens that whole column across every row, keeping
   columns aligned. A cell may be a function of the track width (in
   characters), the way a table or field fills its track exactly.
-  =:row-spacing= inserts blank lines between rows. Identity follows
+  =:row-spacing= inserts blank lines between rows, and an empty cell
+  keeps its track so columns stay aligned. Identity follows
   =vui-flex= =:wrap=: single-line rows render in place, rows with
-  multi-line cells are composed as text. Works in both width modes.
+  multi-line cells are composed as text (components in composed rows
+  never mount; keep stateful components in single-line cells). Works
+  in both width modes.
   Example 19 (=vui-example-responsive-dashboard=) shows the containers
   together: a grid of bordered stat cards that drops columns as the
   width shrinks, panels of different heights stacking, a width-filling
@@ -64,12 +80,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   real blocks: a row containing one lays its children side by side,
   line by line, as tall as its tallest block - so panels and boxes sit
   next to each other when the buffer is wide and stack when it is
-  narrow. Identity is per row: a row whose children are all single-line
+  narrow. A function child that renders multi-line composes the same
+  way (its block is measured at its assigned width), and a child that
+  renders nothing is dropped from the row like in a non-wrapped flex.
+  Identity is per row: a row whose children are all single-line
   renders in place exactly like a non-wrapped flex (components, fields,
   and buttons keep their identity), while a composed multi-line row is
-  text like a table cell (buttons work; widget fields and component
-  regions do not survive composition). =:justify= is not applied under
-  =:wrap=. Works in both =char= and =pixel= width modes.
+  text like a table cell - buttons work, but components in composed
+  rows never mount (no state, no lifecycle) and widget fields do not
+  survive composition; keep stateful components on single-line rows.
+  =:justify= is not applied under =:wrap=. Works in both =char= and
+  =pixel= width modes.
 
 - =vui-layout.el=: the pure layout core behind the responsive containers
   planned in #134. Pure functions over integers, plists, and lists of

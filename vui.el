@@ -1531,10 +1531,14 @@ their row's leftover, `vui-flex-item' :min-width lets a child shrink).
 A row whose children are all single-line renders them in place, like a
 non-wrapped flex; a row containing a multi-line child is composed from
 the children's rendered text, so a table-like panel row keeps its
-lines side by side (buttons keep working there, but widget fields and
-per-component regions do not survive text composition - give stateful
-components in a wrapped flex a :key).  :justify is not applied under
-:wrap.
+lines side by side.  Composed rows are content: buttons keep working,
+but components in them never mount - no state, no lifecycle, and
+`vui-set-state' from inside them does nothing - and widget fields do
+not survive composition.  Keep stateful components on single-line
+rows (or outside :wrap), and give components a :key so measurement
+matches them exactly (unkeyed same-type siblings around a composed
+row or a function grower can measure as each other).  :justify is not
+applied under :wrap.
 
 Usage:
   (vui-flex :width \\='fill-column
@@ -1642,9 +1646,12 @@ table or field fills its track exactly.
 
 Identity follows `vui-flex' :wrap: a row of single-line cells renders
 in place (components and widgets keep their identity), a row with a
-multi-line cell is composed as text (buttons keep working; widget
-fields and per-component regions do not survive composition).  Give
-stateful components in a grid a :key.
+multi-line cell is composed as text - buttons keep working, but
+components in composed rows never mount (no state, no lifecycle) and
+widget fields do not survive composition.  Keep stateful components
+in single-line cells, and give components a :key so measurement
+matches them exactly.  A cell that renders empty keeps its track, so
+columns stay aligned.
 
 Usage:
   (vui-grid :width \\='window :columns 3 :min-column-width 24
@@ -4096,10 +4103,18 @@ its face context (see `vui--measure-buffer').
 
 When the caller bound `vui--measure-reconcile', mounted components
 measure as their live current state (see `vui--measure-live-parent')
-and the cursor's index advances exactly as the real render will."
+and the cursor's index advances exactly as the real render will.
+
+The origin buffer's `fill-column' is carried into the temp buffer, so
+children resolving :width `fill-column' measure (and, in composed
+rows, render) against the buffer they will land in.  Other
+buffer-local variables are NOT carried: content that reads them sees
+their global values here."
   (let ((vui--measure-buffer (vui--measure-buffer))
-        (reconcile vui--measure-reconcile))
+        (reconcile vui--measure-reconcile)
+        (origin-fill-column fill-column))
     (with-temp-buffer
+      (setq fill-column origin-fill-column)
       (let ((vui--current-instance nil)
             (vui--root-instance nil)
             (vui--new-children nil)
@@ -4130,31 +4145,64 @@ measures as a throwaway render."
          (vui-instance-mounted-p live)
          live)))
 
+(defun vui--measure-shim-instance (instance)
+  "Return a measure-pass stand-in for INSTANCE.
+Shares everything a render function reads, but the hook storage a
+render may WRITE goes to copies: each ref cell is copied (a `setcar'
+during the measure is discarded, so the previous-value ref pattern
+still fires once per committed render), and the memo and callback
+tables are copied (cache writes are discarded).  The live instance is
+never touched."
+  (let ((shim (copy-vui-instance instance)))
+    (when-let* ((refs (vui-instance-refs instance)))
+      (let ((copy (make-hash-table :test 'eq)))
+        (maphash (lambda (key ref) (puthash key (cons (car ref) (cdr ref)) copy))
+                 refs)
+        (setf (vui-instance-refs shim) copy)))
+    (when-let* ((memos (vui-instance-memos instance)))
+      (setf (vui-instance-memos shim) (copy-hash-table memos)))
+    (when-let* ((callbacks (vui-instance-callbacks instance)))
+      (setf (vui-instance-callbacks shim) (copy-hash-table callbacks)))
+    shim))
+
 (defun vui--measure-instance-vtree (instance vnode)
   "Compute the vtree INSTANCE will render for component VNODE.
-Calls the component's render function with VNODE's props and
-INSTANCE's current state - what the real render that follows this
-measure pass will produce.  The instance's cached vtree cannot be used
-instead: when the measured re-render was triggered by this very
-instance's state change, the cached vtree still shows the previous
-state.  Nothing is written back to INSTANCE: no cached vtree, no
-children, no prev props/state, no lifecycle - the real render does all
-of that."
+Mirrors the decision `vui--render-instance' will make: when the
+component's should-update says skip, the cached vtree is returned -
+it is exactly what the real render will commit - and otherwise the
+render function runs with VNODE's props and INSTANCE's current state.
+The cached vtree cannot be used unconditionally: when the measured
+re-render was triggered by this very instance's state change, it
+still shows the previous state.
+
+INSTANCE is never written: the render function runs against a shim
+copy (see `vui--measure-shim-instance') so render-time ref, memo, and
+callback writes are discarded, and no cached vtree, children, prev
+props/state, or lifecycle are touched - the real render does all of
+that."
   (let* ((def (vui-instance-def instance))
          (render-fn (vui-component-def-render-fn def))
+         (should-update-fn (vui-component-def-should-update def))
          (props (vui-vnode-component-props vnode))
          (children (vui-vnode-component-children vnode))
          (props-wc (if children
                        (plist-put (copy-sequence props) :children children)
                      props))
-         (vui--current-instance instance)
-         (vui--consumed-contexts nil)
-         (vui--effect-index 0)
-         (vui--ref-index 0)
-         (vui--callback-index 0)
-         (vui--memo-index 0)
-         (vui--async-index 0))
-    (funcall render-fn props-wc (vui-instance-state instance))))
+         (state (vui-instance-state instance)))
+    (if (and should-update-fn
+             (not (funcall should-update-fn props-wc state
+                           (vui-instance-prev-props instance)
+                           (vui-instance-prev-state instance)))
+             (vui-instance-cached-vtree instance))
+        (vui-instance-cached-vtree instance)
+      (let ((vui--current-instance (vui--measure-shim-instance instance))
+            (vui--consumed-contexts nil)
+            (vui--effect-index 0)
+            (vui--ref-index 0)
+            (vui--callback-index 0)
+            (vui--memo-index 0)
+            (vui--async-index 0))
+        (funcall render-fn props-wc state)))))
 
 (defun vui--cell-measure (cell)
   "Measure CELL: return (STRING . WIDTH), rendering CELL if it is a vnode.
@@ -4678,14 +4726,25 @@ and `window'."
          ;; reconciliation cursor so a mounted component child measures
          ;; at its current state (see `vui--measure-reconcile'); the
          ;; cursor is a scratch copy, so the real pass below re-counts
-         ;; from the same starting index.
+         ;; from the same starting index.  Static grower children are
+         ;; measured here as well - it advances the cursor past their
+         ;; components exactly as the real render will (a skipped
+         ;; grower would make every later unkeyed component measure
+         ;; against the wrong live instance) and saves re-measuring
+         ;; them at render time.  Function growers cannot be measured
+         ;; before allocation; give components inside them a :key.
          (specs (let ((vui--measure-reconcile
                        (and vui--current-instance
                             (cons vui--current-instance vui--child-index))))
                   (mapcar (lambda (child)
                             (if (vui-vnode-flex-item-p child)
-                                (list :child (vui-vnode-flex-item-child child)
-                                      :grow (or (vui-vnode-flex-item-grow child) 1))
+                                (let ((inner (vui-vnode-flex-item-child child))
+                                      (grow (or (vui-vnode-flex-item-grow child) 1)))
+                                  (if (functionp inner)
+                                      (list :child inner :grow grow)
+                                    (list :child inner :grow grow
+                                          :grower-natural
+                                          (vui--measure-vnode-width inner))))
                               (list :child child
                                     :natural (vui--measure-vnode-width child))))
                           children)))
@@ -4772,14 +4831,13 @@ and `window'."
              ;; its share.  Padding directly in mode units keeps the
              ;; sub-column remainder in pixel mode; going through a
              ;; character-width box would drop it (and would convert
-             ;; the share a second time).  Measured under a cursor at
-             ;; the index this child is about to render at, so a
-             ;; mounted component grower measures at its current state.
+             ;; the share a second time).  The natural width comes from
+             ;; the specs pass - measuring here would rebind the
+             ;; reconciliation cursor around a real render, where any
+             ;; nested measurement (a table sizing its cells) would
+             ;; consume it against the wrong parent.
              (share
-              (let* ((vui--measure-reconcile
-                      (and vui--current-instance
-                           (cons vui--current-instance vui--child-index)))
-                     (natural (vui--measure-vnode-width child)))
+              (let ((natural (or (plist-get spec :grower-natural) 0)))
                 (vui--render-vnode child)
                 (insert (vui--pad (max 0 (- share natural))))))
              ;; Natural-width child
@@ -4866,7 +4924,11 @@ the real buffer, growers pad out to their assigned width."
         (setq content-start (point))
         (cond
          ((plist-get spec :function)
-          (vui--render-vnode (funcall child (vui--width-to-chars width))))
+          ;; Render again at the assigned width (the measured block is
+          ;; text; a field or button it returns must land for real),
+          ;; padded out to the assignment if it renders short.
+          (vui--render-vnode (funcall child (vui--width-to-chars width)))
+          (insert (vui--pad (max 0 (- width (plist-get spec :natural))))))
          ((> (plist-get spec :grow) 0)
           (vui--render-vnode child)
           (insert (vui--pad (max 0 (- width (plist-get spec :natural))))))
@@ -4880,21 +4942,13 @@ the real buffer, growers pad out to their assigned width."
 
 (defun vui--flex-render-composed-row (row spacing indent)
   "Insert ROW of (SPEC . WIDTH) cells composed side by side as text.
-Static cells reuse the lines measured by `vui--flex-wrap-specs';
-function cells render at their assigned width.  Lines after the first
-are indented by INDENT (mode units).  Composition goes through
-`vui-layout-compose' with mode-aware measurement and padding, so a
-block wider than its assignment widens its column instead of breaking
-alignment."
-  (let* ((blocks (mapcar (lambda (cell)
-                           (let ((spec (car cell))
-                                 (width (cdr cell)))
-                             (if (plist-get spec :function)
-                                 (car (vui--measure-block
-                                       (funcall (plist-get spec :child)
-                                                (vui--width-to-chars width))))
-                               (plist-get spec :block))))
-                         row))
+Every cell reuses its measured lines (static cells from the specs
+pass, function cells from the post-allocation measure).  Lines after
+the first are indented by INDENT (mode units).  Composition goes
+through `vui-layout-compose' with mode-aware measurement and padding,
+so a block wider than its assignment widens its column instead of
+breaking alignment."
+  (let* ((blocks (mapcar (lambda (cell) (plist-get (car cell) :block)) row))
          (widths (mapcar #'cdr row))
          (lines (vui-layout-compose blocks widths spacing
                                     #'vui--text-width #'vui--pad))
@@ -4921,11 +4975,36 @@ new line, indented by the flex's :indent."
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
                           indent)))
          (flex-start (point))
-         (specs (vui--flex-wrap-specs children))
+         ;; A child that renders nothing is dropped, like the
+         ;; non-wrapped flex removing its separator: it must not eat a
+         ;; gap or a column.  (Growers and function children stay -
+         ;; they occupy their assigned width even when empty.)
+         (specs (cl-remove-if
+                 (lambda (spec)
+                   (and (not (plist-get spec :function))
+                        (= 0 (plist-get spec :grow))
+                        (equal (plist-get spec :block) '(""))))
+                 (vui--flex-wrap-specs children)))
          (placements (vui-layout-solve specs total spacing))
          (rows (vui--flex-wrap-rows specs placements))
          (first-row t)
          (index 0))
+    ;; Function children can only render at their assigned width, so
+    ;; their blocks exist only now that allocation has run.  Measuring
+    ;; them here (not under the reconciliation cursor - allocation
+    ;; order no longer matches source order) makes a multi-line
+    ;; function child compose like any other block instead of breaking
+    ;; its row.
+    (dolist (row rows)
+      (dolist (cell row)
+        (let ((spec (car cell)))
+          (when (and (plist-get spec :function)
+                     (not (plist-get spec :block)))
+            (let ((block (vui--measure-block
+                          (funcall (plist-get spec :child)
+                                   (vui--width-to-chars (cdr cell))))))
+              (plist-put spec :block (car block))
+              (plist-put spec :natural (cdr block)))))))
     (dolist (row rows)
       (unless first-row
         (insert "\n")
@@ -5476,7 +5555,13 @@ repositions END explicitly instead."
 
 (defun vui--stream-render (handle)
   "Render HANDLE's items at point and bind its region around them.
-Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
+Used by the `vui-vnode-stream' branch of `vui--render-vnode'.
+
+During a measure pass the items render for their width only: the
+handle keeps its real buffer and markers.  A measure renders into a
+throwaway temp buffer, and binding the live region there would leave
+the handle pointing at a killed buffer, silently dropping every
+subsequent streamed append."
   (let ((sep (vui-stream-handle-separator handle))
         (start (point))
         (first t)
@@ -5491,9 +5576,10 @@ Used by the `vui-vnode-stream' branch of `vui--render-vnode'."
         (setq first nil)
         (setq last-start (point))
         (vui--render-vnode item)))
-    (vui--stream-bind-region handle (current-buffer) start (point))
-    (when last-start
-      (vui--stream-set-last-start handle last-start (current-buffer)))))
+    (unless vui--measuring-p
+      (vui--stream-bind-region handle (current-buffer) start (point))
+      (when last-start
+        (vui--stream-set-last-start handle last-start (current-buffer))))))
 
 (defun vui--stream-request-rerender (handle)
   "Re-render the root of HANDLE's buffer so the layout reflects new items."
