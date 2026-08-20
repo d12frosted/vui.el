@@ -607,9 +607,33 @@ When nothing grows, =:justify= places the leftover:
 ;; v1.2.0                                 47 items
 #+end_src
 
-Rows are single-line by design. If the children's natural widths already
-exceed the total, everything renders at natural width and growers get
-zero - the row degrades instead of erroring.
+Without =:wrap=, rows are single-line by design. If the children's
+natural widths already exceed the total, everything renders at natural
+width and growers get zero - the row degrades instead of erroring.
+
+** Wrapping - =:wrap=
+
+Pass =:wrap t= and children flow into rows instead of overflowing:
+they fill a row while they fit and continue on the next one, in source
+order. Each row distributes width independently - growers grow into
+their own row's leftover, and =vui-flex-item :min-width= lets a child
+shrink down to a floor before its row gives up and wraps:
+
+#+begin_src elisp
+;; Panels side by side when wide, stacked when narrow
+(vui-flex :width 'window :wrap t
+  (vui-vstack (vui-text "CPU" :face 'bold) (vui-text "42%"))
+  (vui-vstack (vui-text "Memory" :face 'bold) (vui-text "3.1G"))
+  (vui-vstack (vui-text "Disk" :face 'bold) (vui-text "71%")))
+#+end_src
+
+Multi-line children become proper blocks: a row places them side by
+side line by line, as tall as its tallest block. Such composed rows
+are text (like table cells): buttons keep working, but widget fields
+and component regions do not survive composition. Rows whose children
+are all single-line render exactly like a non-wrapped flex, with full
+identity. Give stateful components inside a wrapped flex a =:key=.
+=:justify= is not applied under =:wrap=.
 
 For live resizing, use =window= or a function as =:width= and enable
 =vui-rerender-on-resize= in the buffer:

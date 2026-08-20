@@ -563,7 +563,8 @@ Horizontal row that distributes a total width among its children.
 |------------+-----------------+---------------+--------------------------------------|
 | =:width=   | number/fn/symbol | =fill-column= | Total width; also accepts =window= or a function resolved at render time |
 | =:spacing= | integer         | 1             | Spaces between children              |
-| =:justify= | keyword         | :start        | :start, :center, :end, :space-between (when nothing grows) |
+| =:justify= | keyword         | :start        | :start, :center, :end, :space-between (when nothing grows; not applied under =:wrap=) |
+| =:wrap=    | boolean         | nil           | Children wrap into rows in source order when they stop fitting |
 | =:face=    | face            | nil           | Applied beneath children's faces     |
 | =:keymap=  | keymap          | nil           | Cascades beneath children's keymaps  |
 | =:key=     | any             | nil           | Reconciliation key                   |
@@ -571,9 +572,10 @@ Horizontal row that distributes a total width among its children.
 Children render at their natural width. Wrap a child in =vui-flex-item=
 to give it a proportional share of the leftover width instead:
 
-| Option  | Type | Default | Description                                 |
-|---------+------+---------+---------------------------------------------|
-| =:grow= | int  | 1       | Proportional weight among growing children  |
+| Option       | Type | Default | Description                                 |
+|--------------+------+---------+---------------------------------------------|
+| =:grow=      | int  | 1       | Proportional weight among growing children  |
+| =:min-width= | int  | nil     | Under =:wrap=, floor the child may shrink to (chars); for a function child also its width during row partitioning |
 
 A =vui-flex-item= child is either a vnode (rendered inside a box padded
 to the allotted width) or a function called with the allotted width -
@@ -589,9 +591,22 @@ which is what lets fields actually fill remaining space:
 
 Flex rows subtract inherited vstack indentation from their available
 width. When the children's natural widths already exceed the total,
-everything renders at natural width and growers get zero. Rows are
-single-line by design: multi-line children are measured by their widest
-line, but the layout does not account for their extra lines.
+everything renders at natural width and growers get zero. Without
+=:wrap=, rows are single-line by design: multi-line children are
+measured by their widest line, but the layout does not account for
+their extra lines.
+
+With =:wrap=, children fill a row while they fit (at their minimum
+widths) and continue on the next row, in source order. Each row
+distributes width on its own: growers grow into their row's leftover,
+and a =vui-flex-item= with =:min-width= may shrink down to it when the
+row runs out of space. A row whose children are all single-line
+renders them in place, exactly like a non-wrapped flex - components
+and widgets keep their identity. A row containing a multi-line child
+(a box, a vstack, a table) is composed from the children's rendered
+text so the blocks sit side by side; buttons keep working there, but
+widget fields and per-component regions do not survive text
+composition. Give stateful components inside a wrapped flex a =:key=.
 
 For live resizing, pass =window= or a function as =:width= and enable
 =vui-rerender-on-resize= in the buffer:
