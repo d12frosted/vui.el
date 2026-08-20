@@ -26,6 +26,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-grid=: a responsive grid of equal-width tracks (#134). Cells
+  fill rows in source order; the column count starts from =:columns=
+  and falls while tracks of at least =:min-column-width= stop fitting
+  the total, never below one - so panels sit three across in a wide
+  window and stack in a narrow one, from the same code. Tracks are
+  equal integers with remainders on the earlier tracks; a cell wider
+  than its track widens that whole column across every row, keeping
+  columns aligned. A cell may be a function of the track width (in
+  characters), the way a table or field fills its track exactly.
+  =:row-spacing= inserts blank lines between rows. Identity follows
+  =vui-flex= =:wrap=: single-line rows render in place, rows with
+  multi-line cells are composed as text. Works in both width modes.
+
 - =vui-flex= accepts =:wrap t=: children flow into rows in source order
   when their widths stop fitting the total, instead of overflowing the
   line (#134). Each row distributes width independently through the

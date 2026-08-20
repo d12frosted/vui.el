@@ -645,6 +645,35 @@ For live resizing, use =window= or a function as =:width= and enable
   (vui-rerender-on-resize))
 #+end_src
 
+* Responsive Grid - =vui-grid=
+
+=vui-grid= places cells on equal-width tracks, filling rows in source
+order. The column count is responsive: it starts from =:columns= and
+falls while tracks of at least =:min-column-width= no longer fit,
+never below one. Wide window, three panels side by side; narrow
+window, a single stacked column - same code:
+
+#+begin_src elisp
+(vui-grid :width 'window :columns 3 :min-column-width 24
+  (cpu-panel) (memory-panel) (disk-panel))
+#+end_src
+
+Every track is the same width (remainders go to the earlier tracks),
+and a cell wider than its track widens that whole column so the grid
+stays aligned. A cell may be a function of the track width, just like
+a =vui-flex-item= function child:
+
+#+begin_src elisp
+(vui-grid :width 'window :columns 2
+  (lambda (width) (vui-field :size width :key 'left))
+  (lambda (width) (vui-field :size width :key 'right)))
+#+end_src
+
+Rows follow the same identity rules as =vui-flex= =:wrap=: single-line
+rows render in place, rows with multi-line cells are composed as text.
+Use =:row-spacing= for blank lines between rows, and pair
+=:width 'window= with =vui-rerender-on-resize= for live reflow.
+
 * Nesting Layouts
 
 Layouts can be nested for complex structures:
@@ -723,7 +752,8 @@ available through the =vui-region= wrapper:
 |--------------+------------------------+-------------------------------------------|
 | =vui-hstack= | Horizontal arrangement | =:spacing=, =:face=, =:keymap=            |
 | =vui-vstack= | Vertical arrangement   | =:spacing=, =:indent=, =:face=, =:keymap= |
-| =vui-flex=   | Width distribution     | =:width=, =:justify=, =vui-flex-item= =:grow= |
+| =vui-flex=   | Width distribution     | =:width=, =:justify=, =:wrap=, =vui-flex-item= =:grow=/=:min-width= |
+| =vui-grid=   | Responsive equal tracks | =:columns=, =:min-column-width=, =:width=, =:spacing= |
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
 | =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=, =:sticky-header= |
 | =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |

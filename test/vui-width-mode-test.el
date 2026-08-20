@@ -840,5 +840,20 @@ bites; the tests just have to respect it."
         ;; composed line must still land on the full 70px row.
         (expect (vui-test--line-px out) :to-equal '(70 70))))))
 
+(describe "pixel mode and vui-grid"
+  (it "keeps char mode byte-identical on an ASCII grid"
+    (vui-test--parity
+     (lambda () (vui-grid :width 9 :columns 2
+                  (vui-text "a") (vui-text "b")
+                  (vui-text "c") (vui-text "d")))))
+
+  (it "pads grid rows to equal pixel width with wide glyphs"
+    (vui-test--with-pixel-font
+      (let ((out (vui-test--render-string
+                  (vui-grid :width 10 :columns 2
+                    (vui-text "你") (vui-text "ab")
+                    (vui-text "c") (vui-text "d")))))
+        (expect (vui-test--line-px out) :to-equal '(70 70))))))
+
 (provide 'vui-width-mode-test)
 ;;; vui-width-mode-test.el ends here
