@@ -4258,11 +4258,19 @@ layout core in vui-layout.el (issue #134).  Strings and nil skip the
 render; anything else renders like `vui--measure-vnode-width',
 including live-state measurement of mounted components when
 `vui--measure-reconcile' is bound."
-  (let ((text (cond
-               ((null vnode) "")
-               ((stringp vnode) vnode)
-               (t (vui--measure-render-to-string vnode)))))
-    (cons (split-string text "\n") (vui--text-width text t))))
+  (let* ((text (cond
+                ((null vnode) "")
+                ((stringp vnode) vnode)
+                (t (vui--measure-render-to-string vnode))))
+         ;; Split once; char mode takes the widest line from this very
+         ;; split (`vui--text-width' with MULTI-LINE-P would split the
+         ;; same string again), pixel mode measures the whole text
+         ;; (`string-pixel-width' already returns the widest line).
+         (lines (split-string text "\n")))
+    (cons lines
+          (pcase vui-width-mode
+            ('char (apply #'max (mapcar #'string-width lines)))
+            ('pixel (vui--string-pixel-width text))))))
 
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
@@ -4939,10 +4947,11 @@ the real buffer, growers pad out to their assigned width."
         (setq content-start (point))
         (cond
          ((plist-get spec :function)
-          ;; Render again at the assigned width (the measured block is
-          ;; text; a field or button it returns must land for real),
-          ;; padded out to the assignment if it renders short.
-          (vui--render-vnode (funcall child (vui--width-to-chars width)))
+          ;; Render the vnode produced at measure time (the content a
+          ;; field or button carries must land for real), padded out
+          ;; to the assignment if it renders short.
+          (vui--render-vnode (or (plist-get spec :vnode)
+                                 (funcall child (vui--width-to-chars width))))
           (insert (vui--pad (max 0 (- width (plist-get spec :natural))))))
          ((> (plist-get spec :grow) 0)
           (vui--render-vnode child)
@@ -5015,9 +5024,12 @@ new line, indented by the flex's :indent."
         (let ((spec (car cell)))
           (when (and (plist-get spec :function)
                      (not (plist-get spec :block)))
-            (let ((block (vui--measure-block
-                          (funcall (plist-get spec :child)
-                                   (vui--width-to-chars (cdr cell))))))
+            (let* ((vnode (funcall (plist-get spec :child)
+                                   (vui--width-to-chars (cdr cell))))
+                   (block (vui--measure-block vnode)))
+              ;; Keep the vnode: the inline branch renders it for real
+              ;; instead of calling the function a second time.
+              (plist-put spec :vnode vnode)
               (plist-put spec :block (car block))
               (plist-put spec :natural (cdr block)))))))
     (dolist (row rows)
@@ -5068,14 +5080,18 @@ in place, rows containing a multi-line cell composed as text."
                      (col 0))
                   (mapcar (lambda (child)
                             (let* ((track (nth col tracks))
-                                   (block (vui--measure-block
-                                           (if (functionp child)
-                                               (funcall child
-                                                        (vui--width-to-chars track))
-                                             child))))
+                                   ;; A function cell is called once;
+                                   ;; the vnode it returned renders
+                                   ;; again in the inline branch.
+                                   (vnode (if (functionp child)
+                                              (funcall child
+                                                       (vui--width-to-chars track))
+                                            child))
+                                   (block (vui--measure-block vnode)))
                               (setq col (% (1+ col) count))
                               (list :child child
                                     :function (and (functionp child) t)
+                                    :vnode (and (functionp child) vnode)
                                     :block (car block)
                                     :natural (cdr block))))
                           children)))
@@ -5112,19 +5128,16 @@ in place, rows containing a multi-line cell composed as text."
               (setq first-line nil)
               (insert line)))
         ;; Single-line row: render cells in place, padded to their
-        ;; column, identity preserved.  A function cell renders again
-        ;; here (the same output it measured as), so a field or button
-        ;; it returns lands in the real buffer.
+        ;; column, identity preserved.  A function cell renders the
+        ;; vnode it produced during measurement (the same content, now
+        ;; landing for real so a field or button it returns works).
         (let ((col 0))
           (dolist (cell row)
             (let ((vui--render-path (cons (+ index col) vui--render-path)))
               (when (> col 0)
                 (insert (vui--pad spacing)))
-              (if (plist-get cell :function)
-                  (vui--render-vnode
-                   (funcall (plist-get cell :child)
-                            (vui--width-to-chars (nth col tracks))))
-                (vui--render-vnode (plist-get cell :child)))
+              (vui--render-vnode (or (plist-get cell :vnode)
+                                     (plist-get cell :child)))
               (insert (vui--pad (max 0 (- (nth col widths)
                                           (plist-get cell :natural))))))
             (cl-incf col))))
