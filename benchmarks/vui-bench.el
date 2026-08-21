@@ -266,6 +266,18 @@ render path instead of measuring the string directly."
                                        (vui-text "line two")))
                          (number-sequence 1 n))))
 
+(vui-defcomponent vui-bench-shrink-row (n)
+  ;; Wide rows in deficit: every child declares :min-width 1 so up to
+  ;; ~50 fit one row at minima while their naturals overflow it - the
+  ;; layout core's proportional-shrink path (shares with limits and a
+  ;; long remainder loop) over long rows, which the other scenarios
+  ;; never enter.
+  :render (apply #'vui-flex :width 100 :wrap t
+                 (mapcar (lambda (i)
+                           (vui-flex-item :grow 0 :min-width 1
+                             (vui-text (format "item%03d" i))))
+                         (number-sequence 1 n))))
+
 ;;; Scenarios
 
 (defconst vui-bench--sizes '(50 200 500 1000 2000 4000)
@@ -1334,6 +1346,44 @@ placement pass; rows still render inline), the grid sweeps cells over
         (vui-unmount buf)
         (when (get-buffer buf) (kill-buffer buf))))))
 
+(defun vui-bench-responsive-rerender ()
+  "Responsive layout re-render cost - the per-keystroke path.
+Mount cost is paid once; every state change pays a full re-render, so
+this is where the measure + placement pass actually lives.  The sweep
+goes to 1000 children to expose scaling shape (a super-linear curve
+here means the layout core is walking lists quadratically), and the
+shrink rows exercise the proportional-shrink allocation the other
+scenarios never enter.  The final pair re-renders the same wrapped
+flex under both width modes, round-robin has no place here since the
+two mounts are independent; compare within one build only."
+  (vui-bench--header "Responsive layout re-render (width 80)")
+  (dolist (case `(("flex :wrap" vui-bench-flex-row (:wrap t) (50 200 500 1000))
+                  ("grid 4-col" vui-bench-grid-view nil (50 200 500 1000))
+                  ("panels :wrap" vui-bench-panel-row nil (50 200 500))
+                  ("shrink rows" vui-bench-shrink-row nil (25 50 200))))
+    (pcase-let ((`(,label ,comp ,extra ,sizes) case))
+      (dolist (n sizes)
+        (let* ((buf "*vui-bench-rr-resp*")
+               (inst (vui-mount (apply #'vui-component comp :n n extra) buf)))
+          (vui-bench--result-row
+           (format "%-13s %4d" label n)
+           (vui-bench--measure 5 (lambda () (vui--rerender-instance inst))))
+          (vui-unmount buf)
+          (when (get-buffer buf) (kill-buffer buf))))))
+  (when vui-bench--width-mode-ok
+    (dolist (mode '(char pixel))
+      (let* ((buf "*vui-bench-rr-resp-px*")
+             (inst (cl-progv '(vui-width-mode) (list mode)
+                     (vui-mount (vui-component 'vui-bench-flex-row
+                                               :n 200 :wrap t)
+                                buf))))
+        (vui-bench--result-row
+         (format "flex :wrap 200 %s" mode)
+         (cl-progv '(vui-width-mode) (list mode)
+           (vui-bench--measure 5 (lambda () (vui--rerender-instance inst)))))
+        (vui-unmount buf)
+        (when (get-buffer buf) (kill-buffer buf))))))
+
 (defun vui-bench-run ()
   "Run the full vui benchmark suite and print a report."
   (interactive)
@@ -1356,6 +1406,7 @@ placement pass; rows still render inline), the grid sweeps cells over
     (vui-bench-table-cells)
     (vui-bench-table-width-mode)
     (vui-bench-responsive)
+    (vui-bench-responsive-rerender)
     (vui-bench-component-bailout)
     (vui-bench-memo-state)
     (vui-bench-memo-state-micro)
