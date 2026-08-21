@@ -86,31 +86,31 @@ to at most AMOUNT.  Fractional remainders are handed out one unit at a
 time starting from the first weight that is positive and still under
 its limit.  Optional LIMITS caps each share; when every positive
 weight is at its limit, the rest of AMOUNT stays unassigned."
-  (let* ((count (length weights))
-         (total (float (apply #'+ 0 weights)))
-         (shares (make-list count 0))
-         (remaining amount))
+  (let ((total (float (apply #'+ 0 weights)))
+        (shares (make-list (length weights) 0))
+        (remaining amount))
+    ;; Both passes walk the lists with cons cursors: index-based
+    ;; access would make each pass quadratic in the row's child count,
+    ;; and this runs on every re-render of every shrinking row.
     (when (> total 0)
-      (let ((index 0))
-        (dolist (weight weights)
-          (let* ((raw (floor (* amount (/ (float weight) total))))
-                 (limit (and limits (nth index limits)))
+      (let ((ws weights) (ls limits) (ss shares))
+        (while ws
+          (let* ((raw (floor (* amount (/ (float (car ws)) total))))
+                 (limit (car ls))
                  (share (if limit (min raw limit) raw)))
-            (setcar (nthcdr index shares) share)
+            (setcar ss share)
             (setq remaining (- remaining share)
-                  index (1+ index)))))
+                  ws (cdr ws) ls (cdr ls) ss (cdr ss)))))
       (while (> remaining 0)
-        (let ((index 0)
+        (let ((ws weights) (ls limits) (ss shares)
               progressed)
-          (while (and (< index count) (> remaining 0))
-            (let ((weight (nth index weights))
-                  (limit (and limits (nth index limits)))
-                  (share (nth index shares)))
-              (when (and (> weight 0) (or (null limit) (< share limit)))
-                (setcar (nthcdr index shares) (1+ share))
-                (setq remaining (1- remaining)
-                      progressed t)))
-            (setq index (1+ index)))
+          (while (and ss (> remaining 0))
+            (when (and (> (car ws) 0)
+                       (or (null (car ls)) (< (car ss) (car ls))))
+              (setcar ss (1+ (car ss)))
+              (setq remaining (1- remaining)
+                    progressed t))
+            (setq ws (cdr ws) ls (cdr ls) ss (cdr ss)))
           (unless progressed
             (setq remaining 0)))))
     shares))
@@ -183,20 +183,23 @@ unless it is :rigid."
 Partition into rows at minimum widths, allocate each row, and return
 one placement plist (:row R :column C :width W) per child, in source
 order.  The column is the child's position within its row."
-  (let ((placements (make-list (length specs) nil))
+  ;; Rows are contiguous in source order, so one cursor over SPECS
+  ;; replaces per-row index lookups (which would be quadratic in the
+  ;; child count) and placements build front-to-back.
+  (let ((rest specs)
+        (placements nil)
         (row-index 0))
     (dolist (row (vui-layout-partition specs total gap))
-      (let ((widths (vui-layout-allocate
-                     (mapcar (lambda (i) (nth i specs)) row)
-                     total gap))
-            (column 0))
-        (cl-mapc (lambda (child-index width)
-                   (setcar (nthcdr child-index placements)
-                           (list :row row-index :column column :width width))
-                   (setq column (1+ column)))
-                 row widths))
-      (setq row-index (1+ row-index)))
-    placements))
+      (let* ((count (length row))
+             (widths (vui-layout-allocate (seq-take rest count) total gap))
+             (column 0))
+        (dolist (width widths)
+          (push (list :row row-index :column column :width width)
+                placements)
+          (setq column (1+ column)))
+        (setq rest (nthcdr count rest)
+              row-index (1+ row-index))))
+    (nreverse placements)))
 
 ;;; Grid
 
@@ -239,9 +242,9 @@ width is the child's track width."
 
 ;;; Block composition
 
-(defun vui-layout--pad-line (line width measure pad)
-  "Pad LINE to WIDTH, measuring with MEASURE and padding with PAD."
-  (let ((missing (- width (funcall measure line))))
+(defun vui-layout--pad-line (line measured width pad)
+  "Pad LINE, whose width is MEASURED, out to WIDTH with PAD."
+  (let ((missing (- width measured)))
     (if (> missing 0)
         (concat line (funcall pad missing))
       line)))
@@ -261,21 +264,28 @@ the composed lines."
            (pad (or pad (lambda (amount) (make-string amount ?\s))))
            (height (apply #'max (mapcar #'length blocks)))
            (separator (funcall pad gap))
-           (columns (cl-mapcar
-                     (lambda (block width)
-                       (apply #'max width
-                              (mapcar (lambda (line) (funcall measure line))
-                                      block)))
-                     blocks widths))
+           ;; Measure every line exactly once; the widths feed both
+           ;; the column maxima and the per-line padding (measuring
+           ;; again while padding would double the cost of the
+           ;; composer's hot loop).
+           (measured (mapcar (lambda (block)
+                               (mapcar (lambda (line)
+                                         (funcall measure line))
+                                       block))
+                             blocks))
+           (columns (cl-mapcar (lambda (line-widths width)
+                                 (apply #'max width line-widths))
+                               measured widths))
            (lines nil))
       (dotimes (line-index height)
         (let (parts)
-          (cl-mapc (lambda (block width)
+          (cl-mapc (lambda (block line-widths width)
                      (push (vui-layout--pad-line
                             (or (nth line-index block) "")
-                            width measure pad)
+                            (or (nth line-index line-widths) 0)
+                            width pad)
                            parts))
-                   blocks columns)
+                   blocks measured columns)
           (push (mapconcat #'identity (nreverse parts) separator) lines)))
       (nreverse lines))))
 
