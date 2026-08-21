@@ -12,11 +12,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 - Mounted buffers reflow on window resize by default: =vui-mount= and
   =vui-mount-inline= now install =vui-rerender-on-resize= themselves,
   so =vui-flex= and =vui-grid= layouts whose :width follows the window
-  respond to resizes with no setup. The hook only runs on actual size
-  changes of the buffer's windows and coalesces through the normal
-  deferred scheduling. Set =vui-rerender-on-resize-default= to nil for
-  the previous opt-in behavior; plain =vui-render= buffers still need
-  the explicit call (#134).
+  respond to resizes with no setup. The hook remembers the width it
+  last rendered for and skips height-only changes (the echo area
+  growing, a split below) - layout reads widths only - and re-renders
+  coalesce through the normal deferred scheduling. Set
+  =vui-rerender-on-resize-default= to nil for the previous opt-in
+  behavior; plain =vui-render= buffers still need the explicit call
+  (#134).
+
+- =vui-render= unmounts a component tree previously mounted in its
+  buffer before erasing it. A live instance left behind would
+  re-render the old UI over the new content from a timer, an async
+  callback, or (now that mounted buffers reflow by default) a window
+  resize.
 
 ** Fixed
 
