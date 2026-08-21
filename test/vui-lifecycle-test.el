@@ -349,7 +349,56 @@
           (expect (memq #'vui--on-window-size-change
                         window-size-change-functions)
                   :to-be nil))
-      (kill-buffer "*test-resize-default-cancel*"))))
+      (kill-buffer "*test-resize-default-cancel*")))
+
+  (it "skips the re-render when the window width is unchanged"
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (fake-width 80))
+      (vui-defcomponent resize-width-cache-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (vui-mount (vui-component 'resize-width-cache-test)
+                 "*test-resize-width-cache*")
+      (unwind-protect
+          (with-current-buffer "*test-resize-width-cache*"
+            (cl-letf (((symbol-function 'get-buffer-window)
+                       (lambda (&rest _) 'fake-window))
+                      ((symbol-function 'window-width)
+                       (lambda (&rest _) fake-width)))
+              (expect render-count :to-equal 1)
+              ;; First firing caches the width and re-renders.
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 2)
+              ;; Same width again (a height-only change): no re-render.
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 2)
+              ;; The width actually changed: re-render.
+              (setq fake-width 60)
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 3)))
+        (kill-buffer "*test-resize-width-cache*"))))
+
+  (it "vui-render tears down a previously mounted tree"
+    (let ((vui-render-delay nil)
+          (unmounted nil))
+      (vui-defcomponent resize-stale-root-test ()
+        :on-unmount (setq unmounted t)
+        :render (vui-text "MOUNTED"))
+      (vui-mount (vui-component 'resize-stale-root-test)
+                 "*test-resize-stale-root*")
+      (unwind-protect
+          (with-current-buffer "*test-resize-stale-root*"
+            (vui-render (vui-text "PLAIN"))
+            (expect unmounted :to-be t)
+            (expect vui--root-instance :to-be nil)
+            ;; The resize hook is inert without a root: the plain
+            ;; render must survive a window size change.
+            (vui--on-window-size-change nil)
+            (expect (buffer-substring-no-properties (point-min) (point-max))
+                    :to-equal "PLAIN"))
+        (kill-buffer "*test-resize-stale-root*")))))
 
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

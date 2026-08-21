@@ -2977,15 +2977,30 @@ Returns INSTANCE for chaining."
   (vui--rerender-instance instance)
   instance)
 
+(defvar-local vui--resize-last-width nil
+  "The window width this buffer's instances last re-rendered for.
+Set by `vui--on-window-size-change' so height-only size changes (the
+echo area growing, a split below) do not trigger a re-render: layout
+reads widths only.  Nil until the hook first fires.")
+
 (defun vui--on-window-size-change (_window-or-frame)
   "Re-render this buffer's mounted VUI instances.
 Installed buffer-locally on `window-size-change-functions' by
-`vui-rerender-on-resize'."
-  (dolist (instance (delq nil (cons vui--root-instance
-                                    (copy-sequence vui--inline-instances))))
-    (if vui-render-delay
-        (vui--schedule-deferred-render-for instance)
-      (vui--rerender-instance instance))))
+`vui-rerender-on-resize'.  Skipped when a window shows the buffer at
+the same width as the previous firing - the hook also fires for
+height-only changes, which cannot affect layout.  With no window to
+measure, it re-renders unconditionally."
+  (let* ((window (get-buffer-window nil t))
+         (width (and window (window-width window))))
+    (unless (and width vui--resize-last-width
+                 (= width vui--resize-last-width))
+      (when width
+        (setq vui--resize-last-width width))
+      (dolist (instance (delq nil (cons vui--root-instance
+                                        (copy-sequence vui--inline-instances))))
+        (if vui-render-delay
+            (vui--schedule-deferred-render-for instance)
+          (vui--rerender-instance instance))))))
 
 (defcustom vui-rerender-on-resize-default t
   "Whether mounting installs resize re-rendering automatically.
@@ -6938,7 +6953,10 @@ wholesale render's empty-child handling)."
 
 (defun vui-render (vnode &optional buffer)
   "Render VNODE tree into BUFFER (default: current buffer).
-Clears the buffer before rendering."
+Clears the buffer before rendering.  A component tree previously
+mounted in BUFFER is unmounted first: erasing destroys its output,
+and a live instance left behind would re-render the old UI over this
+one from a timer, an async callback, or a window resize."
   (with-current-buffer (or buffer (current-buffer))
     ;; TODO: Implement cursor preservation across re-renders.
     ;; Should track position relative to logical elements (keys/components),
@@ -6947,6 +6965,15 @@ Clears the buffer before rendering."
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))
+      ;; Tear down a previously mounted tree, as `vui-mount' does when
+      ;; it takes over a buffer.
+      (when vui--root-instance
+        (vui--unmount-root vui--root-instance)
+        (kill-local-variable 'vui--root-instance))
+      (when vui--inline-instances
+        (dolist (inline-instance vui--inline-instances)
+          (vui--unmount-root inline-instance))
+        (kill-local-variable 'vui--inline-instances))
       ;; Drop stale field bookkeeping before erasing.  A `vui-field'
       ;; from a previous render installs `widget-after-change' on
       ;; `after-change-functions' and lingers in `widget-field-list';
