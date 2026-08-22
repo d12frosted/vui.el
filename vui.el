@@ -4418,7 +4418,7 @@ header-line machinery on first use, saving the previous
 
 (defun vui--table-sticky-header-padding ()
   "Return a stretch space aligning sticky headers with buffer text.
-A window’s content consists of the fringe, margin, and text area.
+A window's content consists of the fringe, margin, and text area.
 
   ┌────────┬────────┬───────────────────────────────────────────┐
   │ Fringe │ Margin │             Buffer Text Area              │
@@ -4427,9 +4427,9 @@ A window’s content consists of the fringe, margin, and text area.
   └────────┴────────┴───────────────────────────────────────────┘
 
 Emacs inserts some virtual content at the beginning of the text
-area,such as `display-line-numbers', `line-prefix', or `wrap-prefix'.
+area, such as `display-line-numbers', `line-prefix', or `wrap-prefix'.
 The current implementation only aligns `display-line-numbers', since it
-is the most common case. :align-to N refers to the Nth canonical column
+is the most common case.  :align-to N refers to the Nth canonical column
 from the start of the text area."
   (propertize " " 'display `(space :align-to ,(line-number-display-width 'columns))))
 
@@ -4442,7 +4442,8 @@ header row - read live from the buffer, so it is always in sync with
 the current column widths - when POS is past the header row but
 before the table's end, and an empty string otherwise.
 
-The copy is prefixed with a stretch space up to column 0: header-line
+The copy is prefixed with a stretch space reaching the start of the
+buffer text (see `vui--table-sticky-header-padding'): header-line
 content starts at the window edge (over the fringe), while buffer
 text starts after it, so without the prefix the pinned columns would
 not line up with the table body.  Percent signs are doubled because
