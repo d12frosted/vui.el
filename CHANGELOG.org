@@ -62,6 +62,26 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   pinned header now aligns to =(line-number-display-width 'columns)= instead.
   Contributed by ginqi7 (#148).
 
+** Documentation
+
+- Added an External Updates guide (=docs/guide/12-external-updates.org=)
+  covering updates that start outside a component: a process sentinel, a
+  global timer, a hook. It documents the two approaches - publishing a
+  =vui-with-async-context= closure from the component, or updating props
+  from outside with =vui-get-instance= plus =vui-update= - and when each
+  fits (#151).
+
+- Documented that props do not re-seed state. A component whose =:state=
+  is initialized from a prop keeps the value it captured at mount, so
+  =vui-update= appears to do nothing: the props change and the buffer does
+  not, with no error or warning. Now called out in the =vui-update= and
+  =vui-update-props= docstrings and in the API reference, with the two
+  fixes (read the prop in =:render=, or sync it in =:on-update=) (#151).
+
+- Documented in =vui-defcomponent= that a function returned from
+  =:on-mount= becomes the unmount cleanup, which silently captures a
+  =:on-mount= form ending in a =setq= of a lambda (#151).
+
 ** Added
 
 - =vui-grid=: a responsive grid of equal-width tracks (#134). Cells

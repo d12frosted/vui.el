@@ -1,0 +1,220 @@
+#+TITLE: External Updates
+#+AUTHOR: vui.el Documentation
+#+OPTIONS: toc:2 num:t
+
+Most updates start inside a component: a button handler, an effect, a
+callback the component itself created. Sometimes they start outside it.
+A process sentinel, a global timer, a hook on =after-save-hook=, a
+notification from some other package - none of them run inside a
+component, and none of them know which component to update.
+
+This guide covers the two ways to bridge that gap, and the one silent
+failure that trips people up on the way.
+
+* The Problem
+
+=vui-set-state= works out which component owns a state key by looking at
+the component that is currently rendering. Outside a component there is
+no such thing, so it signals:
+
+#+begin_src elisp
+(defun my-sentinel (proc _event)
+  (vui-set-state :data (parse-output proc)))
+;; => vui-set-state called outside of component context
+#+end_src
+
+There are two fixes. Pick by asking who owns the data: the component
+(state), or the code outside it (props).
+
+| Owner              | Approach                                         |
+|--------------------+--------------------------------------------------|
+| The component      | Publish a context-restoring closure              |
+| The code outside   | =vui-get-instance= + =vui-update=                |
+
+* Approach 1: Publish a Closure
+
+=vui-with-async-context= captures the current component and returns a
+function that restores it. Evaluate it in =:on-mount=, store the result
+somewhere the outside code can reach, and the outside code just calls it:
+
+#+begin_src elisp
+(defvar my-staged-data nil
+  "Filled in by the fetchers, read by the component.")
+
+(defvar my-commit-fn nil
+  "Set by `my-panel' while it is mounted.")
+
+(vui-defcomponent my-panel ()
+  :state ((data nil))
+
+  :on-mount
+  (progn
+    (setq my-commit-fn
+          (vui-with-async-context
+            (vui-set-state :data my-staged-data)))
+    ;; Cleanup - note this is NOT the closure above, see the warning below
+    (lambda () (setq my-commit-fn nil)))
+
+  :render
+  (vui-text (format "%S" data)))
+#+end_src
+
+Now any sentinel, timer, or hook can push an update with no vui
+machinery at the call site:
+
+#+begin_src elisp
+(defun my-sentinel (proc _event)
+  (when (memq (process-status proc) '(exit signal))
+    (setq my-staged-data (parse-output proc))
+    (when my-commit-fn (funcall my-commit-fn))))
+#+end_src
+
+The closure restores the buffer and the component before running the
+body, so it works from any buffer. It is a no-op if the buffer was
+killed or the tree unmounted, so a late sentinel after the user pressed
+=q= does nothing. It also stays valid across re-renders: the captured
+instance survives reconciliation.
+
+#+begin_quote
+*Trap*: a function returned from =:on-mount= is stored as the unmount
+cleanup. =(setq my-commit-fn (vui-with-async-context ...))= evaluates to
+the closure, so writing that as the last form of =:on-mount= hands your
+commit function to vui as a cleanup and it gets called on unmount. Wrap
+it in a =progn= that ends with =nil= or with a real cleanup function.
+#+end_quote
+
+The same trap does not apply to =vui-use-effect=, which is why the
+effect form is often tidier:
+
+#+begin_src elisp
+:render
+(progn
+  (vui-use-effect ()
+    (setq my-commit-fn (vui-with-async-context
+                         (vui-set-state :data my-staged-data)))
+    (lambda () (setq my-commit-fn nil)))
+  (vui-text (format "%S" data)))
+#+end_src
+
+=vui-async-callback= is the variant that takes arguments, for when the
+outside code has the data in hand and should pass it in rather than
+route it through a global:
+
+#+begin_src elisp
+(vui-use-effect ()
+  (setq my-commit-fn (vui-async-callback (data)
+                       (vui-set-state :data data)))
+  (lambda () (setq my-commit-fn nil)))
+#+end_src
+
+* Approach 2: Update Props From Outside
+
+If the data really belongs to the outside world, make it a prop.
+=vui-get-instance= finds the instance mounted in a buffer, and
+=vui-update= replaces its props and re-renders:
+
+#+begin_src elisp
+(vui-defcomponent my-panel (data)
+  :render (vui-text (format "%S" data)))
+
+(vui-mount (vui-component 'my-panel :data nil) "*my-panel*")
+
+(defun my-sentinel (proc _event)
+  (when (memq (process-status proc) '(exit signal))
+    (when-let* ((instance (vui-get-instance "*my-panel*")))
+      (vui-update instance (list :data (parse-output proc))))))
+#+end_src
+
+Two things to know:
+
+- =NEW-PROPS= replaces the props plist completely. Pass every prop the
+  component needs, not just the changed one.
+- =vui-get-instance= returns the *root* instance, so this reaches the
+  component you passed to =vui-mount=. To update something deeper, pass
+  the data down as props, or use Approach 1 from inside that component.
+
+** Props Do Not Re-seed State
+
+This is the one that fails silently. State initializers run once, at
+mount. A component that seeds =:state= from a prop keeps rendering the
+seeded value forever:
+
+#+begin_src elisp
+;; BROKEN: vui-update sets the prop, the render still reads the state
+(vui-defcomponent my-panel (data)
+  :state ((data data))          ; runs once, at mount
+  :render (vui-text (format "%S" data)))
+#+end_src
+
+There is no error and no warning. The props change, the buffer does
+not. If you need the prop to drive the display, read it directly in
+=:render= as in the example above. If you need it in state - because the
+component also modifies it - sync it explicitly in =:on-update=:
+
+#+begin_src elisp
+(vui-defcomponent my-panel (data)
+  :state ((draft data))         ; seeds the first render
+  :on-update (unless (equal data (plist-get prev-props :data))
+               (vui-set-state :draft data))
+  :render (vui-text (format "%S" draft)))
+#+end_src
+
+#+begin_quote
+*Debugging tip*: =M-x vui-inspect-state= in the mounted buffer shows
+props and state side by side. If =vui-update= appears to do nothing, this
+is the fastest way to see the props changing while the state sits still.
+See [[file:10-dev-tools.org][Developer Tools]].
+#+end_quote
+
+* Which One?
+
+Approach 1 keeps the data inside the component, which means it survives
+its own re-renders, dies with the buffer, and does not need the outside
+code to know anything about vui. Prefer it for anything the component
+owns: fetched data, poll results, progress.
+
+Approach 2 suits data that has an owner elsewhere and a natural moment
+to push - a file that was saved, a selection that changed, a store the
+rest of your package already maintains.
+
+* Consider Owning the Polling
+
+If the outside code exists only to feed the component - a timer plus a
+few fetchers - it is often simpler to move the schedule inside the
+component and skip this guide entirely:
+
+#+begin_src elisp
+(vui-defcomponent my-panel ()
+  :state ((data nil))
+  :render
+  (let* ((busy (vui-use-ref nil))
+         (apply-data (vui-async-callback (result)
+                       (setcar busy nil)
+                       (when result (vui-set-state :data result))))
+         (refresh (lambda ()
+                    (unless (car busy)
+                      (setcar busy t)
+                      (my-fetch-async apply-data)))))
+    (vui-use-effect ()
+      (funcall refresh)
+      (let ((timer (run-with-timer 60 60 (vui-with-async-context (funcall refresh)))))
+        (lambda () (cancel-timer timer))))
+    (vui-text (format "%S" data))))
+#+end_src
+
+The timer dies with the component, the "already fetching" flag lives in
+a =vui-use-ref= (it survives re-renders and does not cause one), and
+there is no global state to keep in sync. =docs/examples/15-ci-dashboard.el=
+is a full program built this way: it polls the =gh= CLI with
+=make-process= and parses JSON in the sentinel.
+
+Note that separate =vui-set-state= calls do not each cost a render.
+=vui-render-delay= defaults to 0.01, so updates landing within 10ms
+coalesce into one re-render. You rarely need to batch fetch results
+yourself just to avoid redundant renders.
+
+* What's Next?
+
+- [[file:07-lifecycle.org][Lifecycle]] - =:on-mount=, =:on-update=, and cleanup functions
+- [[file:05-hooks.org][Hooks]] - =vui-use-effect=, =vui-use-ref=, =vui-use-async=
+- [[file:10-dev-tools.org][Developer Tools]] - =vui-inspect-state= and the debug log

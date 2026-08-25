@@ -210,7 +210,44 @@
               ;; State should have been updated via async context
               (expect timer-fired :to-be-truthy)
               (expect (plist-get (vui-instance-state instance) :ticks) :to-equal 1))
-          (kill-buffer "*test-async-ctx*"))))))
+          (kill-buffer "*test-async-ctx*")))))
+
+  (it "drives a mounted tree from a caller with no component context"
+    ;; The documented recipe for updates that originate outside the tree
+    ;; (a process sentinel, a global timer): the component publishes a
+    ;; context-restoring closure from `:on-mount', and the outside caller
+    ;; just funcalls it - from another buffer, with no vui state bound.
+    ;; See docs/guide/12-external-updates.org.
+    (let ((vui-render-delay nil)
+          (commit nil)
+          (staged nil))
+      (vui-defcomponent async-ctx-external ()
+        :state ((payload nil))
+        :on-mount (progn
+                    (setq commit (vui-with-async-context
+                                   (vui-set-state :payload staged)))
+                    ;; Not the closure: a function returned from :on-mount
+                    ;; is stored as the unmount cleanup.
+                    nil)
+        :render (vui-text (format "%S" payload)))
+      (let ((instance (vui-mount (vui-component 'async-ctx-external)
+                                 "*test-async-external*")))
+        (unwind-protect
+            (progn
+              (expect (plist-get (vui-instance-state instance) :payload) :to-be nil)
+              ;; Call it the way a sentinel would: unrelated buffer, no context
+              (setq staged '(:load 1.25))
+              (with-temp-buffer (funcall commit))
+              (expect (plist-get (vui-instance-state instance) :payload)
+                      :to-equal '(:load 1.25))
+              (expect (with-current-buffer "*test-async-external*" (buffer-string))
+                      :to-equal "(:load 1.25)")
+              ;; Still valid after a re-render: the captured instance survives
+              (setq staged '(:load 2.5))
+              (with-temp-buffer (funcall commit))
+              (expect (with-current-buffer "*test-async-external*" (buffer-string))
+                      :to-equal "(:load 2.5)"))
+          (kill-buffer "*test-async-external*"))))))
 
 (describe "vui-async-callback"
   (it "allows setting state from async callback with arguments"

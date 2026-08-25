@@ -634,6 +634,46 @@
               (expect child-compute-count :to-equal 2))
           (kill-buffer "*test-memo-child*")))))
 
+  (it "does not re-seed state initialized from a prop"
+    ;; State initializers run once, at mount.  A component that seeds
+    ;; :state from a prop therefore ignores every later `vui-update':
+    ;; the props change, the render still reads the old state.  This is
+    ;; the silent failure behind driving a mounted tree from outside -
+    ;; see docs/guide/12-external-updates.org.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent update-seeded-state-test (payload)
+        :state ((cached payload))
+        :render (vui-text (format "%S" cached)))
+      (let ((instance (vui-mount (vui-component 'update-seeded-state-test
+                                   :payload "old")
+                                 "*test-update-seeded*")))
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*test-update-seeded*" (buffer-string))
+                      :to-equal "\"old\"")
+              (vui-update instance '(:payload "new"))
+              ;; Props updated, state did not
+              (expect (plist-get (vui-instance-props instance) :payload)
+                      :to-equal "new")
+              (expect (with-current-buffer "*test-update-seeded*" (buffer-string))
+                      :to-equal "\"old\""))
+          (kill-buffer "*test-update-seeded*")))))
+
+  (it "re-renders a prop read directly by the render function"
+    ;; The counterpart: read the prop in :render and `vui-update' works.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent update-direct-prop-test (payload)
+        :render (vui-text (format "%S" payload)))
+      (let ((instance (vui-mount (vui-component 'update-direct-prop-test
+                                   :payload "old")
+                                 "*test-update-direct*")))
+        (unwind-protect
+            (progn
+              (vui-update instance '(:payload "new"))
+              (expect (with-current-buffer "*test-update-direct*" (buffer-string))
+                      :to-equal "\"new\""))
+          (kill-buffer "*test-update-direct*")))))
+
   (it "preserves component state (not memos)"
     (let ((vui-render-delay nil))
       (vui-defcomponent state-preserve-test (label)
