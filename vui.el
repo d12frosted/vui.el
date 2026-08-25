@@ -1028,7 +1028,10 @@ ARGS is a list of prop names the component accepts.
 BODY may optionally start with a documentation string, followed by
 keyword sections:
   :state ((var initial) ...) - local state variables
-  :on-mount FORM - called after first render (optional)
+  :on-mount FORM - called after first render (optional).  A function
+    returned from FORM is stored as the unmount cleanup, so a FORM
+    ending in a `setq' of a lambda hands that lambda to vui by
+    accident; end it with nil or with the real cleanup.
   :on-update FORM - called after re-render (optional)
   :on-unmount FORM - called before removal (optional)
   :should-update FORM - return t to re-render, nil to skip (optional)
@@ -2949,11 +2952,18 @@ Returns INSTANCE for chaining."
 This is useful when new data arrives and you want computed values to
 refresh while preserving UI state (like collapsed sections).
 
-NEW-PROPS completely replaces the instance's current props.
+NEW-PROPS completely replaces the instance's current props, so pass
+every prop the component needs, not only the changed ones.
 
 All memoized values in the instance tree are invalidated, forcing
 recomputation on the next render.  Component state is preserved
 through reconciliation.
+
+State is preserved, not re-seeded: a component whose `:state' is
+initialized from a prop keeps the value it captured at mount, and
+new props for that prop are ignored with no error.  Read the prop
+directly in `:render', or sync it in `:on-update'.  See the
+External Updates guide.
 
 Returns INSTANCE for chaining."
   (vui--invalidate-memos instance)
@@ -2967,7 +2977,10 @@ This is useful for periodic refreshes where data may not have changed.
 Memoized values are preserved and only recompute if their dependencies
 change.
 
-NEW-PROPS completely replaces the instance's current props.
+NEW-PROPS completely replaces the instance's current props, so pass
+every prop the component needs, not only the changed ones.  As with
+`vui-update', state seeded from a prop is preserved rather than
+re-seeded.
 
 Use `vui-update' instead when external data has changed and all cached
 computations should be discarded.
@@ -7199,7 +7212,13 @@ Use this together with `vui-rerender', `vui-update', and
 `vui-update-props' to drive a mounted UI from outside:
 
   (when-let* ((instance (vui-get-instance \"*sidebar*\")))
-    (vui-update instance (list :note note)))"
+    (vui-update instance (list :note note)))
+
+The instance returned is the root - the component passed to
+`vui-mount'.  Note that updating its props does not reach state a
+component seeded from those props (see `vui-update'); to push data
+into a nested component, use `vui-with-async-context' instead.  See
+the External Updates guide."
   (when-let* ((buf (get-buffer (or buffer (current-buffer)))))
     (when (buffer-live-p buf)
       (buffer-local-value 'vui--root-instance buf))))

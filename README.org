@@ -204,6 +204,7 @@ Clone this repository and add to your load-path:
 | [[file:docs/guide/09-performance.org][Performance]]     | Optimization techniques          |
 | [[file:docs/guide/10-dev-tools.org][Developer Tools]] | Inspector, profiler, debugging   |
 | [[file:docs/guide/11-inline.org][Inline Mounting]] | Ephemeral forms in existing buffers |
+| [[file:docs/guide/12-external-updates.org][External Updates]] | Driving a mounted tree from outside |
 | [[file:docs/reference/api.org][API Reference]]   | Complete function reference      |
 
 * Deep Dives

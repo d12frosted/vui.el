@@ -362,3 +362,4 @@ function from =:on-mount=.
 
 - [[file:08-error-handling.org][Error Handling]] - Error boundaries and handlers
 - [[file:05-hooks.org][Hooks]] - vui-use-effect for more complex scenarios
+- [[file:12-external-updates.org][External Updates]] - Updates that start outside the component

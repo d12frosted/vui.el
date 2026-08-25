@@ -205,6 +205,10 @@ to drive a mounted UI from outside, without storing the instance yourself:
   (vui-update instance (list :note note)))
 #+end_src
 
+The instance returned is the root - the component passed to =vui-mount=. To
+push data into a nested component, or into state rather than props, see
+[[file:../guide/12-external-updates.org][External Updates]].
+
 ** vui-rerender
 
 #+begin_src elisp
@@ -236,9 +240,15 @@ Update instance props, invalidate all memos, and re-render.
 Use this when external data has changed and cached computations should be
 discarded (e.g., after a file save, database update, or user-triggered refresh).
 
-NEW-PROPS completely replaces the instance's current props. All memoized values
-in the instance tree are invalidated, forcing recomputation on the next render.
+NEW-PROPS completely replaces the instance's current props, so pass every prop
+the component needs, not only the changed ones. All memoized values in the
+instance tree are invalidated, forcing recomputation on the next render.
 Component state is preserved through reconciliation.
+
+State is preserved, *not* re-seeded: a component whose =:state= is initialized
+from a prop keeps the value it captured at mount, and new props for that prop
+are ignored with no error. Read the prop directly in =:render=, or sync it in
+=:on-update=. See [[file:../guide/12-external-updates.org][External Updates]].
 
 Returns INSTANCE for chaining.
 
@@ -259,8 +269,9 @@ Use this for periodic or speculative refreshes where data may not have changed.
 Memoized values are preserved and only recompute if their dependencies change,
 avoiding unnecessary expensive work.
 
-NEW-PROPS completely replaces the instance's current props. Component state is
-preserved through reconciliation.
+NEW-PROPS completely replaces the instance's current props, so pass every prop
+the component needs, not only the changed ones. As with =vui-update=, state
+seeded from a prop is preserved rather than re-seeded.
 
 Returns INSTANCE for chaining.
 
