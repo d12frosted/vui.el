@@ -1506,4 +1506,78 @@
               (expect loads :to-equal 1))
           (kill-buffer "*test-measure-async*"))))))
 
+(describe ":width `window' resolution"
+  ;; `window' must measure the window showing the buffer being rendered,
+  ;; not whichever window happens to be selected (#153).
+  (before-each (delete-other-windows))
+  (after-each (delete-other-windows))
+
+  (it "measures the buffer's own window, not the selected one"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent flex-window-width ()
+        :render (vui-flex :width 'window
+                  (vui-flex-item :grow 1
+                    (lambda (width) (vui-text (make-string width ?x))))))
+      (set-frame-width nil 100)
+      (let* ((left (selected-window))
+             (right (split-window left 70 t)))
+        (set-window-buffer left (get-buffer-create "*test-ww-other*"))
+        (set-window-buffer right (get-buffer-create "*test-ww*"))
+        (select-window left)
+        (unwind-protect
+            (progn
+              (vui-mount (vui-component 'flex-window-width) "*test-ww*")
+              (expect (with-current-buffer "*test-ww*"
+                        (length (string-trim-right (buffer-string))))
+                      :to-equal (window-width right)))
+          (kill-buffer "*test-ww*")
+          (kill-buffer "*test-ww-other*")))))
+
+  (it "measures the buffer's own window from a table cell measure pass"
+    ;; Cells are measured in a temp buffer; the origin buffer's window
+    ;; must still be the one that `window' resolves against.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent grid-window-width ()
+        :render (vui-table
+                 :columns '((:header nil))
+                 :rows (list (list (vui-flex :width 'window
+                                     (vui-flex-item :grow 1
+                                       (lambda (width)
+                                         (vui-text (make-string width ?x)))))))))
+      (set-frame-width nil 100)
+      (let* ((left (selected-window))
+             (right (split-window left 70 t)))
+        (set-window-buffer left (get-buffer-create "*test-ww2-other*"))
+        (set-window-buffer right (get-buffer-create "*test-ww2*"))
+        (select-window left)
+        (unwind-protect
+            (progn
+              (vui-mount (vui-component 'grid-window-width) "*test-ww2*")
+              (let ((content (with-current-buffer "*test-ww2*" (buffer-string))))
+                ;; The run of x is what the real render laid out, and the
+                ;; trimmed width is what the measure pass sized the column
+                ;; to.  A measure that resolved `window' against the wrong
+                ;; window pads the cell out past its content.
+                (expect (cl-count ?x content) :to-equal (window-width right))
+                (expect (length (string-trim-right content))
+                        :to-equal (window-width right))))
+          (kill-buffer "*test-ww2*")
+          (kill-buffer "*test-ww2-other*")))))
+
+  (it "falls back to the selected window when the buffer is not displayed"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent flex-window-hidden ()
+        :render (vui-flex :width 'window
+                  (vui-flex-item :grow 1
+                    (lambda (width) (vui-text (make-string width ?x))))))
+      (set-frame-width nil 100)
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'flex-window-hidden) "*test-ww3*")
+            ;; Never displayed anywhere: the selected window is all we have
+            (expect (with-current-buffer "*test-ww3*"
+                      (length (string-trim-right (buffer-string))))
+                    :to-equal (window-width (selected-window))))
+        (kill-buffer "*test-ww3*")))))
+
 ;;; vui-layout-test.el ends here
