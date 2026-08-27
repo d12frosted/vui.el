@@ -28,6 +28,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =:width 'window= now measures the window showing the buffer being
+  rendered, not whichever window happens to be selected. A =vui-flex= or
+  =vui-grid= in a buffer displayed somewhere other than the selected
+  window - a side window, a popup frame that deliberately keeps focus
+  elsewhere - laid itself out to an unrelated window's width, and only
+  looked right once that window was selected. The resize hook already
+  measured the buffer's own window, so such a tree re-rendered because
+  its own window resized and then laid out for a different one.
+  Measure passes resolve against the origin buffer's window, the same
+  way =fill-column= is carried into them, and a buffer displayed
+  nowhere still falls back to the selected window (#153).
+
 - Measuring a mounted component now sees its current state. Layout
   containers measure children by rendering them into a temp buffer;
   a component child used to measure as a throwaway instance with

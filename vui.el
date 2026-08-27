@@ -4754,6 +4754,24 @@ Handles :truncate and overflow:
                       (insert " "))))))
     (insert "\n")))
 
+(defun vui--window-width ()
+  "Columns of the window showing the buffer currently being rendered.
+Not `(window-width)', which measures the SELECTED window: a tree
+mounted in a buffer displayed somewhere else - a side window, a popup
+frame that deliberately keeps focus elsewhere - would otherwise lay
+itself out to an unrelated window\='s width, and only look right once
+that window happened to be selected.
+
+The buffer is `vui--measure-buffer\='s, so a layout measured inside a
+temp buffer (a table sizing its cells) resolves against the window of
+the buffer it will land in, the same way `fill-column\=' is carried in.
+Falls back to the selected window when that buffer is not displayed
+anywhere.  A buffer shown in several windows resolves to the first one
+`get-buffer-window\=' returns, as `vui--on-window-size-change\=' does."
+  (if-let* ((window (get-buffer-window (vui--measure-buffer) t)))
+      (window-width window)
+    (window-width)))
+
 (defun vui--flex-resolve-width (width)
   "Resolve a `vui-flex' WIDTH spec to a number at render time.
 WIDTH is a number, a function, or one of the symbols `fill-column'
@@ -4762,7 +4780,7 @@ and `window'."
    (cond
     ((numberp width) width)
     ((eq width 'fill-column) fill-column)
-    ((eq width 'window) (window-width))
+    ((eq width 'window) (vui--window-width))
     ((functionp width) (funcall width))
     (t fill-column))))
 
