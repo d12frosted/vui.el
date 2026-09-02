@@ -586,7 +586,7 @@ to give it a proportional share of the leftover width instead:
 | Option       | Type | Default | Description                                 |
 |--------------+------+---------+---------------------------------------------|
 | =:grow=      | int  | 1       | Proportional weight among growing children  |
-| =:min-width= | int  | nil     | Under =:wrap=, floor the child may shrink to (chars); for a function child also its width during row partitioning |
+| =:min-width= | int  | nil     | Under =:wrap=, the minimum width the child occupies (chars). A function child may shrink down to it (it is also its width during row partitioning); a vnode child never shrinks, so it only raises the width |
 
 A =vui-flex-item= child is either a vnode (rendered inside a box padded
 to the allotted width) or a function called with the allotted width -
@@ -610,8 +610,10 @@ their extra lines.
 With =:wrap=, children fill a row while they fit (at their minimum
 widths) and continue on the next row, in source order. Each row
 distributes width on its own: growers grow into their row's leftover,
-and a =vui-flex-item= with =:min-width= may shrink down to it when the
-row runs out of space. A row whose children are all single-line
+and a function child in a =vui-flex-item= with =:min-width= may shrink
+down to it when the row runs out of space. Vnode children render at
+one width and never shrink, so a row packs them at their content
+width; their =:min-width= only raises it. A row whose children are all single-line
 renders them in place, exactly like a non-wrapped flex - components
 and widgets keep their identity. A row containing a multi-line child
 (a box, a vstack, a table) is composed from the children's rendered

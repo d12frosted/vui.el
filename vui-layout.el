@@ -21,8 +21,10 @@
 ;;               CSS min-width
 ;;   :grow G     weight for distributing surplus width (default 0)
 ;;   :rigid t    never shrink below natural, even alone on an
-;;               overflowing row (single-line atomic content such as
-;;               buttons and fields)
+;;               overflowing row (content that renders at one width
+;;               and cannot re-render narrower: `vui-flex' marks every
+;;               static child rigid, only width-receiving function
+;;               children shrink)
 ;;
 ;; - A PLACEMENT is the result for one child: (:row R :column C
 ;;   :width W), in source order.  The core returns geometry; the

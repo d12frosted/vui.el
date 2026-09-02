@@ -616,8 +616,11 @@ width and growers get zero - the row degrades instead of erroring.
 Pass =:wrap t= and children flow into rows instead of overflowing:
 they fill a row while they fit and continue on the next one, in source
 order. Each row distributes width independently - growers grow into
-their own row's leftover, and =vui-flex-item :min-width= lets a child
-shrink down to a floor before its row gives up and wraps:
+their own row's leftover, and =vui-flex-item :min-width= lets a
+function child (one that receives its width) shrink down to a floor
+before its row gives up and wraps. A vnode child renders at one width,
+so it never shrinks: for it =:min-width= only raises the width it
+occupies. For example:
 
 #+begin_src elisp
 ;; Panels side by side when wide, stacked when narrow

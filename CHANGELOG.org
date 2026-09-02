@@ -28,6 +28,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Static children of a wrapping =vui-flex= no longer "shrink". A vnode
+  child renders at one width and cannot re-render narrower, so a
+  =:min-width= below its content only packed the row tighter than it
+  could render, and the row overflowed. Static children are now rigid
+  in the layout: rows pack them at their content width, and
+  =:min-width= only raises the width they occupy (padded). Function
+  children, which receive their width, still shrink down to their
+  =:min-width=.
+
 - A layout spec's =:min= above its =:natural= now raises the width the
   child occupies, the way CSS min-width overrides width (and the way
   textui's engine treats a declared minimum). It used to be silently
