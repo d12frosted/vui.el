@@ -73,6 +73,12 @@
     (expect (vui-layout-partition (list '(:natural 20)) 10 1)
             :to-equal '((0))))
 
+  (it "partitions at a :min above :natural, which raises the width"
+    ;; naturals 3+1+3 would fit 10, but each child occupies its min 6
+    (expect (vui-layout-partition
+             (list '(:natural 3 :min 6) '(:natural 3 :min 6)) 10 1)
+            :to-equal '((0) (1))))
+
   (it "accounts for the gap between children"
     ;; 5 + gap 2 + 5 = 12 > 10: wraps
     (expect (vui-layout-partition
@@ -124,7 +130,28 @@
 
   (it "keeps a lone rigid child at natural width even when it overflows"
     (expect (vui-layout-allocate (list '(:natural 20 :rigid t)) 10 1)
-            :to-equal '(20))))
+            :to-equal '(20)))
+
+  (it "raises a child to a :min above its natural width"
+    ;; a minimum is a floor on the occupied width, like CSS min-width
+    (expect (vui-layout-allocate
+             (list '(:natural 3 :min 6) '(:natural 3)) 10 1)
+            :to-equal '(6 3)))
+
+  (it "computes surplus from the raised widths"
+    ;; available 10, occupied 6+2: only 2 extra for the grower
+    (expect (vui-layout-allocate
+             (list '(:natural 3 :min 6) '(:natural 2 :grow 1)) 11 1)
+            :to-equal '(6 4)))
+
+  (it "raises a rigid child too, and never shrinks it from there"
+    (expect (vui-layout-allocate
+             (list '(:natural 3 :min 6 :rigid t)) 10 1)
+            :to-equal '(6))
+    ;; available 10, occupied 6+8: the deficit falls on the shrinkable child
+    (expect (vui-layout-allocate
+             (list '(:natural 3 :min 6 :rigid t) '(:natural 8 :min 2)) 11 1)
+            :to-equal '(6 4))))
 
 ;;; End-to-end placements
 
@@ -151,6 +178,11 @@
       (expect (mapcar (lambda (p) (plist-get p :row))
                       (vui-layout-solve specs 3 1))
               :to-equal '(0 1 2 3))))
+
+  (it "clamps a lone child whose raised :min overflows the row"
+    ;; occupies 20 by its :min; alone and not rigid, it clamps to 10
+    (expect (vui-layout-solve (list '(:natural 3 :min 20)) 10 1)
+            :to-equal '((:row 0 :column 0 :width 10))))
 
   (it "solves no children to no placements"
     (expect (vui-layout-solve nil 10 1) :to-equal nil)))
