@@ -28,6 +28,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A layout spec's =:min= above its =:natural= now raises the width the
+  child occupies, the way CSS min-width overrides width (and the way
+  textui's engine treats a declared minimum). It used to be silently
+  capped at the natural width, so a =vui-flex-item :min-width= wider
+  than the child's content had no effect at all.
+
 - =:width 'window= now measures the window showing the buffer being
   rendered, not whichever window happens to be selected. A =vui-flex= or
   =vui-grid= in a buffer displayed somewhere other than the selected

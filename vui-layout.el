@@ -16,7 +16,9 @@
 ;; - A SPEC describes one child's width constraints, as a plist:
 ;;   :natural N  measured natural width (required, non-negative)
 ;;   :min M      floor the child may shrink to (default: natural,
-;;               i.e. not shrinkable; capped at natural)
+;;               i.e. not shrinkable); a floor above the natural
+;;               width raises the width the child occupies, like
+;;               CSS min-width
 ;;   :grow G     weight for distributing surplus width (default 0)
 ;;   :rigid t    never shrink below natural, even alone on an
 ;;               overflowing row (single-line atomic content such as
@@ -61,17 +63,20 @@
 ;;; Spec accessors
 
 (defun vui-layout--natural (spec)
-  "Return SPEC's natural width."
-  (or (plist-get spec :natural) 0))
+  "Return SPEC's effective natural width.
+An explicit :min above the measured :natural raises it: the minimum
+is a floor on the width the child occupies, as CSS min-width
+overrides width."
+  (max (or (plist-get spec :natural) 0)
+       (or (plist-get spec :min) 0)))
 
 (defun vui-layout--min (spec)
   "Return SPEC's effective minimum width.
-Defaults to the natural width (not shrinkable); an explicit :min is
-capped at the natural width; :rigid forces the natural width."
-  (let ((natural (vui-layout--natural spec)))
-    (if (plist-get spec :rigid)
-        natural
-      (min natural (or (plist-get spec :min) natural)))))
+Defaults to the natural width (not shrinkable); :rigid forces the
+natural width."
+  (if (plist-get spec :rigid)
+      (vui-layout--natural spec)
+    (or (plist-get spec :min) (vui-layout--natural spec))))
 
 (defun vui-layout--grow (spec)
   "Return SPEC's grow weight."
