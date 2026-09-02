@@ -1589,11 +1589,14 @@ ARGS can start with keyword options, followed by the child.
 Options:
   :grow N      - proportional weight for distributing leftover width
                  among growing children (default 1)
-  :min-width M - under `vui-flex' :wrap, the floor (in characters) the
-                 child may shrink to when its row runs out of width.
-                 For a function child it is also the width the child
-                 occupies during row partitioning.  Ignored without
-                 :wrap.
+  :min-width M - under `vui-flex' :wrap, the minimum width (in
+                 characters) the child occupies.  A function child
+                 renders at whatever width its row assigns, so for it
+                 M is the floor it may shrink to when the row runs out
+                 of width (and its width during row partitioning).  A
+                 vnode child renders at one width and never shrinks;
+                 for it M only raises the width it occupies, padded.
+                 Ignored without :wrap.
   :key KEY     - for reconciliation
 
 The child is either a vnode - rendered inside a box padded to the
@@ -4950,14 +4953,17 @@ current state."
                  ;; width it occupies during partitioning.
                  (list :child inner :function t
                        :natural (or min 0) :min (or min 0) :grow grow)
+               ;; A static block renders at one width and cannot
+               ;; re-render narrower, so it is rigid: packing its row
+               ;; at a smaller floor would only overflow the row.
+               ;; :min-width can still raise the width it occupies.
                (let ((block (vui--measure-block inner)))
                  (list :child inner :block (car block)
-                       :natural (cdr block)
-                       :min (or min (cdr block))
+                       :natural (cdr block) :min min :rigid t
                        :grow grow))))
          (let ((block (vui--measure-block child)))
            (list :child child :block (car block)
-                 :natural (cdr block) :min (cdr block) :grow 0))))
+                 :natural (cdr block) :rigid t :grow 0))))
      children)))
 
 (defun vui--flex-wrap-rows (specs placements)
@@ -4982,7 +4988,8 @@ Returns a list of rows, each a list of (SPEC . WIDTH) in source order."
   "Render ROW of (SPEC . WIDTH) cells in place, separated by SPACING.
 INDEX is the first cell's child index, for render paths.  The same
 identity-preserving render as a non-wrapped flex: children render into
-the real buffer, growers pad out to their assigned width."
+the real buffer and pad out to their assigned width (a grower's share,
+or a :min-width above the content)."
   (let ((prev-rendered-p nil))
     (dolist (cell row)
       (let* ((spec (car cell))
@@ -5002,11 +5009,9 @@ the real buffer, growers pad out to their assigned width."
           (vui--render-vnode (or (plist-get spec :vnode)
                                  (funcall child (vui--width-to-chars width))))
           (insert (vui--pad (max 0 (- width (plist-get spec :natural))))))
-         ((> (plist-get spec :grow) 0)
-          (vui--render-vnode child)
-          (insert (vui--pad (max 0 (- width (plist-get spec :natural))))))
          (t
-          (vui--render-vnode child)))
+          (vui--render-vnode child)
+          (insert (vui--pad (max 0 (- width (plist-get spec :natural)))))))
         (if (> (point) content-start)
             (setq prev-rendered-p t)
           ;; Child rendered nothing - remove the separator we added

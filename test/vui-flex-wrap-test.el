@@ -72,6 +72,22 @@
                  (lambda (w) (vui-text (make-string w ?b))))))
             :to-equal "aaaaaa bbb"))
 
+  (it "never shrinks a static child below its content"
+    ;; a static block cannot re-render narrower, so packing the row at
+    ;; :min-width would only overflow it: the children wrap instead
+    (expect (vui-flex-wrap-test--render
+             (vui-flex :width 16 :wrap t
+               (vui-flex-item :grow 0 :min-width 4 (vui-text "first-child"))
+               (vui-flex-item :grow 0 :min-width 4 (vui-text "second-child"))))
+            :to-equal "first-child\nsecond-child"))
+
+  (it "raises a static child to a :min-width above its content"
+    (expect (vui-flex-wrap-test--render
+             (vui-flex :width 30 :wrap t
+               (vui-flex-item :grow 0 :min-width 6 (vui-text "abc"))
+               (vui-text "xyz")))
+            :to-equal "abc    xyz"))
+
   (it "composes a row containing a multi-line block"
     (expect (vui-flex-wrap-test--render
              (vui-flex :width 9 :wrap t
