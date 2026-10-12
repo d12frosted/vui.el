@@ -2870,6 +2870,27 @@ scroll position instead of being yanked to point.  See
               result)))
     result))
 
+(defun vui--window-fits-buffer-p (window)
+  "Return non-nil when WINDOW is tall enough to show its whole buffer.
+The text is measured the way redisplay lays it out (wrapped lines, tall
+faces, images), and only until it is taller than the window, so the
+cost does not grow with the buffer."
+  (let ((height (window-body-height window t)))
+    (<= (+ (cdr (window-text-pixel-size
+                 window (point-min) (point-max) nil
+                 ;; The limit counts from the top of the window, the
+                 ;; result from the top of the text below the header
+                 ;; line and the tab line
+                 (+ 1 height
+                    (window-header-line-height window)
+                    (window-tab-line-height window))))
+           ;; The measure leaves out the empty line after a final
+           ;; newline, a line point can be on like any other
+           (if (eq (char-before (point-max)) ?\n)
+               (window-default-line-height window)
+             0))
+        height)))
+
 (defun vui--restore-window-starts (window-info)
   "Restore viewports saved by `vui--save-window-starts'.
 WINDOW-INFO is an alist of (WINDOW . SPEC).  Point, and the point of
@@ -2877,6 +2898,11 @@ each window, are assumed to be already restored.  A (relative . DELTA)
 spec places `window-start' DELTA lines above point, keeping the cursor
 on the screen row it had; an (absolute . LINE) spec restores that
 window's own `window-start' line unchanged.
+
+A window that can show the whole buffer starts at its beginning
+whatever the spec says: there is nothing to scroll, and following the
+cursor there only pushes the first lines out of view, a few more each
+time rows appear above it, with blank rows left at the bottom.
 
 Only the relative start is forced.  Point is as far below it as it was
 before the render; below any other start it may be out of view (rows
@@ -2896,10 +2922,17 @@ deleted or shows another buffer by now is left alone."
                           (line-beginning-position))
                          (`(absolute . ,line)
                           (goto-char (point-min))
-                          (forward-line (1- line))
-                          (point))))))
-          (set-window-start window start
-                            (not (eq (car spec) 'relative))))))))
+                          ;; When the buffer got shorter than LINE,
+                          ;; show its last windowful, not its last
+                          ;; line above a window of blank rows
+                          (unless (zerop (forward-line (1- line)))
+                            (forward-line (- 1 (window-body-height window))))
+                          (line-beginning-position))))))
+          (if (and (> start (point-min))
+                   (vui--window-fits-buffer-p window))
+              (set-window-start window (point-min) t)
+            (set-window-start window start
+                              (not (eq (car spec) 'relative)))))))))
 
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.

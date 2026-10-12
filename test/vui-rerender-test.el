@@ -57,6 +57,15 @@ current and WINDOW bound to the window showing it."
          (with-current-buffer ,buffer
            ,@body)))))
 
+(vui-defcomponent vui-rr-lines (rows newline)
+  "ROWS lines of text, with a final newline after them when NEWLINE."
+  :state ((n 0))
+  :render (vui-fragment
+           (apply #'vui-vstack
+                  (mapcar (lambda (i) (vui-text (format "line %d-%d" i n)))
+                          (number-sequence 1 rows)))
+           (when newline (vui-newline))))
+
 (vui-defcomponent vui-rr-rows ()
   "A column of buttons whose rows come and go.
 EXPANDED adds two rows above `a' (the `head' button toggles it); SHOW
@@ -838,7 +847,130 @@ keeps the `target' row."
                       ;; The unfocused window did not get yanked to point.
                       (expect (line-number-at-pos (window-start w2))
                               :to-equal w2-before))))))
-          (kill-buffer "*rr-vpm*"))))))
+          (kill-buffer "*rr-vpm*")))))
+
+  (it "shows a buffer that fits in its window from the top"
+    ;; Following the cursor is only right when there is something to
+    ;; scroll.  Rows appearing above the cursor used to push the first
+    ;; lines out of a window that could show the whole buffer, a little
+    ;; more on every re-render, leaving blank rows at the bottom.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-fit*")))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-fit*"))
+                (with-current-buffer "*rr-fit*"
+                  (set-window-start win (point-min))
+                  (goto-char (vui-rr--button-pos "target"))
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :expanded t))
+                  (expect (vui-rr--tag-at (point)) :to-equal "target")
+                  (expect (window-start win) :to-equal (point-min)))))
+          (kill-buffer "*rr-fit*")))))
+
+  (it "does not take a long buffer for one that fits under a header and a tab line"
+    ;; The measure runs in coordinates that start below the header line
+    ;; and the tab line, so its limit has to reach that much further;
+    ;; cut short, it never gets past the window's height and every
+    ;; buffer "fits", which sends a scrolled window back to the top.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-viewport-chrome ()
+        :state ((expanded nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (when expanded
+                          (list (vui-button "x1") (vui-button "x2")))
+                        (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                                (number-sequence 1 80)))))
+      (let ((inst (vui-mount (vui-component 'rr-viewport-chrome) "*rr-chr*")))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-chr*"))
+                (with-current-buffer "*rr-chr*"
+                  (setq-local header-line-format "header")
+                  (setq-local tab-line-format "tabs")
+                  (set-window-start win (vui-rr--button-pos "row40"))
+                  (goto-char (vui-rr--button-pos "row45"))
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :expanded t))
+                  (expect (vui-rr--tag-at (point)) :to-equal "row45")
+                  (expect (window-start win)
+                          :to-equal (vui-rr--button-pos "row40")))))
+          (kill-buffer "*rr-chr*")))))
+
+  (it "draws the line between a buffer that fits and one that does not at the window's height"
+    ;; The empty line after a final newline counts: point can sit on
+    ;; it, so text that fills the window exactly does not fit when a
+    ;; newline follows it.  Each case starts scrolled by one line, with
+    ;; point at the end of the buffer.
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (let* ((win (selected-window))
+               (height (window-body-height win)))
+          (pcase-dolist (`(,rows ,newline ,start-line)
+                         `((,height nil 1)
+                           (,(1+ height) nil 2)
+                           (,(1- height) t 1)
+                           (,height t 2)))
+            (let ((inst (vui-mount (vui-component 'vui-rr-lines
+                                                  :rows rows :newline newline)
+                                   "*rr-fnl*")))
+              (unwind-protect
+                  (progn
+                    (set-window-buffer win (get-buffer "*rr-fnl*"))
+                    (with-current-buffer "*rr-fnl*"
+                      (set-window-start win (save-excursion
+                                              (goto-char (point-min))
+                                              (forward-line 1)
+                                              (point)))
+                      (goto-char (point-max))
+                      (let ((vui--current-instance inst))
+                        (vui-set-state :n 1))
+                      (expect (point) :to-equal (point-max))
+                      (expect (list rows newline
+                                    (line-number-at-pos (window-start win)))
+                              :to-equal (list rows newline start-line))))
+                (kill-buffer "*rr-fnl*"))))))))
+
+  (it "returns a window to the top once the buffer shrinks to fit"
+    ;; A window scrolled into a long buffer keeps its start line.  When
+    ;; the content shrinks to less than a windowful that line is past
+    ;; the end, or leaves the top hidden above blank rows.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-viewport-shrink ()
+        :state ((n 60))
+        :render (apply #'vui-vstack
+                       (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                               (number-sequence 1 n))))
+      (let ((inst (vui-mount (vui-component 'rr-viewport-shrink) "*rr-shr*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-shr*"
+              (set-window-start
+               win (save-excursion (goto-char (point-min))
+                                   (forward-line 39) (point)))
+              (set-window-point win (vui-rr--button-pos "row45"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 4))
+              (expect (buffer-string) :to-equal "[row1]\n[row2]\n[row3]\n[row4]")
+              (expect (vui-rr--tag-at (window-point win)) :to-equal "row4")
+              (expect (window-start win) :to-equal (point-min))
+              ;; Still more than a windowful, but shorter than the
+              ;; window's start line: the window shows the end of the
+              ;; buffer, its last row on the last line.
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 60))
+              (set-window-start
+               win (save-excursion (goto-char (point-min))
+                                   (forward-line 39) (point)))
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 20))
+              (expect (window-start win)
+                      :to-equal (vui-rr--button-pos
+                                 (format "row%d"
+                                         (- 21 (window-body-height win))))))
+          (kill-buffer "*rr-shr*"))))))
 
 ;;; Every window keeps its own point
 

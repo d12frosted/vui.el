@@ -319,6 +319,7 @@ around an update.
   row it had, even when rows appear or go away above it.
 - Any other window keeps its own scroll position. It scrolls only when its
   point would end up out of view.
+- A window tall enough to show the whole buffer shows it from the top.
 
 Give interactive rows a =:key= when their label can change or repeat: the
 key is what lets point follow the same row.

@@ -51,6 +51,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the old positions back. Leaving the minibuffer does that for a render
   that ran while it was open.
 
+- A buffer that fits in its window is always shown from the top. The
+  selected window follows its cursor across a re-render (the cursor's
+  row keeps its screen row), which is right while there is something to
+  scroll. In a window tall enough for the whole buffer it pushed the
+  first lines out of view, a few more each time rows appeared above the
+  cursor, and left blank rows at the bottom. The same check brings a
+  window back to the top when the content under it shrinks to less than
+  a windowful, where the old start line could be past the end of the
+  buffer. When the content shrinks but still does not fit, a window
+  scrolled past its new end shows the end of the buffer.
+
 - Static children of a wrapping =vui-flex= no longer "shrink". A vnode
   child renders at one width and cannot re-render narrower, so a
   =:min-width= below its content only packed the row tighter than it

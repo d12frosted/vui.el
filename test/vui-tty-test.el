@@ -189,6 +189,10 @@ redisplay has run before the re-render and once it has run after."
      100 nil (lambda (window)
                (set-window-start window (vui-tty-row 40))
                (set-window-point window (vui-tty-row 45))))
+    ;; The short sidebar again, this time selected.
+    :selected-short
+    (vui-tty-scenario
+     8 t (lambda (_window) (goto-char (vui-tty-row 5))))
     ;; The long one, selected and scrolled.
     :selected-scrolled
     (vui-tty-scenario
@@ -204,7 +208,15 @@ redisplay has run before the re-render and once it has run after."
                    (set-window-point window (vui-tty-row 5))
                    (select-frame (make-frame))))
         (select-frame frame)
-        (delete-other-frames frame))))
+        (delete-other-frames frame)))
+    ;; The same under a header line and a tab line.
+    :selected-chrome
+    (vui-tty-scenario
+     100 t (lambda (window)
+             (setq-local header-line-format "header")
+             (setq-local tab-line-format "tabs")
+             (set-window-start window (vui-tty-row 40))
+             (goto-char (vui-tty-row 45)))))
   "Form the tty child evaluates: a plist of scenario name to (BEFORE AFTER).")
 
 (defvar vui-tty-test--report nil
@@ -263,8 +275,23 @@ drop these specs without anyone noticing."
       (expect (plist-get after :start-line)
               :to-equal (plist-get before :start-line))))
 
+  (it "keeps a buffer that fits in the selected window at the top"
+    (pcase-let ((`(,before ,after) (vui-tty-test--scenario :selected-short)))
+      (expect (plist-get before :start-line) :to-equal 1)
+      (expect (plist-get after :label) :to-equal "row5")
+      (expect (plist-get after :start-line) :to-equal 1)))
+
   (it "keeps the cursor of the selected window on its screen row"
     (pcase-let ((`(,before ,after) (vui-tty-test--scenario :selected-scrolled)))
+      (expect (plist-get after :label) :to-equal "row45")
+      (expect (plist-get after :screen-row)
+              :to-equal (plist-get before :screen-row))
+      (expect (plist-get after :start-line)
+              :to-equal (+ 3 (plist-get before :start-line)))))
+
+  (it "does not take a long buffer for one that fits under a header and a tab line"
+    ;; Sent back to the top, the window then recenters on its point.
+    (pcase-let ((`(,before ,after) (vui-tty-test--scenario :selected-chrome)))
       (expect (plist-get after :label) :to-equal "row45")
       (expect (plist-get after :screen-row)
               :to-equal (plist-get before :screen-row))
