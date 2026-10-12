@@ -30,6 +30,48 @@
            :key (lambda (i) (plist-get (vui-instance-props i) :id))
            :test #'equal))
 
+(defun vui-rr--tag-at (pos)
+  "Return the label of the vui element at POS, or nil when there is none."
+  (when-let* ((elt (vui--elt-at pos)))
+    (vui--elt-get elt :vui-tag)))
+
+(defun vui-rr--button-pos (label)
+  "Return the start of the button labelled LABEL in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward (format "[%s]" label))
+    (match-beginning 0)))
+
+(defmacro vui-rr--with-side-window (window buffer &rest body)
+  "Run BODY in BUFFER while it is shown in the non-selected WINDOW.
+The selected window shows another buffer, the way a vui root sits in a
+side window while the cursor is in the main one.  BODY runs with BUFFER
+current and WINDOW bound to the window showing it."
+  (declare (indent 2))
+  (let ((main (make-symbol "main")))
+    `(save-window-excursion
+       (let* ((,main (selected-window))
+              (,window (split-window ,main)))
+         (set-window-buffer ,main (get-buffer-create "*scratch*"))
+         (set-window-buffer ,window (get-buffer ,buffer))
+         (with-current-buffer ,buffer
+           ,@body)))))
+
+(vui-defcomponent vui-rr-rows ()
+  "A column of buttons whose rows come and go.
+EXPANDED adds two rows above `a' (the `head' button toggles it); SHOW
+keeps the `target' row."
+  :state ((expanded nil) (show t))
+  :render (apply #'vui-vstack
+                 (append
+                  (list (vui-button "head"
+                          :on-click (lambda ()
+                                      (vui-set-state :expanded (not expanded)))))
+                  (when expanded (list (vui-button "x1") (vui-button "x2")))
+                  (list (vui-button "a") (vui-button "b"))
+                  (when show (list (vui-button "target")))
+                  (list (vui-button "tail")))))
+
 ;;; Faces and keymaps survive a re-render
 
 (describe "re-render preserves faces"
@@ -797,6 +839,301 @@
                       (expect (line-number-at-pos (window-start w2))
                               :to-equal w2-before))))))
           (kill-buffer "*rr-vpm*"))))))
+
+;;; Every window keeps its own point
+
+(describe "re-render preserves every window's point"
+  ;; A render rewrites the buffer text.  The selected window's point is
+  ;; the buffer's point, which is saved and restored around the render;
+  ;; every other window has its own point marker, and deleting the text
+  ;; under a marker drops it at the start of the deletion.  So a root in
+  ;; a side window (the cursor is elsewhere, an idle refresh or a click
+  ;; from another window re-renders it) had its cursor thrown to the top
+  ;; of the buffer, visible on the next `other-window'.
+  (it "keeps a non-selected window's point on its widget when rows shift above it"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wp*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wp*"
+              (goto-char (vui-rr--button-pos "target"))
+              (set-window-point win (point))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (expect (buffer-string)
+                      :to-equal "[head]\n[x1]\n[x2]\n[a]\n[b]\n[target]\n[tail]")
+              (expect (vui-rr--tag-at (point)) :to-equal "target")
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-wp*")))))
+
+  (it "keeps a non-selected window's point when rows are removed above it"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wpr*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpr*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (set-window-point win (vui-rr--button-pos "target"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded nil))
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-wpr*")))))
+
+  (it "keeps the offset inside the widget"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wpo*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpo*"
+              (set-window-point win (+ 3 (vui-rr--button-pos "target")))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (expect (window-point win)
+                      :to-equal (+ 3 (vui-rr--button-pos "target"))))
+          (kill-buffer "*rr-wpo*")))))
+
+  (it "tracks the buffer point and each window's point on their own"
+    ;; Three independent positions in one buffer: its own point, and the
+    ;; points of two windows showing it, neither of them selected.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wp3*")))
+        (unwind-protect
+            (vui-rr--with-side-window w2 "*rr-wp3*"
+              (let ((w3 (split-window w2)))
+                (goto-char (vui-rr--button-pos "a"))
+                (set-window-point w2 (vui-rr--button-pos "target"))
+                (set-window-point w3 (vui-rr--button-pos "tail"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (expect (vui-rr--tag-at (point)) :to-equal "a")
+                (expect (window-point w2)
+                        :to-equal (vui-rr--button-pos "target"))
+                (expect (window-point w3)
+                        :to-equal (vui-rr--button-pos "tail"))))
+          (kill-buffer "*rr-wp3*")))))
+
+  (it "tracks a second window next to the selected one"
+    ;; The selected window shows the buffer too; its point is the buffer
+    ;; point and keeps working as before, the other window follows its
+    ;; own widget.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wp2*")))
+        (unwind-protect
+            (save-window-excursion
+              (let* ((w1 (selected-window))
+                     (w2 (split-window w1)))
+                (set-window-buffer w1 (get-buffer "*rr-wp2*"))
+                (set-window-buffer w2 (get-buffer "*rr-wp2*"))
+                (with-current-buffer "*rr-wp2*"
+                  (goto-char (vui-rr--button-pos "b"))
+                  (set-window-point w2 (vui-rr--button-pos "tail"))
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :expanded t))
+                  (expect (vui-rr--tag-at (point)) :to-equal "b")
+                  (expect (window-point w1)
+                          :to-equal (vui-rr--button-pos "b"))
+                  (expect (window-point w2)
+                          :to-equal (vui-rr--button-pos "tail")))))
+          (kill-buffer "*rr-wp2*")))))
+
+  (it "recovers to the nearest surviving widget when the window's widget is removed"
+    ;; Same recovery as the buffer point gets: the sibling that slid
+    ;; into the removed widget's slot, not the top of the buffer.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wpg*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpg*"
+              (set-window-point win (vui-rr--button-pos "target"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :show nil))
+              (expect (buffer-string) :to-equal "[head]\n[a]\n[b]\n[tail]")
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "tail")))
+          (kill-buffer "*rr-wpg*")))))
+
+  (it "keeps a window point on plain text by line and column"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-wp-text ()
+        :state ((n 0))
+        :render (vui-vstack
+                  (vui-text (format "first %d" n))
+                  (vui-text "second line")
+                  (vui-button "ok")))
+      (let ((inst (vui-mount (vui-component 'rr-wp-text) "*rr-wpt*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpt*"
+              (set-window-point
+               win (save-excursion (goto-char (point-min))
+                                   (search-forward "second li")
+                                   (point)))
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 12345))
+              (expect (buffer-substring (window-point win)
+                                        (+ 2 (window-point win)))
+                      :to-equal "ne"))
+          (kill-buffer "*rr-wpt*")))))
+
+  (it "keeps a non-selected window's point when a button is activated from outside"
+    ;; A click that does not select the window (a middle click, or
+    ;; `vui-activate' called by other code) re-renders from inside the
+    ;; button's action.
+    (let ((vui-render-delay nil))
+      (vui-mount (vui-component 'vui-rr-rows) "*rr-wpa*")
+      (unwind-protect
+          (vui-rr--with-side-window win "*rr-wpa*"
+            (goto-char (vui-rr--button-pos "target"))
+            (set-window-point win (point))
+            (vui-activate (vui-rr--button-pos "head"))
+            (expect (buffer-string)
+                    :to-equal "[head]\n[x1]\n[x2]\n[a]\n[b]\n[target]\n[tail]")
+            (expect (window-point win)
+                    :to-equal (vui-rr--button-pos "target")))
+        (kill-buffer "*rr-wpa*"))))
+
+  (it "keeps a non-selected window's point across a deferred render"
+    ;; The render runs later from a timer, with whatever window is
+    ;; selected by then.
+    (let ((vui-render-delay 0.01))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-wpd*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpd*"
+              (set-window-point win (vui-rr--button-pos "target"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (expect (buffer-string) :to-equal "[head]\n[a]\n[b]\n[target]\n[tail]")
+              ;; Wait for the timer itself, not for a fixed time: a
+              ;; sleep that wakes up late returns without running it
+              (with-current-buffer "*scratch*"
+                (let ((deadline (+ (float-time) 10)))
+                  (while (and (vui-instance-render-timer inst)
+                              (< (float-time) deadline))
+                    (sleep-for 0.01))))
+              (expect (buffer-string)
+                      :to-equal "[head]\n[x1]\n[x2]\n[a]\n[b]\n[target]\n[tail]")
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-wpd*")))))
+
+  (it "keeps a non-selected window's point with incremental rendering on"
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t))
+      (vui-defcomponent rr-wp-incremental ()
+        :state ((n 0))
+        :render (vui-vstack
+                  (vui-text "head")
+                  (vui-text (format "count %d" n))
+                  (vui-text "tail")))
+      (let ((inst (vui-mount (vui-component 'rr-wp-incremental) "*rr-wpi*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wpi*"
+              ;; The first re-render rebuilds and records the segments,
+              ;; the second one patches: it rewrites only the middle
+              ;; segment, the one the window's point is in.
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (set-window-point
+               win (save-excursion (goto-char (point-min))
+                                   (search-forward "coun")
+                                   (point)))
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 7))
+              (expect (buffer-string) :to-equal "head\ncount 7\ntail")
+              (expect (buffer-substring (window-point win)
+                                        (+ 3 (window-point win)))
+                      :to-equal "t 7"))
+          (kill-buffer "*rr-wpi*")))))
+
+  (it "leaves a window point where it is when the render keeps its text"
+    ;; Not every render rewrites the whole buffer.  Here a live stream
+    ;; is patched around: only the line below it is rewritten, the
+    ;; stream's text stays, and so does a point marker in it.  Finding
+    ;; that position again through its widget can only do worse, and
+    ;; does: every appended item has the same place in the tree, so the
+    ;; first one would win.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-wp-chat (stream label)
+        :render (vui-vstack (vui-stream stream)
+                            (vui-text (format "status: %s" label))))
+      (let* ((stream (vui-make-stream))
+             (inst (vui-mount (vui-component 'rr-wp-chat
+                                             :stream stream :label "a")
+                              "*rr-wpk*")))
+        (unwind-protect
+            (progn
+              (dotimes (i 20)
+                (vui-stream-append
+                 stream (vui-fragment (vui-text (format "message %d " i))
+                                      (vui-button "copy"))))
+              (vui-update inst (list :stream stream :label "b"))
+              (vui-rr--with-side-window win "*rr-wpk*"
+                (let ((button (save-excursion
+                                (goto-char (point-min))
+                                (search-forward "message 15 ")
+                                (point))))
+                  (set-window-point win button)
+                  (vui-update inst (list :stream stream :label "c"))
+                  (expect (buffer-substring (- (point-max) 9) (point-max))
+                          :to-equal "status: c")
+                  (expect (window-point win) :to-equal button))))
+          (kill-buffer "*rr-wpk*")))))
+
+  (it "follows the text under a window point when a patch grows a segment above it"
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t))
+      (vui-defcomponent rr-wp-patch (items)
+        :render (apply #'vui-vstack (mapcar #'vui-text items)))
+      (let ((inst (vui-mount (vui-component 'rr-wp-patch
+                                            :items '("a" "b" "c" "d" "e"))
+                             "*rr-wpp*")))
+        (unwind-protect
+            (progn
+              ;; The first re-render records the segments, the next
+              ;; one patches.
+              (vui-update inst '(:items ("a" "b" "c" "d" "e")))
+              (vui-rr--with-side-window win "*rr-wpp*"
+                (set-window-point win (save-excursion
+                                        (goto-char (point-min))
+                                        (search-forward "d")
+                                        (1- (point))))
+                (vui-update inst '(:items ("a\nmore\nmore" "b" "c" "d" "e")))
+                (expect (buffer-string) :to-equal "a\nmore\nmore\nb\nc\nd\ne")
+                (expect (char-after (window-point win)) :to-equal ?d)))
+          (kill-buffer "*rr-wpp*")))))
+
+  (it "leaves alone a window that stopped showing the buffer during the render"
+    ;; Nothing stops a render function from changing the window layout.
+    ;; A saved window that now shows another buffer must not have its
+    ;; point or start moved to positions that belong to this one.
+    (let ((vui-render-delay nil)
+          (side nil)
+          (steal nil))
+      (vui-defcomponent rr-wp-steal ()
+        :state ((n 0))
+        :render (progn
+                  (when steal
+                    (set-window-buffer side (get-buffer "*rr-wps-other*"))
+                    (set-window-point side 150)
+                    (set-window-start side 101))
+                  (apply #'vui-vstack
+                         (mapcar (lambda (i) (vui-button (format "r%d-%d" i n)))
+                                 (number-sequence 1 5)))))
+      (let ((inst (vui-mount (vui-component 'rr-wp-steal) "*rr-wps*")))
+        (with-current-buffer (get-buffer-create "*rr-wps-other*")
+          (erase-buffer)
+          (insert (make-string 200 ?x)))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wps*"
+              (setq side win)
+              (set-window-point win (vui-rr--button-pos "r4-0"))
+              (set-window-start win (vui-rr--button-pos "r3-0"))
+              (setq steal t)
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (expect (window-buffer win) :to-be (get-buffer "*rr-wps-other*"))
+              (expect (window-point win) :to-equal 150)
+              (expect (window-start win) :to-equal 101))
+          (kill-buffer "*rr-wps*")
+          (kill-buffer "*rr-wps-other*"))))))
 
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so

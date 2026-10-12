@@ -20,6 +20,36 @@
     (when button
       (button-activate button))))
 
+(defun vui-inline-test--button-pos (label)
+  "Return the start of the button labelled LABEL in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward (format "[%s]" label))
+    (match-beginning 0)))
+
+(defmacro vui-inline-test--with-side-window (window &rest body)
+  "Run BODY with the current buffer shown in the non-selected WINDOW.
+The selected window shows another buffer, so the current buffer's point
+and WINDOW's point are two separate positions."
+  (declare (indent 1))
+  (let ((main (make-symbol "main"))
+        (host (make-symbol "host")))
+    `(let ((,host (current-buffer)))
+       (save-window-excursion
+         (let* ((,main (selected-window))
+                (,window (split-window ,main)))
+           (set-window-buffer ,main (get-buffer-create "*scratch*"))
+           (set-window-buffer ,window ,host)
+           ,@body)))))
+
+(vui-defcomponent inline-window-point (extra)
+  "Two rows of buttons, with a third row on top of them when EXTRA."
+  :render (vui-fragment
+           (when extra (vui-button "extra"))
+           (when extra (vui-newline))
+           (vui-button "one") (vui-newline)
+           (vui-button "two") (vui-newline)))
+
 (describe "vui-mount-inline"
   (it "renders at point without taking over the buffer"
     (with-temp-buffer
@@ -151,6 +181,140 @@
           (goto-char (1+ (widget-field-start field))))
         (vui-rerender instance)
         (expect (widget-field-at (point)) :to-be-truthy))))
+
+  (it "keeps a non-selected window's point on its widget inside the region"
+    ;; A window that is not selected keeps its point in a marker, and
+    ;; rewriting the region drops every marker in it at the region's
+    ;; start.  The window gets the recovery the buffer's point gets.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-point :extra nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[one]\n[two]\nTAIL")
+        (vui-inline-test--with-side-window side
+          (set-window-point side (+ 2 (vui-inline-test--button-pos "two")))
+          (vui-update instance '(:extra t))
+          (expect (buffer-string)
+                  :to-equal "HEAD\n[extra]\n[one]\n[two]\nTAIL")
+          (expect (window-point side)
+                  :to-equal (+ 2 (vui-inline-test--button-pos "two")))))))
+
+  (it "keeps a window point that is also the buffer's point inside the region"
+    ;; The state a window is in right after it was left: its point and
+    ;; the buffer's point are one position.  The window follows the
+    ;; buffer's point, so that one has to be restored first.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-point :extra nil) 6)))
+        (vui-inline-test--with-side-window side
+          (goto-char (+ 2 (vui-inline-test--button-pos "two")))
+          (set-window-point side (point))
+          (vui-update instance '(:extra t))
+          (expect (point)
+                  :to-equal (+ 2 (vui-inline-test--button-pos "two")))
+          (expect (window-point side) :to-equal (point))))))
+
+  (it "follows a widget at the very start of the region"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-point :extra nil) 6)))
+        (vui-inline-test--with-side-window side
+          (set-window-point side (vui-inline-test--button-pos "one"))
+          (expect (window-point side) :to-equal 6)
+          (vui-update instance '(:extra t))
+          (expect (window-point side)
+                  :to-equal (vui-inline-test--button-pos "one"))))))
+
+  (it "recovers a window point inside its own region, not in another one"
+    ;; Two regions of one component in one buffer: their widgets have
+    ;; the same places in the tree and the same labels, so the search
+    ;; has to stay between the region's bounds.  The first region still
+    ;; has the row the second one loses.
+    (with-temp-buffer
+      (insert "HEAD\nMID\nTAIL")
+      (vui-defcomponent inline-window-two (extra)
+        :render (vui-fragment
+                 (vui-button "one") (vui-newline)
+                 (vui-button "two") (vui-newline)
+                 (when extra (vui-button "three"))
+                 (when extra (vui-newline))))
+      (let ((second (vui-mount-inline
+                     (vui-component 'inline-window-two :extra t) 10)))
+        (vui-mount-inline (vui-component 'inline-window-two :extra t) 6)
+        (expect (buffer-string)
+                :to-equal (concat "HEAD\n[one]\n[two]\n[three]\n"
+                                  "MID\n[one]\n[two]\n[three]\nTAIL"))
+        (vui-inline-test--with-side-window side
+          (set-window-point side (- (point-max) 12)) ; the second "[three]"
+          (expect (buffer-substring (window-point side)
+                                    (+ 7 (window-point side)))
+                  :to-equal "[three]")
+          (vui-update second '(:extra nil))
+          (expect (buffer-string)
+                  :to-equal (concat "HEAD\n[one]\n[two]\n[three]\n"
+                                    "MID\n[one]\n[two]\nTAIL"))
+          ;; On the row above it in the second region.
+          (expect (window-point side) :to-equal (- (point-max) 10))
+          (expect (buffer-substring (window-point side)
+                                    (+ 5 (window-point side)))
+                  :to-equal "[two]")))))
+
+  (it "leaves a window point outside the region to the text around it"
+    ;; Only points inside the rewritten region need recovering; one in
+    ;; the host text moves with that text, and must not be re-placed by
+    ;; line and column while the region changes height above it.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-defcomponent inline-window-outside (tall)
+        :render (vui-text (if tall "[a]\n[b]\n[c]\n" "[a]\n")))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-outside :tall nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\nTAIL")
+        (vui-inline-test--with-side-window side
+          (set-window-point side (- (point-max) 3)) ; the "A" of TAIL
+          (vui-update instance '(:tall t))
+          (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\nTAIL")
+          (expect (char-after (window-point side)) :to-equal ?A)))))
+
+  (it "keeps a window point at the end of the region on the host text"
+    ;; The position right after the region is host text.  It moves with
+    ;; that text when the region grows, like any position after it.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-defcomponent inline-window-edge (tall)
+        :render (vui-text (if tall "[a]\n[b]\n[c]\n" "[a]\n")))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-edge :tall nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\nTAIL")
+        (vui-inline-test--with-side-window side
+          (set-window-point side (- (point-max) 4)) ; the "T" of TAIL
+          (vui-update instance '(:tall t))
+          (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\nTAIL")
+          (expect (char-after (window-point side)) :to-equal ?T)))))
+
+  (it "keeps a recovered window point inside the region when the region shrinks"
+    ;; A point on plain text is recovered by line and column, and after
+    ;; the region lost lines that line belongs to the host buffer.  The
+    ;; start of the region is the fallback then.
+    (with-temp-buffer
+      (insert "HEAD\none\ntwo\nthree\nfour\nfive")
+      (vui-defcomponent inline-window-shrink (open)
+        :render (vui-text (if open "card\n  a\n  b\n  c\n  d\n" "card\n")))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-window-shrink :open t) 6)))
+        (expect (buffer-string)
+                :to-equal "HEAD\ncard\n  a\n  b\n  c\n  d\none\ntwo\nthree\nfour\nfive")
+        (vui-inline-test--with-side-window side
+          (set-window-point side (save-excursion
+                                   (goto-char (point-min))
+                                   (search-forward "  d")
+                                   (point)))
+          (vui-update instance '(:open nil))
+          (expect (buffer-string)
+                  :to-equal "HEAD\ncard\none\ntwo\nthree\nfour\nfive")
+          (expect (window-point side) :to-equal 6)))))
 
   (it "does not accumulate field bookkeeping across re-renders"
     (with-temp-buffer

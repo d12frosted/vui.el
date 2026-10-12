@@ -293,6 +293,49 @@ As a rule of thumb:
 - *Idle timers, window focus* → =vui-update-props= (data probably unchanged, let memos skip work)
 - *Internal triggers* → =vui-rerender= (just redraw with current props and state)
 
+** Point and scroll across a re-render
+
+A re-render rewrites the buffer text, so vui saves what points into it
+before the render and puts it back after.
+
+*Point* stays on the widget it was on, at the same offset inside it. The
+widget is found again by its place in the tree, or by its =:key= (its
+label, when it has no key) when rows appeared or went away above it. If
+the widget itself is gone, point moves to the widget that now sits at its
+place in the tree: the sibling that slid into its slot, the previous one
+when it was last, or a parent. A position on plain text is kept by line
+and column.
+
+This holds for *every window showing the buffer*, selected or not. Each
+window has its own point, so two windows on one buffer keep two positions,
+and a root in a side window keeps its cursor while you work in another
+window and a timer, a process callback or a click from that other window
+re-renders it. There is no need to select the window or to save point
+around an update.
+
+*Scroll* is restored per window too:
+
+- The selected window follows its cursor: the cursor's row keeps the screen
+  row it had, even when rows appear or go away above it.
+- Any other window keeps its own scroll position. It scrolls only when its
+  point would end up out of view.
+
+Give interactive rows a =:key= when their label can change or repeat: the
+key is what lets point follow the same row.
+
+In a =vui-mount-inline= region the same applies to every point inside the
+region. Scroll is not restored there: a window that starts outside the
+region is not affected, one that starts inside it may scroll when the
+region is rewritten.
+
+One limit: positions that Emacs saved before the render are not updated.
+A window configuration restored after the render puts back the window
+starts it saved and, for windows that are not selected, their points, and
+all of those now sit at the start of the buffer. Leaving the minibuffer
+does this for a render that ran while it was open, and so does
+=save-window-excursion= around an update. =save-excursion= around an
+update loses the buffer's point the same way.
+
 * Primitives
 
 Interactive primitives (buttons, fields, checkboxes, selects) support =TAB= /

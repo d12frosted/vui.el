@@ -28,6 +28,29 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A re-render no longer throws away the cursor of a window that is not
+  selected. The render saved and restored the buffer's point, which is
+  also the point of the selected window, but every other window showing
+  the buffer keeps its own point in a marker, and rewriting the text
+  drops that marker at the start of the buffer (in a scrolled window
+  redisplay then moves it to the middle line). I hit it with a sidebar:
+  park the cursor on a row, move to another window, let an idle refresh
+  or a click from the other window re-render the sidebar, and =C-x o=
+  back lands on the first line. Showing the buffer in a side window of
+  another width was enough, because the resize hook re-renders it. Now
+  every window showing the buffer gets what the buffer's point gets: its
+  position is saved relative to its widget before the render and found
+  again after it by path or identity, with the nearest surviving widget
+  as the fallback, so two windows on one buffer keep two positions. This
+  covers =vui-mount= roots and =vui-mount-inline= regions. A window that
+  is not selected still keeps its own scroll position, but its start is
+  no longer forced, because redisplay answers a forced start by moving
+  the window's point into view: when new rows push the point out of
+  view, the window now scrolls to it. Not covered: a window
+  configuration saved before the render and restored after it brings
+  the old positions back. Leaving the minibuffer does that for a render
+  that ran while it was open.
+
 - Static children of a wrapping =vui-flex= no longer "shrink". A vnode
   child renders at one width and cannot re-render narrower, so a
   =:min-width= below its content only packed the row tighter than it

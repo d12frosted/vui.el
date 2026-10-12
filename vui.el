@@ -2745,6 +2745,106 @@ Returns a plist with :status, :data, and :error."
                cache)
       (clrhash cache))))
 
+;; A render rewrites the buffer text, so everything that points into it
+;; is saved before and put back after: the buffer's point (see
+;; `vui--save-cursor-position'), and then, for every window showing the
+;; buffer, its own point and its viewport.  The selected window's point
+;; is the buffer's point.  Any other window keeps its point in a marker,
+;; and deleting the text under a marker drops it at the start of the
+;; deletion, so without this a root shown in a window that is not
+;; selected (a sidebar refreshed while the cursor is elsewhere) gets its
+;; cursor thrown to the top of the buffer on every re-render.
+
+(defun vui--make-anchor (pos)
+  "Return an anchor for POS, to find POS again after the buffer changes.
+The anchor is tied to the character after POS (before it, at the end of
+the buffer): (BEFORE AFTER AT-END), a marker on each side of that
+character.  BEFORE advances past text inserted at it and AFTER does
+not, so the two stay one apart whatever is inserted or deleted around
+the character, and close up or cross for good once it is deleted.
+Returns nil in an empty buffer.  See `vui--anchor-position'."
+  (cond
+   ((< pos (point-max))
+    (list (copy-marker pos t) (copy-marker (1+ pos)) nil))
+   ((> pos (point-min))
+    (list (copy-marker (1- pos) t) (copy-marker pos) t))))
+
+(defun vui--anchor-position (anchor)
+  "Return where ANCHOR's position is now, or nil when its text is gone.
+ANCHOR comes from `vui--make-anchor'.  Its markers are released, so an
+anchor answers once."
+  (pcase-let ((`(,before ,after ,at-end) anchor))
+    (when before
+      (prog1 (and (= (- after before) 1)
+                  (marker-position (if at-end after before)))
+        (set-marker before nil)
+        (set-marker after nil)))))
+
+(defun vui--save-window-points (buffer &optional start end)
+  "Save the point of every window showing BUFFER, except the selected one.
+The selected window's point is the buffer's point, which the render
+restores on its own.  Returns a list of (WINDOW ANCHOR . CURSOR) for
+`vui--restore-window-points'.
+
+ANCHOR (see `vui--make-anchor') tells after the render whether the text
+at the window's point is still there.  Not every render rewrites the
+whole buffer, and a position in text that stayed is exact as it is.
+
+CURSOR is for the other case: what `vui--save-cursor-position' records
+at the window's point, so the window is put back on the widget it was
+on.  It is t when the window's point is the buffer's point; the window
+then follows that.
+
+With START and END, only windows whose point lies between them are
+saved; a point outside a region being rewritten moves with the text
+around it.  Call with BUFFER current."
+  (let ((point (point))
+        (selected (selected-window))
+        (result nil))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (let ((window-point (window-point window)))
+        (when (and (not (eq window selected))
+                   (or (null start)
+                       (and (>= window-point start) (<= window-point end))))
+          (push (cons window
+                      (cons (vui--make-anchor window-point)
+                            (or (= window-point point)
+                                (save-excursion
+                                  (goto-char window-point)
+                                  (vui--save-cursor-position start end)))))
+                result))))
+    result))
+
+(defun vui--restore-window-points (window-points &optional start end)
+  "Restore the window points saved by `vui--save-window-points'.
+WINDOW-POINTS is a list of (WINDOW ANCHOR . CURSOR).  A window whose
+text at point survived the render goes where that text is now.  Any
+other window gets the recovery the buffer's point gets (see
+`vui--restore-cursor-position', which START and END are passed on to):
+its widget, found again by path or identity, or the nearest surviving
+one.  A recovered position outside START and END is not in the region
+any more, and START is used instead.
+
+Call with the buffer current and its point already restored.  A window
+that was deleted or shows another buffer by now is left alone."
+  (let ((buffer (current-buffer)))
+    (pcase-dolist (`(,window ,anchor . ,cursor) window-points)
+      ;; Asked first, and for every window: this releases the markers
+      (let ((kept (vui--anchor-position anchor)))
+        (when (and (window-live-p window)
+                   (eq (window-buffer window) buffer))
+          (set-window-point
+           window
+           (or kept
+               (let ((pos (if (eq cursor t)
+                              (point)
+                            (save-excursion
+                              (vui--restore-cursor-position cursor start end)
+                              (point)))))
+                 (if (and start (not (<= start pos end)))
+                     start
+                   pos)))))))))
+
 (defun vui--save-window-starts (buffer)
   "Save viewport restoration data for all windows showing BUFFER.
 Returns an alist of (WINDOW . SPEC).  The window that holds point (the
@@ -2772,27 +2872,34 @@ scroll position instead of being yanked to point.  See
 
 (defun vui--restore-window-starts (window-info)
   "Restore viewports saved by `vui--save-window-starts'.
-WINDOW-INFO is an alist of (WINDOW . SPEC).  Point is assumed to be
-already restored to the cursor's widget.  A (relative . DELTA) spec
-places `window-start' DELTA lines above point, keeping the cursor on
-the screen row it had; an (absolute . LINE) spec restores that
-window's own `window-start' line unchanged."
-  (dolist (entry window-info)
-    (let ((window (car entry))
-          (spec (cdr entry)))
-      (when (window-live-p window)
-        (let ((start (pcase spec
-                       (`(relative . ,delta)
-                        (save-excursion
+WINDOW-INFO is an alist of (WINDOW . SPEC).  Point, and the point of
+each window, are assumed to be already restored.  A (relative . DELTA)
+spec places `window-start' DELTA lines above point, keeping the cursor
+on the screen row it had; an (absolute . LINE) spec restores that
+window's own `window-start' line unchanged.
+
+Only the relative start is forced.  Point is as far below it as it was
+before the render; below any other start it may be out of view (rows
+appeared above it, or the buffer shrank), and redisplay answers a
+forced start by moving the window's point into view, which loses the
+position just restored.  Unforced, redisplay keeps the start when point
+is visible from it and scrolls to point otherwise.  A window that was
+deleted or shows another buffer by now is left alone."
+  (let ((buffer (current-buffer)))
+    (pcase-dolist (`(,window . ,spec) window-info)
+      (when (and (window-live-p window)
+                 (eq (window-buffer window) buffer))
+        (let ((start (save-excursion
+                       (pcase spec
+                         (`(relative . ,delta)
                           (forward-line (- delta))
-                          (line-beginning-position)))
-                       (`(absolute . ,line)
-                        (save-excursion
+                          (line-beginning-position))
+                         (`(absolute . ,line)
                           (goto-char (point-min))
                           (forward-line (1- line))
                           (point))))))
-          (when start
-            (set-window-start window start)))))))
+          (set-window-start window start
+                            (not (eq (car spec) 'relative))))))))
 
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.
@@ -2852,6 +2959,8 @@ ephemeral chrome, not document content."
                (cursor-info (when (and (>= (point) pos)
                                        (<= (point) end-pos))
                               (vui--save-cursor-position pos end-pos)))
+               ;; Same for the point of each window showing the buffer
+               (window-points (vui--save-window-points buffer pos end-pos))
                (vui--root-instance instance)
                (vui--render-path nil)
                (vui--pending-effects nil))
@@ -2876,6 +2985,8 @@ ephemeral chrome, not document content."
                 (when cursor-info
                   (vui--restore-cursor-position cursor-info pos
                                                 (marker-position end)))
+                (vui--restore-window-points window-points pos
+                                            (marker-position end))
                 ;; Run effects after commit
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil))))
@@ -2900,7 +3011,9 @@ ephemeral chrome, not document content."
                (buffer-undo-list t)
                ;; Save widget-relative cursor position
                (cursor-info (vui--save-cursor-position))
-               ;; Save viewport (window-start) for all windows showing this buffer
+               ;; Save the point and the viewport (window-start) of all
+               ;; windows showing this buffer
+               (window-points (vui--save-window-points buffer))
                (window-info (vui--save-window-starts buffer))
                (vui--root-instance instance)
                ;; Initialize render path for cursor tracking
@@ -2919,7 +3032,8 @@ ephemeral chrome, not document content."
                 (vui--setup-field-placeholders)
                 ;; Restore cursor position
                 (vui--restore-cursor-position cursor-info)
-                ;; Restore viewport for all windows
+                ;; Restore the point, then the viewport, of all windows
+                (vui--restore-window-points window-points)
                 (vui--restore-window-starts window-info)
                 ;; Run effects after commit
                 (vui--run-pending-effects))

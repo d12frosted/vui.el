@@ -213,6 +213,18 @@ Note that separate =vui-set-state= calls do not each cost a render.
 coalesce into one re-render. You rarely need to batch fetch results
 yourself just to avoid redundant renders.
 
+* The Window Does Not Have to Be Selected
+
+An external update usually lands while the cursor is somewhere else: the
+panel sits in a side window and you are typing in another one. Both
+approaches work from there as they are. Every window showing the buffer
+keeps its own point on the widget it was on, and its view is put back
+with it, so there is nothing to wrap in =with-selected-window=. Do not
+wrap an update in =save-excursion= or =save-window-excursion= either:
+both put back positions from before the render, which the render has
+made stale. The exact rules are in the [[file:../reference/api.org][API Reference]], under "Point and
+scroll across a re-render".
+
 * What's Next?
 
 - [[file:07-lifecycle.org][Lifecycle]] - =:on-mount=, =:on-update=, and cleanup functions
