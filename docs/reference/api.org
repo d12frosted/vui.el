@@ -298,13 +298,19 @@ As a rule of thumb:
 A re-render rewrites the buffer text, so vui saves what points into it
 before the render and puts it back after.
 
-*Point* stays on the widget it was on, at the same offset inside it. The
-widget is found again by its place in the tree, or by its =:key= (its
-label, when it has no key) when rows appeared or went away above it. If
-the widget itself is gone, point moves to the widget that now sits at its
-place in the tree: the sibling that slid into its slot, the previous one
-when it was last, or a parent. A position on plain text is kept by line
-and column.
+*Point* stays on the widget it was on, at the same offset inside it (the
+end of a field counts as inside the field). The widget is found again by
+its place in the tree, or by its =:key= (its label, when it has no key)
+when rows appeared or went away above it. If the widget itself is gone,
+point moves to the widget that now sits at its place in the tree: the
+sibling that slid into its slot, the previous one when it was last, or a
+parent. A position on plain text is kept by line and column.
+
+All of that is for text the render rewrote. Not every render rewrites the
+whole buffer: when the root is a flat container whose first child is a
+live =vui-stream=, a re-render leaves the stream's text alone and rewrites
+only what is after it. Point in text that stayed is not looked up again.
+It stays on that text, wherever the text is after the render.
 
 This holds for *every window showing the buffer*, selected or not. Each
 window has its own point, so two windows on one buffer keep two positions,
@@ -327,9 +333,11 @@ Give interactive rows a =:key= when their label can change or repeat: the
 key is what lets point follow the same row.
 
 In a =vui-mount-inline= region the same applies to every point inside the
-region. Scroll is not restored there: a window that starts outside the
-region is not affected, one that starts inside it may scroll when the
-region is rewritten.
+region, and a point found again this way never leaves the region. A point
+right after the region stays right after it. A point where a component is
+mounted stays before it, on the first row of the new region. Scroll is not
+restored there: a window that starts outside the region is not affected,
+one that starts inside it may scroll when the region is rewritten.
 
 One limit: positions that Emacs saved before the render are not updated.
 A window configuration restored after the render puts back the window

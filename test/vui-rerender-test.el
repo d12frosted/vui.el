@@ -81,6 +81,27 @@ keeps the `target' row."
                   (when show (list (vui-button "target")))
                   (list (vui-button "tail")))))
 
+(vui-defcomponent vui-rr-chat (stream label)
+  "A live STREAM with a status line showing LABEL below it."
+  :render (vui-vstack (vui-stream stream)
+                      (vui-text (format "status: %s" label))))
+
+(defun vui-rr--mount-chat (buffer count)
+  "Mount `vui-rr-chat' in BUFFER with COUNT messages in its stream.
+Each message is a line of text followed by a [copy] button.  Returns
+\(INSTANCE . STREAM).  The stream is live by then, so the next render
+patches around it."
+  (let* ((stream (vui-make-stream))
+         (inst (vui-mount (vui-component 'vui-rr-chat
+                                         :stream stream :label "a")
+                          buffer)))
+    (dotimes (i count)
+      (vui-stream-append
+       stream (vui-fragment (vui-text (format "message %d " i))
+                            (vui-button "copy"))))
+    (vui-update inst (list :stream stream :label "b"))
+    (cons inst stream)))
+
 ;;; Faces and keymaps survive a re-render
 
 (describe "re-render preserves faces"
@@ -589,6 +610,29 @@ keeps the `target' row."
               (let ((w (vui--elt-at (point))))
                 (expect (vui--elt-get w :vui-key) :to-equal 'target)))
           (kill-buffer "*rr-cf2*")))))
+
+  (it "puts point on a button that took the place of the field it was at the end of"
+    ;; The end of a field is a position in the field.  The end of a
+    ;; button is not on the button.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-cursor-field-button ()
+        :state ((locked nil))
+        :render (vui-hstack
+                 (vui-text "Code:")
+                 (if locked
+                     (vui-button "abc" :key 'code)
+                   (vui-field :key 'code :value "abc" :size 3))
+                 (vui-text "tail")))
+      (let ((inst (vui-mount (vui-component 'rr-cursor-field-button)
+                             "*rr-cfb*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cfb*"
+              (goto-char (point-min))
+              (search-forward "abc")
+              (let ((vui--current-instance inst)) (vui-set-state :locked t))
+              (expect (buffer-string) :to-equal "Code: [abc] tail")
+              (expect (vui-rr--tag-at (point)) :to-equal "abc"))
+          (kill-buffer "*rr-cfb*")))))
 
   (it "tells two same-label buttons apart by :key when a row shifts in"
     ;; Both rows render the label "dup", so the label alone is ambiguous;
@@ -1183,31 +1227,76 @@ keeps the `target' row."
     ;; does: every appended item has the same place in the tree, so the
     ;; first one would win.
     (let ((vui-render-delay nil))
-      (vui-defcomponent rr-wp-chat (stream label)
-        :render (vui-vstack (vui-stream stream)
-                            (vui-text (format "status: %s" label))))
-      (let* ((stream (vui-make-stream))
-             (inst (vui-mount (vui-component 'rr-wp-chat
-                                             :stream stream :label "a")
-                              "*rr-wpk*")))
+      (pcase-let ((`(,inst . ,stream) (vui-rr--mount-chat "*rr-wpk*" 20)))
         (unwind-protect
-            (progn
-              (dotimes (i 20)
-                (vui-stream-append
-                 stream (vui-fragment (vui-text (format "message %d " i))
-                                      (vui-button "copy"))))
-              (vui-update inst (list :stream stream :label "b"))
-              (vui-rr--with-side-window win "*rr-wpk*"
-                (let ((button (save-excursion
-                                (goto-char (point-min))
-                                (search-forward "message 15 ")
-                                (point))))
-                  (set-window-point win button)
-                  (vui-update inst (list :stream stream :label "c"))
-                  (expect (buffer-substring (- (point-max) 9) (point-max))
-                          :to-equal "status: c")
-                  (expect (window-point win) :to-equal button))))
+            (vui-rr--with-side-window win "*rr-wpk*"
+              (let ((button (save-excursion
+                              (goto-char (point-min))
+                              (search-forward "message 15 ")
+                              (point))))
+                (set-window-point win button)
+                (vui-update inst (list :stream stream :label "c"))
+                (expect (buffer-substring (- (point-max) 9) (point-max))
+                        :to-equal "status: c")
+                (expect (window-point win) :to-equal button)))
           (kill-buffer "*rr-wpk*")))))
+
+  (it "leaves the selected window's point where it is when the render keeps its text"
+    ;; The same render seen from the selected window, whose point is the
+    ;; buffer's point.  The text under it stays, so there is nothing to
+    ;; recover.  Looking the widget up again anyway put point at the top
+    ;; of the log, and the window's start, which follows point, went
+    ;; there with it.
+    (let ((vui-render-delay nil))
+      (pcase-let ((`(,inst . ,stream) (vui-rr--mount-chat "*rr-spk*" 60)))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-spk*"))
+                (with-current-buffer "*rr-spk*"
+                  (goto-char (point-min))
+                  (search-forward "message 42 ")
+                  (set-window-start win (match-beginning 0))
+                  (search-forward "message 45 ")
+                  (let ((button (point))
+                        (start (window-start win)))
+                    (expect (vui-rr--tag-at button) :to-equal "copy")
+                    (vui-update inst (list :stream stream :label "c"))
+                    (expect (buffer-substring (- (point-max) 9) (point-max))
+                            :to-equal "status: c")
+                    (expect (point) :to-equal button)
+                    (expect (window-point win) :to-equal button)
+                    (expect (window-start win) :to-equal start)))))
+          (kill-buffer "*rr-spk*")))))
+
+  (it "leaves point where it is when the render has nothing to commit"
+    ;; A root that skips its update hands back the tree it rendered
+    ;; last, and the commit leaves the buffer alone.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-sp-skip (stream)
+        :should-update nil
+        :render (vui-vstack (vui-stream stream) (vui-text "end")))
+      (let ((stream (vui-make-stream))
+            (inst nil))
+        (dotimes (i 20)
+          (vui-stream-append
+           stream (vui-fragment (vui-text (format "message %d " i))
+                                (vui-button "copy"))))
+        (setq inst (vui-mount (vui-component 'rr-sp-skip :stream stream)
+                              "*rr-sps*"))
+        (unwind-protect
+            (with-current-buffer "*rr-sps*"
+              ;; The first re-render rebuilds and records the tree, the
+              ;; next one finds it unchanged.
+              (vui-rerender inst)
+              (goto-char (point-min))
+              (search-forward "message 15 ")
+              (let ((button (point))
+                    (text (buffer-string)))
+                (vui-rerender inst)
+                (expect (buffer-string) :to-equal text)
+                (expect (point) :to-equal button)))
+          (kill-buffer "*rr-sps*")))))
 
   (it "follows the text under a window point when a patch grows a segment above it"
     (let ((vui-render-delay nil)
@@ -1231,6 +1320,70 @@ keeps the `target' row."
                 (expect (buffer-string) :to-equal "a\nmore\nmore\nb\nc\nd\ne")
                 (expect (char-after (window-point win)) :to-equal ?d)))
           (kill-buffer "*rr-wpp*")))))
+
+  (it "follows the text under the selected window's point when a patch grows a segment above it"
+    ;; Plain text has no widget to find again, only a line and a column,
+    ;; and after the segment above grew those belong to other text.
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t))
+      (vui-defcomponent rr-sp-patch (items)
+        :render (apply #'vui-vstack (mapcar #'vui-text items)))
+      (let ((inst (vui-mount (vui-component 'rr-sp-patch
+                                            :items '("a" "b" "c" "d" "e"))
+                             "*rr-spp*")))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-spp*"))
+                (with-current-buffer "*rr-spp*"
+                  ;; The first re-render records the segments, the next
+                  ;; one patches.
+                  (vui-update inst '(:items ("a" "b" "c" "d" "e")))
+                  (goto-char (point-min))
+                  (search-forward "d")
+                  (backward-char)
+                  (vui-update inst '(:items ("a\nmore\nmore" "b" "c" "d" "e")))
+                  (expect (buffer-string) :to-equal "a\nmore\nmore\nb\nc\nd\ne")
+                  (expect (char-after) :to-equal ?d)
+                  (expect (window-point win) :to-equal (point)))))
+          (kill-buffer "*rr-spp*")))))
+
+  (it "keeps point in a full field when a patch puts text after it"
+    ;; The end of a field is a place to type at.  In a full field the
+    ;; next character is not the field's, and when the patch keeps that
+    ;; character while it rewrites the field, point must not go with it.
+    (let ((vui-render-delay 0.01)
+          (vui-incremental-render t))
+      (vui-defcomponent rr-code-row (name)
+        :memo t
+        :state ((text ""))
+        :render (vui-fragment
+                 (vui-text (format "%s: " name))
+                 (vui-field :key name :value text :size 3
+                            :on-change (lambda (value)
+                                         (vui-set-state :text value)))
+                 (when (>= (length text) 3) (vui-text " (3 of 3)"))))
+      (vui-defcomponent rr-code-form ()
+        :render (vui-vstack (vui-component 'rr-code-row :key 'a :name "A")
+                            (vui-component 'rr-code-row :key 'b :name "B")))
+      (let ((inst (vui-mount (vui-component 'rr-code-form) "*rr-ff*")))
+        (unwind-protect
+            (with-current-buffer "*rr-ff*"
+              ;; The first re-render records the rows, the next ones
+              ;; patch.
+              (vui-rerender inst)
+              (goto-char (point-min))
+              (search-forward "A: ")
+              (dolist (char '("a" "b" "c"))
+                (insert char)
+                (let ((deadline (+ (float-time) 10)))
+                  (while (and (vui-instance-render-timer inst)
+                              (< (float-time) deadline))
+                    (sleep-for 0.01))))
+              (expect (buffer-string) :to-equal "A: abc (3 of 3)\nB:    ")
+              (expect (buffer-substring (point-min) (point))
+                      :to-equal "A: abc"))
+          (kill-buffer "*rr-ff*")))))
 
   (it "leaves alone a window that stopped showing the buffer during the render"
     ;; Nothing stops a render function from changing the window layout.

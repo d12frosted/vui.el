@@ -50,6 +50,30 @@ and WINDOW's point are two separate positions."
            (vui-button "one") (vui-newline)
            (vui-button "two") (vui-newline)))
 
+(defun vui-inline-test--type (instance string)
+  "Type STRING at point, one character at a time.
+Each character is followed by the render INSTANCE schedules for it."
+  (dolist (char (string-to-list string))
+    (insert (char-to-string char))
+    ;; Wait for the timer itself, not for a fixed time
+    (let ((deadline (+ (float-time) 10)))
+      (while (and (vui-instance-render-timer instance)
+                  (< (float-time) deadline))
+        (sleep-for 0.01)))))
+
+(vui-defcomponent inline-code ()
+  "A field of three characters, with a note after it once it is full."
+  :state ((text ""))
+  :render (vui-fragment
+           (vui-text "Code: ")
+           (vui-field :key 'code :value text :size 3
+                      :on-change (lambda (value) (vui-set-state :text value)))
+           (when (>= (length text) 3) (vui-text " (3 of 3)"))))
+
+(vui-defcomponent inline-edge (tall)
+  "One row, or three when TALL."
+  :render (vui-text (if tall "[a]\n[b]\n[c]\n" "[a]\n")))
+
 (describe "vui-mount-inline"
   (it "renders at point without taking over the buffer"
     (with-temp-buffer
@@ -72,6 +96,24 @@ and WINDOW's point are two separate positions."
         :render (vui-text "<X>"))
       (vui-mount-inline (vui-component 'inline-positioned) 6)
       (expect (buffer-string) :to-equal "HEAD\n<X>TAIL")))
+
+  (it "leaves point before a component mounted at it"
+    ;; A form opened at point has the cursor on its first row.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (goto-char 6)
+      (vui-mount-inline (vui-component 'inline-window-point :extra nil))
+      (expect (buffer-string) :to-equal "HEAD\n[one]\n[two]\nTAIL")
+      (expect (point) :to-equal 6)))
+
+  (it "leaves a window point before a component mounted at it"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-inline-test--with-side-window side
+        (set-window-point side 6)
+        (vui-mount-inline (vui-component 'inline-window-point :extra nil) 6)
+        (expect (buffer-string) :to-equal "HEAD\n[one]\n[two]\nTAIL")
+        (expect (window-point side) :to-equal 6))))
 
   (it "runs on-mount and effects"
     (with-temp-buffer
@@ -294,6 +336,151 @@ and WINDOW's point are two separate positions."
           (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\nTAIL")
           (expect (char-after (window-point side)) :to-equal ?T)))))
 
+  (it "keeps point at the end of the region on the host text"
+    ;; The same position, this time as the buffer's point.  Its line
+    ;; and column belong to a row of the region once the region grew.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-edge :tall nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\nTAIL")
+        (goto-char (- (point-max) 4))   ; the "T" of TAIL
+        (vui-update instance '(:tall t))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\nTAIL")
+        (expect (char-after) :to-equal ?T))))
+
+  (it "keeps point at the end of a region that ends the buffer"
+    ;; The position after the region is the same one with no host text
+    ;; behind it.
+    (with-temp-buffer
+      (insert "HEAD\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-edge :tall nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\n")
+        (goto-char (point-max))
+        (vui-update instance '(:tall t))
+        (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\n")
+        (expect (point) :to-equal (point-max)))))
+
+  (it "keeps a window point at the end of a region that ends the buffer"
+    (with-temp-buffer
+      (insert "HEAD\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-edge :tall nil) 6)))
+        (vui-inline-test--with-side-window side
+          (goto-char (point-min))
+          (set-window-point side (point-max))
+          (vui-update instance '(:tall t))
+          (expect (buffer-string) :to-equal "HEAD\n[a]\n[b]\n[c]\n")
+          (expect (window-point side) :to-equal (point-max))))))
+
+  (it "keeps point right after a region in the middle of a line"
+    (with-temp-buffer
+      (insert "say  now")
+      (vui-defcomponent inline-chip (label)
+        :render (vui-button label))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-chip :label "ok") 5)))
+        (expect (buffer-string) :to-equal "say [ok] now")
+        (goto-char 9)                   ; right after the chip
+        (vui-update instance '(:label "cancel"))
+        (expect (buffer-string) :to-equal "say [cancel] now")
+        (expect (buffer-substring (point) (point-max)) :to-equal " now"))))
+
+  (it "keeps point in a full field that ends the region"
+    ;; The end of a field is a place to type at.  In a full field it is
+    ;; also where the region ends, and the render the last character
+    ;; asked for may put text after the field.
+    (let ((vui-render-delay 0.01))
+      (with-temp-buffer
+        (insert "HEAD\n\nTAIL")
+        (let ((instance (vui-mount-inline (vui-component 'inline-code) 6)))
+          (goto-char (widget-field-start (car widget-field-list)))
+          (vui-inline-test--type instance "abc")
+          (expect (buffer-string) :to-equal "HEAD\nCode: abc (3 of 3)\nTAIL")
+          (expect (buffer-substring (point-min) (point))
+                  :to-equal "HEAD\nCode: abc")
+          ;; and the field can still be edited from there
+          (delete-char -1)
+          (expect (buffer-substring (point-min) (point))
+                  :to-equal "HEAD\nCode: ab")))))
+
+  (it "re-renders a region mounted right after host text with a field property"
+    ;; A prompt, say.  The property can hold anything, also a symbol
+    ;; that names a widget type, and none of it is a field of ours.
+    (with-temp-buffer
+      (insert (propertize "prompt> " 'field 'text) "\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-edge :tall nil) 9)))
+        (expect (buffer-string) :to-equal "prompt> [a]\n\nTAIL")
+        (goto-char 9)
+        (vui-update instance '(:tall t))
+        (expect (buffer-string) :to-equal "prompt> [a]\n[b]\n[c]\n\nTAIL")
+        (expect (point) :to-equal 9))))
+
+  (it "keeps point in a full field before host text with a field property"
+    ;; The same property on the text after the region is not an element
+    ;; that starts where the field ends.
+    (let ((vui-render-delay 0.01))
+      (with-temp-buffer
+        (insert "HEAD\n" (propertize "$ " 'field 'output))
+        (let ((instance (vui-mount-inline (vui-component 'inline-code) 6)))
+          (goto-char (widget-field-start (car widget-field-list)))
+          (vui-inline-test--type instance "abc")
+          (expect (buffer-string) :to-equal "HEAD\nCode: abc (3 of 3)$ ")
+          (expect (buffer-substring (point-min) (point))
+                  :to-equal "HEAD\nCode: abc")))))
+
+  (it "keeps point at the end of a field whose text the render makes longer"
+    ;; The component completes what was typed.  A cursor that was at the
+    ;; end of the field is at its end again, not where the end was.
+    (let ((vui-render-delay 0.01))
+      (with-temp-buffer
+        (insert "HEAD\n\nTAIL")
+        (vui-defcomponent inline-year ()
+          :state ((text ""))
+          :render (vui-fragment
+                   (vui-text "Date: ")
+                   (vui-field
+                    :key 'date :value text :size 4
+                    :on-change (lambda (value)
+                                 (vui-set-state
+                                  :text (if (= (length value) 4)
+                                            (concat value "-")
+                                          value))))
+                   (vui-text " (yyyy-mm)")))
+        (let ((instance (vui-mount-inline (vui-component 'inline-year) 6)))
+          (goto-char (widget-field-start (car widget-field-list)))
+          (vui-inline-test--type instance "2024")
+          (expect (buffer-string) :to-equal "HEAD\nDate: 2024- (yyyy-mm)\nTAIL")
+          (expect (buffer-substring (point-min) (point))
+                  :to-equal "HEAD\nDate: 2024-")))))
+
+  (it "sends a position recovered onto the line after the region to its start"
+    ;; Column 0 of the first line the region lost is where the region
+    ;; ends now: the start of the host line that moved up.
+    (with-temp-buffer
+      (insert "HEAD\none\ntwo")
+      (vui-defcomponent inline-lost-row (open)
+        :render (vui-text (if open "card\n  a\n  b\n" "card\n")))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-lost-row :open t) 6)))
+        (expect (buffer-string) :to-equal "HEAD\ncard\n  a\n  b\none\ntwo")
+        (vui-inline-test--with-side-window side
+          ;; the buffer's point
+          (goto-char 11)
+          (expect (looking-at-p "  a") :to-be-truthy)
+          (set-window-point side (point-max))
+          (vui-update instance '(:open nil))
+          (expect (buffer-string) :to-equal "HEAD\ncard\none\ntwo")
+          (expect (point) :to-equal 6)
+          ;; a window's point
+          (vui-update instance '(:open t))
+          (goto-char (point-max))
+          (set-window-point side 11)
+          (vui-update instance '(:open nil))
+          (expect (window-point side) :to-equal 6)))))
+
   (it "keeps a recovered window point inside the region when the region shrinks"
     ;; A point on plain text is recovered by line and column, and after
     ;; the region lost lines that line belongs to the host buffer.  The
@@ -315,6 +502,20 @@ and WINDOW's point are two separate positions."
           (expect (buffer-string)
                   :to-equal "HEAD\ncard\none\ntwo\nthree\nfour\nfive")
           (expect (window-point side) :to-equal 6)))))
+
+  (it "keeps a recovered point inside the region when the region shrinks"
+    (with-temp-buffer
+      (insert "HEAD\none\ntwo\nthree\nfour\nfive")
+      (vui-defcomponent inline-point-shrink (open)
+        :render (vui-text (if open "card\n  a\n  b\n  c\n  d\n" "card\n")))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-point-shrink :open t) 6)))
+        (goto-char (point-min))
+        (search-forward "  d")
+        (vui-update instance '(:open nil))
+        (expect (buffer-string)
+                :to-equal "HEAD\ncard\none\ntwo\nthree\nfour\nfive")
+        (expect (point) :to-equal 6))))
 
   (it "does not accumulate field bookkeeping across re-renders"
     (with-temp-buffer

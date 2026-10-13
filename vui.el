@@ -2747,27 +2747,43 @@ Returns a plist with :status, :data, and :error."
 
 ;; A render rewrites the buffer text, so everything that points into it
 ;; is saved before and put back after: the buffer's point (see
-;; `vui--save-cursor-position'), and then, for every window showing the
-;; buffer, its own point and its viewport.  The selected window's point
-;; is the buffer's point.  Any other window keeps its point in a marker,
-;; and deleting the text under a marker drops it at the start of the
+;; `vui--save-position'), and then, for every window showing the buffer,
+;; its own point and its viewport.  The selected window's point is the
+;; buffer's point.  Any other window keeps its point in a marker, and
+;; deleting the text under a marker drops it at the start of the
 ;; deletion, so without this a root shown in a window that is not
 ;; selected (a sidebar refreshed while the cursor is elsewhere) gets its
 ;; cursor thrown to the top of the buffer on every re-render.
+;;
+;; Each of these points is saved twice.  An anchor (see
+;; `vui--make-anchor') tells after the render whether the text at the
+;; point is still there: not every render rewrites the whole buffer, and
+;; a position in text that stayed is exact as it is.  What
+;; `vui--save-cursor-position' records is for text that was rewritten:
+;; the widget is found again by path or identity.  That search is a
+;; guess (items appended to a live stream all have the same path, so
+;; the first of them wins) and must not replace a position that needs
+;; no recovery.
+;;
+;; A render of an inline region rewrites all of the region and nothing
+;; else, so there the position alone tells (see
+;; `vui--region-position-p').
 
-(defun vui--make-anchor (pos)
+(defun vui--make-anchor (pos &optional backward)
   "Return an anchor for POS, to find POS again after the buffer changes.
-The anchor is tied to the character after POS (before it, at the end of
-the buffer): (BEFORE AFTER AT-END), a marker on each side of that
-character.  BEFORE advances past text inserted at it and AFTER does
-not, so the two stay one apart whatever is inserted or deleted around
-the character, and close up or cross for good once it is deleted.
-Returns nil in an empty buffer.  See `vui--anchor-position'."
+The anchor is tied to the character after POS, or to the one before it
+at the end of the buffer and when BACKWARD is non-nil: (BEFORE AFTER
+AT-END), a marker on each side of that character.  BEFORE advances
+past text inserted at it and AFTER does not, so the two stay one apart
+whatever is inserted or deleted around the character, and close up or
+cross for good once it is deleted.  Returns nil in an empty buffer.
+See `vui--anchor-position'."
   (cond
+   ((and (> pos (point-min))
+         (or backward (= pos (point-max))))
+    (list (copy-marker (1- pos) t) (copy-marker pos) t))
    ((< pos (point-max))
-    (list (copy-marker pos t) (copy-marker (1+ pos)) nil))
-   ((> pos (point-min))
-    (list (copy-marker (1- pos) t) (copy-marker pos) t))))
+    (list (copy-marker pos t) (copy-marker (1+ pos)) nil))))
 
 (defun vui--anchor-position (anchor)
   "Return where ANCHOR's position is now, or nil when its text is gone.
@@ -2780,24 +2796,87 @@ anchor answers once."
         (set-marker before nil)
         (set-marker after nil)))))
 
+(defun vui--region-position-p (position start end)
+  "Return non-nil when a rewrite of START to END has to save POSITION.
+That is every position from START to END.  END is one of them: it is
+after the region, on the text that follows, but a marker there ends up
+at START once the region's text is deleted.  Positions outside move
+with the text around them.
+
+An empty region has no such position.  The render only inserts there,
+and a position at it stays before the new text, as it does for any
+other insertion: the cursor is on the first row of a form that was
+opened at point."
+  (and (< start end) (<= start position end)))
+
+(defun vui--save-position (&optional start end)
+  "Save the position of point, to find it again after a render.
+Returns (ANCHOR . CURSOR) for `vui--restored-position'.
+
+Without START and END the render is one of the whole buffer.  ANCHOR
+\(see `vui--make-anchor') tells after it whether the text at point is
+still there.  CURSOR is for the other case: what
+`vui--save-cursor-position' records at point, so the position is put
+back on the widget it was on.
+
+With START and END the render rewrites the region between them, all of
+it, and there is no anchor.  CURSOR is the symbol `end' for a point at
+END, which is at the region's end again after the render.  Call only
+for a point `vui--region-position-p' holds for.
+
+A point at the end of an editable field (see `vui--field-ending-at') is
+in that field, whatever follows it: the anchor is tied to the field's
+last character, and at END the position is the field's, not the
+region's end."
+  (let ((field (vui--field-ending-at (point) start)))
+    (cons (unless start (vui--make-anchor (point) field))
+          (if (and end (= (point) end) (not field))
+              'end
+            (vui--save-cursor-position start end)))))
+
+(defun vui--restored-position (saved &optional start end)
+  "Return where the position SAVED by `vui--save-position' is now.
+START and END are the bounds of the region the render rewrote, as they
+are after it.  Without them it was a render of the whole buffer.
+
+A position whose text survived the render is where that text is now,
+and one at the end of the region is at its end.  Any other position is
+recovered through its widget (see `vui--restore-cursor-position', which
+START and END are passed on to): found again by path or identity, or
+the nearest surviving one.  A recovered position outside START and END
+is not in the region any more, and START is used instead.  END itself
+is outside when the region ends with a newline: it is the start of the
+line after the region then, not the end of the region's last line.
+
+Call with the buffer current.  Point does not move."
+  (pcase-let ((`(,anchor . ,cursor) saved))
+    (cond
+     ((vui--anchor-position anchor))
+     ((eq cursor 'end) end)
+     (t
+      (let ((pos (save-excursion
+                   (vui--restore-cursor-position cursor start end)
+                   (point))))
+        (if (or (null start)
+                (and (<= start pos) (< pos end))
+                (and (= pos end)
+                     (or (= start end) (/= (char-before end) ?\n))))
+            pos
+          start))))))
+
 (defun vui--save-window-points (buffer &optional start end)
   "Save the point of every window showing BUFFER, except the selected one.
 The selected window's point is the buffer's point, which the render
-restores on its own.  Returns a list of (WINDOW ANCHOR . CURSOR) for
+restores on its own.  Returns a list of (WINDOW . SAVED) for
 `vui--restore-window-points'.
 
-ANCHOR (see `vui--make-anchor') tells after the render whether the text
-at the window's point is still there.  Not every render rewrites the
-whole buffer, and a position in text that stayed is exact as it is.
+SAVED is what `vui--save-position', which START and END are passed on
+to, returns at the window's point.  It is t when the window's point is
+the buffer's point; the window then follows that.
 
-CURSOR is for the other case: what `vui--save-cursor-position' records
-at the window's point, so the window is put back on the widget it was
-on.  It is t when the window's point is the buffer's point; the window
-then follows that.
-
-With START and END, only windows whose point lies between them are
-saved; a point outside a region being rewritten moves with the text
-around it.  Call with BUFFER current."
+With START and END, only the windows whose point the rewrite of that
+region has to save are in the list (see `vui--region-position-p').
+Call with BUFFER current."
   (let ((point (point))
         (selected (selected-window))
         (result nil))
@@ -2805,45 +2884,32 @@ around it.  Call with BUFFER current."
       (let ((window-point (window-point window)))
         (when (and (not (eq window selected))
                    (or (null start)
-                       (and (>= window-point start) (<= window-point end))))
+                       (vui--region-position-p window-point start end)))
           (push (cons window
-                      (cons (vui--make-anchor window-point)
-                            (or (= window-point point)
-                                (save-excursion
-                                  (goto-char window-point)
-                                  (vui--save-cursor-position start end)))))
+                      (or (= window-point point)
+                          (save-excursion
+                            (goto-char window-point)
+                            (vui--save-position start end))))
                 result))))
     result))
 
 (defun vui--restore-window-points (window-points &optional start end)
   "Restore the window points saved by `vui--save-window-points'.
-WINDOW-POINTS is a list of (WINDOW ANCHOR . CURSOR).  A window whose
-text at point survived the render goes where that text is now.  Any
-other window gets the recovery the buffer's point gets (see
-`vui--restore-cursor-position', which START and END are passed on to):
-its widget, found again by path or identity, or the nearest surviving
-one.  A recovered position outside START and END is not in the region
-any more, and START is used instead.
+WINDOW-POINTS is a list of (WINDOW . SAVED).  Each window goes where
+`vui--restored-position', which START and END are passed on to, finds
+its position, or to the buffer's point when it follows that.
 
 Call with the buffer current and its point already restored.  A window
 that was deleted or shows another buffer by now is left alone."
   (let ((buffer (current-buffer)))
-    (pcase-dolist (`(,window ,anchor . ,cursor) window-points)
+    (pcase-dolist (`(,window . ,saved) window-points)
       ;; Asked first, and for every window: this releases the markers
-      (let ((kept (vui--anchor-position anchor)))
+      (let ((pos (if (eq saved t)
+                     (point)
+                   (vui--restored-position saved start end))))
         (when (and (window-live-p window)
                    (eq (window-buffer window) buffer))
-          (set-window-point
-           window
-           (or kept
-               (let ((pos (if (eq cursor t)
-                              (point)
-                            (save-excursion
-                              (vui--restore-cursor-position cursor start end)
-                              (point)))))
-                 (if (and start (not (<= start pos end)))
-                     start
-                   pos)))))))))
+          (set-window-point window pos))))))
 
 (defun vui--save-window-starts (buffer)
   "Save viewport restoration data for all windows showing BUFFER.
@@ -2991,9 +3057,9 @@ ephemeral chrome, not document content."
                (end-pos (marker-position end))
                ;; Only track the cursor when it is inside the region;
                ;; positions outside adjust automatically
-               (cursor-info (when (and (>= (point) pos)
-                                       (<= (point) end-pos))
-                              (vui--save-cursor-position pos end-pos)))
+               (saved-point (when (vui--region-position-p
+                                   (point) pos end-pos)
+                              (vui--save-position pos end-pos)))
                ;; Same for the point of each window showing the buffer
                (window-points (vui--save-window-points buffer pos end-pos))
                (vui--root-instance instance)
@@ -3017,9 +3083,9 @@ ephemeral chrome, not document content."
                   (set-marker end (point))
                   (widget-setup)
                   (vui--setup-field-placeholders))
-                (when cursor-info
-                  (vui--restore-cursor-position cursor-info pos
-                                                (marker-position end)))
+                (when saved-point
+                  (goto-char (vui--restored-position
+                              saved-point pos (marker-position end))))
                 (vui--restore-window-points window-points pos
                                             (marker-position end))
                 ;; Run effects after commit
@@ -3044,8 +3110,8 @@ ephemeral chrome, not document content."
                ;; garbage a re-render makes.  Inline mounts already do
                ;; this (their region is ephemeral UI, not document text).
                (buffer-undo-list t)
-               ;; Save widget-relative cursor position
-               (cursor-info (vui--save-cursor-position))
+               ;; Save the cursor position
+               (saved-point (vui--save-position))
                ;; Save the point and the viewport (window-start) of all
                ;; windows showing this buffer
                (window-points (vui--save-window-points buffer))
@@ -3065,8 +3131,8 @@ ephemeral chrome, not document content."
                 (vui--render-instance instance #'vui--commit-root)
                 (widget-setup)
                 (vui--setup-field-placeholders)
-                ;; Restore cursor position
-                (vui--restore-cursor-position cursor-info)
+                ;; Restore the cursor position
+                (goto-char (vui--restored-position saved-point))
                 ;; Restore the point, then the viewport, of all windows
                 (vui--restore-window-points window-points)
                 (vui--restore-window-starts window-info)
@@ -3213,13 +3279,23 @@ BUFFER defaults to the current buffer.  Undoes
 ;; `vui--elt-*' helpers, which dispatch on `widgetp': an editable field is
 ;; a widget, a text button is not.
 
+(defun vui--field-at (pos)
+  "Return the `widget.el' editable field at POS, or nil.
+The `field' property says so, and in a host buffer other code uses that
+property with values of its own (a prompt, the output of a process).
+Only a widget is a field here."
+  (let ((field (widget-field-at pos)))
+    ;; `widgetp' alone is not enough: it holds for any symbol that
+    ;; names a widget type, like `text'
+    (and (consp field) (widgetp field) field)))
+
 (defun vui--elt-at (&optional pos)
   "Return the interactive element at POS, or nil.
 The element is a `button.el' text button (vui buttons, checkboxes and
 selects) or a `widget.el' editable field."
   (let ((pos (or pos (point))))
     (or (button-at pos)
-        (widget-field-at pos))))
+        (vui--field-at pos))))
 
 (defun vui--elt-get (elt prop)
   "Get PROP of interactive element ELT (a text button or a widget field)."
@@ -3321,6 +3397,21 @@ disabled button passes nil for both so it does not look clickable)."
     (setq props (plist-put props 'mouse-face 'highlight)))
   (apply #'insert-text-button text 'action action props))
 
+(defun vui--field-ending-at (pos &optional start)
+  "Return the editable field that ends at POS, or nil.
+The end of a field is a position in it: text is typed there.  While the
+field has room the character at POS is the field's own padding and
+`vui--elt-at' finds the field.  At the end of a full field the next
+character belongs to whatever follows, and only the one before POS
+tells that POS is still in the field.  Nil when another element starts
+at POS.
+
+With START, the bound of a region, the character before POS has to be
+in the region: what ends at START is the host buffer's."
+  (and (> pos (or start (point-min)))
+       (not (vui--elt-at pos))
+       (vui--field-at (1- pos))))
+
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
 Returns plist with :path, :identity, :label, :offset for widgets, or
@@ -3328,11 +3419,13 @@ Returns plist with :path, :identity, :label, :offset for widgets, or
 tree path, used to relocate it (or, when it is gone, its nearest tree
 neighbour) on restore.  :label is the widget's `:tag', kept alongside
 :identity so a key shared across the buffer can be disambiguated on
-restore (see `vui--find-widget-by-identity').
-START and END are accepted for symmetry with `vui--restore-cursor-position'
-but are not needed here."
-  (ignore start end)
-  (let ((elt (vui--elt-at (point))))
+restore (see `vui--find-widget-by-identity').  :at-end is non-nil for a
+point at the end of an editable field (see `vui--field-ending-at', which
+START is passed on to).  END is accepted for symmetry with
+`vui--restore-cursor-position' but is not needed here."
+  (ignore end)
+  (let* ((field (vui--field-ending-at (point) start))
+         (elt (or field (vui--elt-at (point)))))
     (if elt
         (let* ((bounds (vui--widget-bounds elt))
                (elt-start (car bounds))
@@ -3340,7 +3433,8 @@ but are not needed here."
                (path (vui--elt-get elt :vui-path))
                (identity (vui--widget-identity elt))
                (label (vui--elt-get elt :vui-tag)))
-          (list :path path :identity identity :label label :offset offset))
+          (list :path path :identity identity :label label :offset offset
+                :at-end (and field t)))
       ;; No element at point - save line/column as fallback
       (list :line (line-number-at-pos) :column (current-column)))))
 
@@ -3433,17 +3527,23 @@ true look-alikes."
             (when (and by-label (null (cdr by-label)))
               (car by-label))))))))
 
-(defun vui--goto-widget-offset (widget offset)
+(defun vui--goto-widget-offset (widget offset &optional at-end)
   "Move point into WIDGET, OFFSET characters past its start.
-Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0."
+Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0.  With
+AT-END non-nil move to the end of WIDGET instead, wherever that is by
+now: the position was the end of a field (see `vui--field-ending-at').
+That holds for a field only; the end of a button is not on the button."
   (let* ((bounds (vui--widget-bounds widget))
          (widget-start (car bounds))
          (widget-end (cdr bounds)))
     (when (and widget-start widget-end)
-      ;; Cap at (1- end) because bounds are exclusive on the right.
-      (goto-char (max widget-start
-                      (min (+ widget-start (or offset 0))
-                           (1- widget-end)))))))
+      (goto-char (if (and at-end (widgetp widget))
+                     widget-end
+                   ;; Cap at (1- end) because bounds are exclusive on
+                   ;; the right.
+                   (max widget-start
+                        (min (+ widget-start (or offset 0))
+                             (1- widget-end))))))))
 
 (defun vui--path-lt (a b)
   "Non-nil when numeric key list A sorts before B lexicographically.
@@ -3489,6 +3589,7 @@ When START and END are given, widget lookups are scoped to that
 region and fallbacks move to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
          (offset (plist-get cursor-info :offset))
+         (at-end (plist-get cursor-info :at-end))
          (identity (plist-get cursor-info :identity))
          (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
@@ -3515,10 +3616,10 @@ region and fallbacks move to START instead of the buffer beginning."
     (cond
      ;; Path still resolves to the saved widget (most common, fast path)
      (path-ok
-      (vui--goto-widget-offset path-widget offset))
+      (vui--goto-widget-offset path-widget offset at-end))
      ;; Path drifted: relocate the same widget by stable identity
      (identity-widget
-      (vui--goto-widget-offset identity-widget offset))
+      (vui--goto-widget-offset identity-widget offset at-end))
      (t
       ;; The saved widget is gone.  Recover to the surviving widget nearest
       ;; it in the component tree (`vui--path-nearest-widget'): the sibling
