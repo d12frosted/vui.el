@@ -18,8 +18,8 @@
 ;; The last specs are about the harness itself, which has to tell a
 ;; child with no terminal from one that died.  It has to hear a child
 ;; that is gone before anything it printed was read, and it must not
-;; take what a child with a terminal put on its screen for a terminal
-;; problem.
+;; take what a child with a terminal put on its screen, or other
+;; trouble Emacs has on its way up, for a terminal problem.
 
 ;;; Code:
 
@@ -28,11 +28,17 @@
 (require 'vui)
 
 (defconst vui-tty-test--no-terminal
-  (rx (or (seq "Terminal type " (* nonl) " is not "
+  (rx bol "emacs: "
+      (or (seq "Terminal type " (* nonl) " is not "
                (or "defined" "powerful enough"))
-          "is not a tty"
-          "ould not open"))
-  "Matches what Emacs prints when it cannot use its terminal.")
+          "standard input is not a tty"
+          "Could not open file: "
+          (seq "Cannot open " (or "terminfo" "termcap") " database file")))
+  "Matches what Emacs prints when it cannot use its terminal.
+These are its own lines, from their start: the same words come up
+inside other messages, as in \"could not load dump file ...: could not
+open file\".  Match them with `case-fold-search' nil, so that only the
+spelling of Emacs itself counts.")
 
 (defun vui-tty-test--no-terminal-p (output)
   "Return non-nil when OUTPUT is from a child that could not use its terminal.
@@ -40,8 +46,9 @@ Such a child says so and exits, and it never draws.  A child with a
 terminal sets it up before it draws anything, which takes escape
 sequences, so only what OUTPUT has before the first of them counts.
 What comes later is a frame, and a frame can show any words."
-  (string-match-p vui-tty-test--no-terminal
-                  (substring output 0 (string-search "\e" output))))
+  (let ((case-fold-search nil))
+    (string-match-p vui-tty-test--no-terminal
+                    (substring output 0 (string-search "\e" output)))))
 
 (defun vui-tty-test--eval (prelude form)
   "Evaluate FORM in a child Emacs with a real tty frame; return its value.
@@ -394,38 +401,92 @@ anyone noticing."
       ;; shows nothing
       (expect gone :to-be t)))
 
-  (it "looks for a terminal problem only in what a child printed before it drew"
+  (it "knows what Emacs says when it cannot use its terminal"
+    ;; Its standard input is no terminal, it has no controlling
+    ;; terminal, there is no terminfo database (termcap in some
+    ;; builds), TERM is unknown, TERM is dumb
     (expect (vui-tty-test--no-terminal-p "emacs: standard input is not a tty\n")
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             "emacs: Could not open file: /dev/tty\n")
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             "emacs: Cannot open terminfo database file\n")
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             "emacs: Cannot open termcap database file\n")
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             (concat "emacs: Terminal type no-such-term is not defined.\n"
+                     "If that is not the actual type of terminal you have,\n"))
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             (concat "emacs: Terminal type \"dumb\" is not powerful enough"
+                     " to run Emacs.\n"
+                     "It lacks the ability to position the cursor.\n"))
             :to-be-truthy)
     ;; Not always on the first line
     (expect (vui-tty-test--no-terminal-p
              "some warning\nemacs: standard input is not a tty\n")
-            :to-be-truthy)
+            :to-be-truthy))
+
+  (it "does not take other trouble for a terminal problem"
     ;; A child that said nothing of the kind just died
     (expect (vui-tty-test--no-terminal-p "") :not :to-be-truthy)
     (expect (vui-tty-test--no-terminal-p "Fatal error 11: Segmentation fault\n")
             :not :to-be-truthy)
+    ;; Emacs could not load its dump file: close in words, but this
+    ;; Emacs is broken, terminal or not
+    (expect (vui-tty-test--no-terminal-p
+             (concat "emacs: could not load dump file \"/no/such/dump\":"
+                     " could not open file\n"))
+            :not :to-be-truthy)
+    ;; The harness sets the size of the screen itself: one that is too
+    ;; small is a child that died, not a machine with no terminal
+    (expect (vui-tty-test--no-terminal-p
+             "emacs: Screen size 2x2 is too small\n")
+            :not :to-be-truthy)
+    ;; Emacs writes its messages in one letter case
+    (expect (vui-tty-test--no-terminal-p
+             "emacs: could not open file: /dev/tty\n")
+            :not :to-be-truthy)
+    ;; A whole line inside another message, and its words inside one
+    (expect (vui-tty-test--no-terminal-p
+             (concat "emacs: could not load dump file"
+                     " \"/tmp/emacs: standard input is not a tty\":"
+                     " could not open file\n"))
+            :not :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             (concat "Warning: Lisp directory"
+                     " '/tmp/Cannot open terminfo database file':"
+                     " No such file or directory\n"))
+            :not :to-be-truthy))
+
+  (it "looks for a terminal problem only in what a child printed before it drew"
     ;; A child with a terminal sets it up before it draws anything, and
-    ;; that takes escape sequences.  The same words count without them.
-    (expect (vui-tty-test--no-terminal-p "Could not open the pod bay doors")
+    ;; that takes escape sequences.  The same line counts without them.
+    (expect (vui-tty-test--no-terminal-p
+             "\n\n\nemacs: standard input is not a tty\n")
             :to-be-truthy)
     (expect (vui-tty-test--no-terminal-p
              (concat "\n\n\e[?1h\e=\e[H\e[J\e[40;1H"
-                     "Could not open the pod bay doors\e[K\e[H"))
+                     "\nemacs: standard input is not a tty\n\e[K\e[H"))
             :not :to-be-truthy))
 
   (it "is not fooled by what a child with a terminal put on its screen"
     ;; Skipped like the specs above where no child gets a terminal
     (vui-tty-test--scenario :sidebar)
     (spy-on 'vui-tty-test--no-terminal-p :and-call-through)
-    ;; The harness used to look through all the child printed, its
-    ;; frame included, and took this child for one with no terminal
+    ;; The child prints the very line of a child with no terminal, but
+    ;; with its frame up.  The harness used to look through all the
+    ;; child printed and took this child for one with no terminal.
     (expect (vui-tty-test--eval
-             nil '(progn (message "Could not open the pod bay doors")
+             nil '(progn (princ "\nemacs: standard input is not a tty\n"
+                                #'external-debugging-output)
                          (redisplay t)
                          (kill-emacs 1)))
             :to-equal '(error (child-died 1)))
-    ;; And the words were there to be found
+    ;; And the line was there to be found
     (expect (car (spy-calls-args-for 'vui-tty-test--no-terminal-p 0))
             :to-match vui-tty-test--no-terminal)))
 
