@@ -10,6 +10,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 
 ;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
@@ -174,7 +175,7 @@
         (unwind-protect
             (progn
               ;; Wait for timer to fire
-              (sleep-for 0.05)
+              (vui-test--wait-until error-occurred)
               ;; Error should have occurred because vui-with-async-context
               ;; was evaluated outside component context
               (expect error-occurred :to-match "outside of component context"))
@@ -206,7 +207,7 @@
               ;; Initially 0
               (expect (plist-get (vui-instance-state instance) :ticks) :to-equal 0)
               ;; Wait for timer
-              (sleep-for 0.05)
+              (vui-test--wait-until timer-fired)
               ;; State should have been updated via async context
               (expect timer-fired :to-be-truthy)
               (expect (plist-get (vui-instance-state instance) :ticks) :to-equal 1))
@@ -271,7 +272,8 @@
               ;; Initially loading
               (expect result-value :to-be nil)
               ;; Wait for timer to fire
-              (sleep-for 0.05)
+              (vui-test--wait-until
+               (plist-get (vui-instance-state instance) :data))
               ;; State should have been updated
               (expect (plist-get (vui-instance-state instance) :data) :to-equal "async-result"))
           (kill-buffer "*test-async-cb2*"))))))
@@ -891,8 +893,10 @@
             (progn
               ;; Initially pending (process not finished yet)
               (expect (plist-get result :status) :to-equal 'pending)
-              ;; Wait for process to complete
-              (sleep-for 0.2)
+              ;; Wait for process to complete, and for the render that
+              ;; follows it
+              (vui-test--wait-until
+               (not (eq (plist-get result :status) 'pending)))
               ;; Should be ready now
               (expect (plist-get result :status) :to-equal 'ready)
               (expect (plist-get result :data) :to-equal "process completed"))

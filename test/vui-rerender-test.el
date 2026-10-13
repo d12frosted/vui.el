@@ -17,6 +17,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 (require 'cl-lib)
 
 (defun vui-rr--faces-at (pos)
@@ -424,7 +425,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
                   (vui-set-state :n 1)
                   (vui-set-state :n 2)
                   (vui-set-state :n 3)))
-              (sleep-for 0.1)
+              (vui-test--wait-for-timers 0.1)
               (expect vui-rr-renders :to-equal 1)
               (expect (with-current-buffer "*rr-co*" (buffer-string))
                       :to-equal "3"))
@@ -1281,13 +1282,8 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
               (let ((vui--current-instance inst))
                 (vui-set-state :expanded t))
               (expect (buffer-string) :to-equal "[head]\n[a]\n[b]\n[target]\n[tail]")
-              ;; Wait for the timer itself, not for a fixed time: a
-              ;; sleep that wakes up late returns without running it
               (with-current-buffer "*scratch*"
-                (let ((deadline (+ (float-time) 10)))
-                  (while (and (vui-instance-render-timer inst)
-                              (< (float-time) deadline))
-                    (sleep-for 0.01))))
+                (vui-test--wait-for-render inst))
               (expect (buffer-string)
                       :to-equal "[head]\n[x1]\n[x2]\n[a]\n[b]\n[target]\n[tail]")
               (expect (window-point win)
@@ -1573,10 +1569,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
               (search-forward "A: ")
               (dolist (char '("a" "b" "c"))
                 (insert char)
-                (let ((deadline (+ (float-time) 10)))
-                  (while (and (vui-instance-render-timer inst)
-                              (< (float-time) deadline))
-                    (sleep-for 0.01))))
+                (vui-test--wait-for-render inst))
               (expect (buffer-string) :to-equal "A: abc (3 of 3)\nB:    ")
               (expect (buffer-substring (point-min) (point))
                       :to-equal "A: abc"))

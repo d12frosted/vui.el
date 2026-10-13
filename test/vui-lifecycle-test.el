@@ -12,6 +12,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 
 (describe "vui-unmount"
   (it "runs on-unmount hooks for the whole tree, children first"
@@ -64,8 +65,14 @@
               (with-current-buffer "*test-unmount-pending*"
                 (let ((vui--current-instance instance))
                   (vui-set-state :n 1)))
-              (vui-unmount "*test-unmount-pending*")
-              (sleep-for 0.05)
+              (let ((timer (vui-instance-render-timer instance)))
+                (expect (memq timer timer-list) :to-be-truthy)
+                (vui-unmount "*test-unmount-pending*")
+                ;; The render count below cannot tell on its own: an
+                ;; unmounted tree ignores a render that comes late
+                (expect (memq timer timer-list) :to-be nil))
+              ;; A timer that is still there gets its chance to run
+              (vui-test--wait-for-timers 0.05)
               (expect render-count :to-equal 1))
           (kill-buffer "*test-unmount-pending*")))))
 
@@ -186,7 +193,8 @@
                        "*test-remount-stale*")
             ;; Old tree's timer fires after the new mount
             (funcall callback)
-            (sleep-for 0.05)
+            ;; A render it scheduled gets its chance to run
+            (vui-test--wait-for-timers 0.05)
             (expect (with-current-buffer "*test-remount-stale*"
                       (buffer-string))
                     :to-equal "NEW"))

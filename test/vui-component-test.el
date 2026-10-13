@@ -10,6 +10,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 
 ;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
@@ -220,7 +221,7 @@
               (expect render-count :to-equal 1)
               (expect (buffer-string) :to-equal "initial")
               ;; Let deferred timer fire (vui-render-delay is 0.01s)
-              (sleep-for 0.05)
+              (vui-test--wait-for-timers 0.05)
               ;; Second render should have happened
               (expect render-count :to-equal 2)
               (expect (buffer-string) :to-equal "from-mount"))
@@ -245,7 +246,7 @@
         (unwind-protect
             (progn
               ;; Let deferred timer fire
-              (sleep-for 0.05)
+              (vui-test--wait-for-timers 0.05)
               ;; Should have rendered twice and show loaded data
               (expect render-count :to-equal 2)
               (expect (buffer-string) :to-equal "loaded-data"))

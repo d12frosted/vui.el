@@ -16,5 +16,9 @@
 ;; themselves are not compilation targets.
 (add-to-list 'load-path (expand-file-name "docs/examples"))
 
+;; Test files share helpers: (require 'vui-test-helpers) has to find
+;; test/vui-test-helpers.el.
+(eldev-add-loading-roots 'test "test")
+
 ;; Lint using package-lint only (skip elisp-lint style checks)
 (setf eldev-lint-default '(package))

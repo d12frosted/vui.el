@@ -12,6 +12,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 
 ;; Helper to click buttons (button.el text buttons)
 (defun vui-inline-test--click-button-at (pos)
@@ -55,11 +56,7 @@ and WINDOW's point are two separate positions."
 Each character is followed by the render INSTANCE schedules for it."
   (dolist (char (string-to-list string))
     (insert (char-to-string char))
-    ;; Wait for the timer itself, not for a fixed time
-    (let ((deadline (+ (float-time) 10)))
-      (while (and (vui-instance-render-timer instance)
-                  (< (float-time) deadline))
-        (sleep-for 0.01)))))
+    (vui-test--wait-for-render instance)))
 
 (vui-defcomponent inline-code ()
   "A field of three characters, with a note after it once it is full."

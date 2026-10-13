@@ -10,6 +10,7 @@
 
 (require 'buttercup)
 (require 'vui)
+(require 'vui-test-helpers)
 
 ;; Helper to click buttons (button.el text buttons)
 (defun vui-test--click-button-at (pos)
@@ -240,7 +241,7 @@
                 (let ((vui--current-instance instance-b))
                   (vui-set-state :n 1)))
               ;; Let both timers fire
-              (sleep-for 0.05)
+              (vui-test--wait-for-timers 0.05)
               (expect (with-current-buffer "*test-defer-a*" (buffer-string))
                       :to-equal "A:1")
               (expect (with-current-buffer "*test-defer-b*" (buffer-string))
@@ -270,7 +271,7 @@
                 (vui-flush-sync))
               (expect (with-current-buffer "*test-flush-a*" (buffer-string))
                       :to-equal "A:1")
-              (sleep-for 0.05)
+              (vui-test--wait-for-timers 0.05)
               (expect (with-current-buffer "*test-flush-b*" (buffer-string))
                       :to-equal "B:1"))
           (kill-buffer "*test-flush-a*")
