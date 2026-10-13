@@ -18,6 +18,24 @@
     (when button
       (button-activate button))))
 
+;; Helpers for the timing specs
+(defun vui-test--busy-wait (seconds)
+  "Keep Emacs busy for SECONDS and return the time it took.
+The time is measured with `float-time', the clock the timing data
+uses.  A busy loop, not `sleep-for': `sleep-for' runs timers, and
+this is called in the middle of a render."
+  (let ((start (float-time)))
+    (while (< (float-time) (+ start seconds)))
+    (- (float-time) start)))
+
+(defun vui-test--timing-duration (phase component)
+  "Return the duration recorded for PHASE of COMPONENT, or nil."
+  (plist-get (cl-find-if (lambda (e)
+                           (and (eq (plist-get e :phase) phase)
+                                (eq (plist-get e :component) component)))
+                         (vui-get-timing))
+             :duration))
+
 (describe "timing instrumentation"
   (before-each
     (vui-clear-timing)
@@ -53,13 +71,11 @@
     ;; and a trivial render is faster than that, so it sometimes measures
     ;; exactly 0.0.  Keep render busy for 20ms instead, and check that the
     ;; duration covers the time spent inside render and is not longer than
-    ;; the whole mount.  A busy loop, not `sleep-for', so that no timer
-    ;; runs in the middle of the render.
+    ;; the whole mount.
     (let ((inside nil))
       (vui-defcomponent timing-render-test ()
-        :render (let ((start (float-time)))
-                  (while (< (float-time) (+ start 0.02)))
-                  (setq inside (- (float-time) start))
+        :render (progn
+                  (setq inside (vui-test--busy-wait 0.02))
                   (vui-text "OK")))
       (let* ((before (float-time))
              (instance (vui-mount (vui-component 'timing-render-test) "*test-timing3*"))
@@ -73,70 +89,178 @@
               (expect (plist-get render-entry :duration) :not :to-be-greater-than whole))
           (kill-buffer "*test-timing3*")))))
 
+  ;; The four specs below also bound the duration.  Render is busy for
+  ;; 20ms before the phase starts, and none of that time belongs to the
+  ;; phase, so the phase and the render together must fit in the whole
+  ;; operation.  A phase with a hook is kept busy too, and must cover the
+  ;; time spent inside the hook.
+
   (it "records commit phase"
     (setq vui-timing-enabled t)
-    (vui-defcomponent timing-commit-test ()
-      :render (vui-text "OK"))
-    (let ((instance (vui-mount (vui-component 'timing-commit-test) "*test-timing4*")))
-      (unwind-protect
-          (let ((commit-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'commit))
-                                          (vui-get-timing))))
-            (expect commit-entry :to-be-truthy)
-            (expect (plist-get commit-entry :component) :to-equal 'timing-commit-test))
-        (kill-buffer "*test-timing4*"))))
+    (let ((render-time nil))
+      (vui-defcomponent timing-commit-test ()
+        :render (progn
+                  (setq render-time (vui-test--busy-wait 0.02))
+                  (vui-text "OK")))
+      (let* ((before (float-time))
+             (instance (vui-mount (vui-component 'timing-commit-test) "*test-timing4*"))
+             (whole (- (float-time) before)))
+        (unwind-protect
+            (let ((commit-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'commit))
+                                            (vui-get-timing))))
+              (expect commit-entry :to-be-truthy)
+              (expect (plist-get commit-entry :component) :to-equal 'timing-commit-test)
+              (expect (+ (plist-get commit-entry :duration) render-time)
+                      :not :to-be-greater-than whole))
+          (kill-buffer "*test-timing4*")))))
 
   (it "records mount phase"
     (setq vui-timing-enabled t)
-    (vui-defcomponent timing-mount-test ()
-      :on-mount (message "mounted")
-      :render (vui-text "OK"))
-    (let ((instance (vui-mount (vui-component 'timing-mount-test) "*test-timing5*")))
-      (unwind-protect
-          (let ((mount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'mount))
-                                         (vui-get-timing))))
-            (expect mount-entry :to-be-truthy)
-            (expect (plist-get mount-entry :component) :to-equal 'timing-mount-test))
-        (kill-buffer "*test-timing5*"))))
+    (let ((render-time nil)
+          (inside nil))
+      (vui-defcomponent timing-mount-test ()
+        :on-mount (setq inside (vui-test--busy-wait 0.02))
+        :render (progn
+                  (setq render-time (vui-test--busy-wait 0.02))
+                  (vui-text "OK")))
+      (let* ((before (float-time))
+             (instance (vui-mount (vui-component 'timing-mount-test) "*test-timing5*"))
+             (whole (- (float-time) before)))
+        (unwind-protect
+            (let ((mount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'mount))
+                                           (vui-get-timing))))
+              (expect mount-entry :to-be-truthy)
+              (expect (plist-get mount-entry :component) :to-equal 'timing-mount-test)
+              (expect (plist-get mount-entry :duration) :not :to-be-less-than inside)
+              (expect (+ (plist-get mount-entry :duration) render-time)
+                      :not :to-be-greater-than whole))
+          (kill-buffer "*test-timing5*")))))
 
   (it "records update phase"
     (setq vui-timing-enabled t)
-    (vui-defcomponent timing-update-test ()
-      :state ((count 0))
-      :on-update (message "updated")
-      :render (vui-text (number-to-string count)))
-    (let ((instance (vui-mount (vui-component 'timing-update-test) "*test-timing6*")))
-      (unwind-protect
-          (progn
-            ;; Trigger re-render
-            (setf (vui-instance-state instance)
-                  (plist-put (vui-instance-state instance) :count 1))
-            (vui--rerender-instance instance)
-            (let ((update-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'update))
-                                            (vui-get-timing))))
-              (expect update-entry :to-be-truthy)
-              (expect (plist-get update-entry :component) :to-equal 'timing-update-test)))
-        (kill-buffer "*test-timing6*"))))
+    (let ((render-time nil)
+          (inside nil))
+      (vui-defcomponent timing-update-test ()
+        :state ((count 0))
+        :on-update (setq inside (vui-test--busy-wait 0.02))
+        :render (progn
+                  (setq render-time (vui-test--busy-wait 0.02))
+                  (vui-text (number-to-string count))))
+      (let ((instance (vui-mount (vui-component 'timing-update-test) "*test-timing6*")))
+        (unwind-protect
+            (let ((before (float-time)))
+              ;; Trigger re-render
+              (setf (vui-instance-state instance)
+                    (plist-put (vui-instance-state instance) :count 1))
+              (vui--rerender-instance instance)
+              (let ((whole (- (float-time) before))
+                    (update-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'update))
+                                              (vui-get-timing))))
+                (expect update-entry :to-be-truthy)
+                (expect (plist-get update-entry :component) :to-equal 'timing-update-test)
+                (expect (plist-get update-entry :duration) :not :to-be-less-than inside)
+                (expect (+ (plist-get update-entry :duration) render-time)
+                        :not :to-be-greater-than whole)))
+          (kill-buffer "*test-timing6*")))))
 
   (it "records unmount phase"
     (setq vui-timing-enabled t)
-    (let ((show-child t))
+    (let ((show-child t)
+          (render-time nil)
+          (inside nil))
       (vui-defcomponent timing-unmount-child ()
-        :on-unmount (message "unmounted")
+        :on-unmount (setq inside (vui-test--busy-wait 0.02))
         :render (vui-text "child"))
       (vui-defcomponent timing-unmount-parent ()
-        :render (if show-child
-                    (vui-component 'timing-unmount-child)
-                  (vui-text "no child")))
+        :render (progn
+                  (setq render-time (vui-test--busy-wait 0.02))
+                  (if show-child
+                      (vui-component 'timing-unmount-child)
+                    (vui-text "no child"))))
       (let ((instance (vui-mount (vui-component 'timing-unmount-parent) "*test-timing7*")))
         (unwind-protect
-            (progn
+            (let ((before (float-time)))
               (setq show-child nil)
               (vui--rerender-instance instance)
-              (let ((unmount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'unmount))
+              (let ((whole (- (float-time) before))
+                    (unmount-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'unmount))
                                                (vui-get-timing))))
                 (expect unmount-entry :to-be-truthy)
-                (expect (plist-get unmount-entry :component) :to-equal 'timing-unmount-child)))
+                (expect (plist-get unmount-entry :component) :to-equal 'timing-unmount-child)
+                (expect (plist-get unmount-entry :duration) :not :to-be-less-than inside)
+                (expect (+ (plist-get unmount-entry :duration) render-time)
+                        :not :to-be-greater-than whole)))
           (kill-buffer "*test-timing7*")))))
+
+  (it "times only the hook in the unmount phase"
+    (setq vui-timing-enabled t)
+    ;; Removing the parent unmounts the child first: its mount cleanup
+    ;; runs, then its hook, then the hook of the parent.  All of this is
+    ;; after the commit of the root.  No two of these overlap, so
+    ;; together they must fit in the whole re-render.
+    (let ((show t)
+          (cleanup-time nil)
+          (inside nil))
+      (vui-defcomponent timing-gone-child ()
+        :on-mount (lambda ()
+                    (setq cleanup-time (vui-test--busy-wait 0.02)))
+        :on-unmount (setq inside (vui-test--busy-wait 0.02))
+        :render (vui-text "child"))
+      (vui-defcomponent timing-gone-parent ()
+        :render (vui-component 'timing-gone-child))
+      (vui-defcomponent timing-gone-root ()
+        :render (if show
+                    (vui-component 'timing-gone-parent)
+                  (vui-text "gone")))
+      (let ((instance (vui-mount (vui-component 'timing-gone-root) "*test-timing13*")))
+        (unwind-protect
+            (let ((before (float-time)))
+              (setq show nil)
+              (vui--rerender-instance instance)
+              (let ((whole (- (float-time) before))
+                    (commit (vui-test--timing-duration 'commit 'timing-gone-root))
+                    (child (vui-test--timing-duration 'unmount 'timing-gone-child))
+                    (parent (vui-test--timing-duration 'unmount 'timing-gone-parent)))
+                (expect cleanup-time :to-be-truthy)
+                (expect commit :to-be-truthy)
+                (expect child :not :to-be-less-than inside)
+                (expect parent :to-be-truthy)
+                (expect (+ commit cleanup-time child parent)
+                        :not :to-be-greater-than whole)))
+          (kill-buffer "*test-timing13*")))))
+
+  (it "stamps a record with the time the phase ended"
+    (setq vui-timing-enabled t)
+    (let ((render-end nil))
+      (vui-defcomponent timing-stamp-test ()
+        :render (progn
+                  (vui-test--busy-wait 0.02)
+                  (setq render-end (current-time))
+                  (vui-text "OK")))
+      (let* ((instance (vui-mount (vui-component 'timing-stamp-test) "*test-timing14*"))
+             (after (current-time)))
+        (unwind-protect
+            (let ((stamp (plist-get (cl-find-if (lambda (e) (eq (plist-get e :phase) 'render))
+                                                (vui-get-timing))
+                                    :timestamp)))
+              (expect stamp :to-be-truthy)
+              ;; Not before the end of the render function, which is 20ms
+              ;; after the start of the phase, and not after the mount
+              (expect (time-less-p stamp render-end) :to-be nil)
+              (expect (time-less-p after stamp) :to-be nil))
+          (kill-buffer "*test-timing14*")))))
+
+  (it "records nothing for a phase that ends with an error"
+    (setq vui-timing-enabled t)
+    (vui-defcomponent timing-error-test ()
+      :render (error "No render today"))
+    (unwind-protect
+        (progn
+          (expect (vui-mount (vui-component 'timing-error-test) "*test-timing15*")
+                  :to-throw 'error)
+          (expect (vui-get-timing) :to-be nil))
+      (when (get-buffer "*test-timing15*")
+        (kill-buffer "*test-timing15*"))))
 
   (it "clears timing data"
     (setq vui-timing-enabled t)
@@ -166,7 +290,96 @@
                 (vui--rerender-instance instance))
               ;; Should be capped at max
               (expect (length (vui-get-timing)) :to-equal 5))
-          (kill-buffer "*test-timing9*"))))))
+          (kill-buffer "*test-timing9*")))))
+
+  (it "keeps the newest entries when over the max"
+    (setq vui-timing-enabled t)
+    (let ((vui--timing-max-entries 5))
+      (vui-defcomponent timing-old-test ()
+        :render (vui-text "old"))
+      (vui-defcomponent timing-new-test ()
+        :render (vui-text "new"))
+      (unwind-protect
+          (progn
+            ;; A mount makes three entries: render, commit, mount
+            (vui-mount (vui-component 'timing-old-test) "*test-timing16*")
+            (vui-mount (vui-component 'timing-old-test) "*test-timing17*")
+            (expect (length (vui-get-timing)) :to-equal 5)
+            (vui-mount (vui-component 'timing-new-test) "*test-timing18*")
+            (expect (mapcar (lambda (e)
+                              (list (plist-get e :phase) (plist-get e :component)))
+                            (vui-get-timing))
+                    :to-equal '((mount timing-new-test)
+                                (commit timing-new-test)
+                                (render timing-new-test)
+                                (mount timing-old-test)
+                                (commit timing-old-test))))
+        (dolist (name '("*test-timing16*" "*test-timing17*" "*test-timing18*"))
+          (when (get-buffer name)
+            (kill-buffer name))))))
+
+  (it "sums the durations per phase and per component in the report"
+    ;; These durations and their sums are exact in binary, so the report
+    ;; prints them exactly
+    (let ((vui--timing-data
+           (mapcar (lambda (e)
+                     (list :phase (nth 0 e) :component (nth 1 e)
+                           :duration (nth 2 e) :timestamp (current-time)))
+                   '((unmount timing-sum-b 8.0)
+                     (update timing-sum-b 4.0)
+                     (mount timing-sum-a 2.0)
+                     (commit timing-sum-a 0.5)
+                     (render timing-sum-a 0.25)
+                     (render timing-sum-a 0.125)))))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-report-timing))
+            (with-current-buffer "*vui-timing*"
+              (expect (buffer-string) :to-match
+                      (regexp-quote (concat "Total entries: 6\n\n"
+                                            "Totals by Phase:\n"
+                                            "  render:  0.3750s\n"
+                                            "  commit:  0.5000s\n"
+                                            "  mount:   2.0000s\n"
+                                            "  update:  4.0000s\n"
+                                            "  unmount: 8.0000s\n"
+                                            "  TOTAL:   14.8750s\n")))
+              (expect (buffer-string) :to-match
+                      (concat "^timing-sum-a (renders: [0-9]+)\n"
+                              (regexp-quote (concat "  render:  0.3750s\n"
+                                                    "  commit:  0.5000s\n"
+                                                    "  mount:   2.0000s\n"))
+                              "$"))
+              (expect (buffer-string) :to-match
+                      (concat "^timing-sum-b (renders: [0-9]+)\n"
+                              (regexp-quote (concat "  update:  4.0000s\n"
+                                                    "  unmount: 8.0000s\n"))
+                              "$"))))
+        (when (get-buffer "*vui-timing*")
+          (kill-buffer "*vui-timing*")))))
+
+  (it "reports only the newest entries when given a count"
+    (let ((vui--timing-data
+           (mapcar (lambda (e)
+                     (list :phase (nth 0 e) :component (nth 1 e)
+                           :duration (nth 2 e) :timestamp (current-time)))
+                   ;; Newest first
+                   '((commit timing-last-test 0.5)
+                     (render timing-last-test 0.25)
+                     (render timing-last-test 2.0)))))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-report-timing 2))
+            (with-current-buffer "*vui-timing*"
+              (expect (buffer-string) :to-match
+                      (regexp-quote (concat "Total entries: 2\n\n"
+                                            "Totals by Phase:\n"
+                                            "  render:  0.2500s\n"
+                                            "  commit:  0.5000s\n")))))
+        (when (get-buffer "*vui-timing*")
+          (kill-buffer "*vui-timing*"))))))
 
 (describe "component inspector"
   (it "returns message when no instance mounted"
