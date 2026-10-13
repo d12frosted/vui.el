@@ -7235,9 +7235,14 @@ wholesale render's empty-child handling)."
                    :context context
                    :value value)
                   vui--context-stack)))
-      ;; Render all children with the new context
-      (dolist (child children)
-        (vui--render-vnode child))))
+      ;; Render all children with the new context.  Each one is a step
+      ;; in the render path, like the children of a fragment: without it
+      ;; the widgets of two children share their `:vui-path'.
+      (let ((idx 0))
+        (dolist (child children)
+          (let ((vui--render-path (cons idx vui--render-path)))
+            (vui--render-vnode child))
+          (cl-incf idx)))))
 
    ;; Error boundary - catch errors from children
    ((vui-vnode-error-boundary-p vnode)
@@ -7250,16 +7255,25 @@ wholesale render's empty-child handling)."
            (children (vui-vnode-error-boundary-children vnode))
            (table (vui--error-boundary-table))
            ;; Check if we already have a caught error for this boundary
-           (existing-error (gethash boundary-key table)))
+           (existing-error (gethash boundary-key table))
+           ;; The fallback is the step after the last child: a widget or
+           ;; a boundary in it must not take a path one of the children
+           ;; has.
+           (fallback-path (cons (length children) vui--render-path)))
       (if existing-error
           ;; Already have an error - render fallback
           (when fallback
-            (let ((fallback-vnode (funcall fallback existing-error)))
+            (let ((fallback-vnode (funcall fallback existing-error))
+                  (vui--render-path fallback-path))
               (vui--render-vnode fallback-vnode)))
-        ;; No error yet - try to render children
+        ;; No error yet - try to render children, each one a step in
+        ;; the render path (see the provider above)
         (condition-case err
-            (dolist (child children)
-              (vui--render-vnode child))
+            (let ((idx 0))
+              (dolist (child children)
+                (let ((vui--render-path (cons idx vui--render-path)))
+                  (vui--render-vnode child))
+                (cl-incf idx)))
           (error
            ;; Store the error for this boundary
            (puthash boundary-key err table)
@@ -7268,7 +7282,8 @@ wholesale render's empty-child handling)."
              (funcall on-error err))
            ;; Render fallback
            (when fallback
-             (let ((fallback-vnode (funcall fallback err)))
+             (let ((fallback-vnode (funcall fallback err))
+                   (vui--render-path fallback-path))
                (vui--render-vnode fallback-vnode))))))))
 
    ;; String shorthand

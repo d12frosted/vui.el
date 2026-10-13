@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- The children of a context provider and of a =vui-error-boundary= each
+  have a place of their own in the tree, and so has the fallback of a
+  boundary. Both rendered their children without counting them, so the
+  widgets of two children had the same path: with the same button in two
+  rows under a boundary, a re-render moved point from the second row to
+  the first. Two boundaries without an =:id= directly under one provider
+  shared their caught error too: when one failed, both showed their
+  fallback. And a boundary without an =:id= inside a fallback could take
+  the error that a boundary among the failed children had caught.
+
 - A tree that =vui-mount= or =vui-render= puts up from a lifecycle hook
   or an effect of another tree starts its paths at its own root. The
   call runs while the other tree is being rendered, and the new tree

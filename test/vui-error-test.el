@@ -112,6 +112,61 @@
                       :to-equal 1))
           (kill-buffer "*test-auto-id*")))))
 
+  (it "tells two boundaries without :id apart under one provider"
+    ;; The identity of such a boundary is its place in the tree, and the
+    ;; children of a provider are places of their own.
+    (vui-defcontext sibling-boundary-ctx 'none)
+    (vui-defcomponent sibling-boundary-child (fail)
+      :render (if fail (error "boom") (vui-text "ok")))
+    (vui-defcomponent sibling-boundary-app ()
+      :render
+      (sibling-boundary-ctx-provider
+       'some
+       (vui-error-boundary
+        :fallback (lambda (_) (vui-text "fallback"))
+        :children (list (vui-component 'sibling-boundary-child :fail t)))
+       (vui-newline)
+       (vui-error-boundary
+        :fallback (lambda (_) (vui-text "fallback"))
+        :children (list (vui-component 'sibling-boundary-child :fail nil)))))
+    (let ((instance (vui-mount (vui-component 'sibling-boundary-app)
+                               "*test-sibling-boundary*")))
+      (unwind-protect
+          (with-current-buffer "*test-sibling-boundary*"
+            (expect (buffer-string) :to-equal "fallback\nok")
+            (vui--rerender-instance instance)
+            (expect (buffer-string) :to-equal "fallback\nok"))
+        (kill-buffer "*test-sibling-boundary*"))))
+
+  (it "tells a boundary in a fallback apart from the children that failed"
+    ;; The fallback takes the place of the children, but it is not one
+    ;; of them.  A boundary without :id inside it must not find the
+    ;; error that a boundary among the children caught.  The first child
+    ;; fails inside a boundary of its own (directly, or one level down),
+    ;; the last child fails outside of any.
+    (dolist (wrap (list #'identity #'vui-fragment))
+      (vui-defcomponent fallback-boundary-app (tick)
+        :render
+        (vui-error-boundary
+         :fallback (lambda (_)
+                     (vui-fragment
+                      (vui-error-boundary
+                       :fallback (lambda (_) (vui-text "retry failed"))
+                       :children (list (vui-button "retry")))
+                      (vui-text (format " %s" tick))))
+         :children (list (funcall wrap
+                                  (vui-error-boundary
+                                   :fallback (lambda (_) (vui-text "preview failed"))
+                                   :children (list 'boom)))
+                         'boom)))
+      (let ((instance (vui-mount (vui-component 'fallback-boundary-app :tick 0)
+                                 "*test-fallback-boundary*")))
+        (unwind-protect
+            (with-current-buffer "*test-fallback-boundary*"
+              (vui-update instance '(:tick 1))
+              (expect (buffer-string) :to-equal "[retry] 1"))
+          (kill-buffer "*test-fallback-boundary*")))))
+
   (it "resets error with vui-reset-error-boundary"
     (let ((should-error t))
       (vui-defcomponent reset-bad-child ()

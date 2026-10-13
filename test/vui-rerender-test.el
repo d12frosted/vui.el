@@ -783,7 +783,55 @@ patches around it."
             (expect (buffer-string) :to-equal "[close] [pin 1]")
             (expect (vui-rr--tag-at (point)) :to-equal "pin 1"))
         (kill-buffer "*rr-hook-panel*")
-        (kill-buffer "*rr-hook*")))))
+        (kill-buffer "*rr-hook*"))))
+
+  (it "tells same-label buttons apart in two rows under an error boundary"
+    ;; The children of a boundary are siblings like those of any
+    ;; container.  Without a step of their own in the path the two rows
+    ;; have the same paths and the same labels, and the first row wins.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-eb-rows ()
+        :state ((n 0))
+        :render (vui-error-boundary
+                 :fallback (lambda (_error) (vui-text "failed"))
+                 :children (list (vui-hstack (vui-button "copy")
+                                             (vui-text (format "one %d" n)))
+                                 (vui-newline)
+                                 (vui-hstack (vui-button "copy")
+                                             (vui-text "two")))))
+      (let ((inst (vui-mount (vui-component 'rr-eb-rows) "*rr-ebr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-ebr*"
+              (expect (buffer-string) :to-equal "[copy] one 0\n[copy] two")
+              (goto-char (point-max))
+              (search-backward "[copy]")
+              (let ((vui--current-instance inst)) (vui-set-state :n 1))
+              (expect (buffer-string) :to-equal "[copy] one 1\n[copy] two")
+              (expect (looking-at-p "\\[copy\\] two") :to-be t))
+          (kill-buffer "*rr-ebr*")))))
+
+  (it "tells same-label buttons apart in two rows under a provider"
+    (let ((vui-render-delay nil))
+      (vui-defcontext rr-rows-ctx 'none)
+      (vui-defcomponent rr-ctx-rows ()
+        :state ((n 0))
+        :render (rr-rows-ctx-provider
+                 n
+                 (vui-hstack (vui-button "copy")
+                             (vui-text (format "one %d" n)))
+                 (vui-newline)
+                 (vui-hstack (vui-button "copy")
+                             (vui-text "two"))))
+      (let ((inst (vui-mount (vui-component 'rr-ctx-rows) "*rr-ctxr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-ctxr*"
+              (expect (buffer-string) :to-equal "[copy] one 0\n[copy] two")
+              (goto-char (point-max))
+              (search-backward "[copy]")
+              (let ((vui--current-instance inst)) (vui-set-state :n 1))
+              (expect (buffer-string) :to-equal "[copy] one 1\n[copy] two")
+              (expect (looking-at-p "\\[copy\\] two") :to-be t))
+          (kill-buffer "*rr-ctxr*"))))))
 
 (describe "vui-goto-key"
   (it "moves point onto the widget carrying KEY and returns its position"
