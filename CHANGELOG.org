@@ -28,6 +28,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- The timing data has a =commit= entry for components with component
+  children. With =vui-timing-enabled= set, a component that rendered
+  another component never got one in =(vui-get-timing)= or in
+  =vui-report-timing=: the start time of the phase being measured lived
+  in one global variable, and the child's own render, commit and mount
+  phases, which run while the parent commits, used it up. So the report
+  was missing the commit time of every component except the leaves. The
+  start time is now local to each phase, and phases nest: a =commit=
+  duration includes the render, commit and mount (or update) of every
+  component below it. Times of nested components overlap because of
+  that, and the totals in the report count the same time once per level
+  of nesting.
+
 - A re-render no longer moves the cursor to the top of a live
   =vui-stream=. With the cursor on a button in the middle of a chat log,
   any re-render of the root (the status line under the stream changes,

@@ -116,44 +116,62 @@ This has a small performance cost, so only enable for profiling."
   :group 'vui)
 
 (defvar vui--timing-data nil
-  "List of timing records.
-Each record is a plist with :phase, :component, :duration, :timestamp.")
+  "List of timing records, newest first.
+Each record is a plist with :phase, :component, :duration, :timestamp.
+:duration is the wall-clock time of the phase in seconds, and
+:timestamp is the time the phase ended.
+
+Phases nest.  A component commits by writing its vtree to the buffer,
+and that renders the child components in it, so a commit duration
+includes the render, commit and mount (or update) of every component
+below, and the unmount of the components they remove.  The other
+phases time one function each: the render function or a lifecycle
+hook.")
 
 (defvar vui--timing-max-entries 100
   "Maximum number of timing entries to keep.")
 
-(defvar vui--timing-start-time nil
-  "Start time of current timing measurement.")
-
-(defun vui--timing-start ()
-  "Start timing a phase.  Does nothing if timing is disabled."
-  (when vui-timing-enabled
-    (setq vui--timing-start-time (float-time))))
-
-(defun vui--timing-record (phase component)
-  "Record timing for PHASE of COMPONENT.
+(defun vui--timing-record (phase component start)
+  "Record that PHASE of COMPONENT ran from START until now.
 PHASE is a symbol like `render', `commit', `mount', `update', `unmount'.
-Does nothing if timing is disabled or no timing was started."
-  (when (and vui-timing-enabled vui--timing-start-time)
-    (let ((duration (- (float-time) vui--timing-start-time)))
-      (push (list :phase phase
-                  :component component
-                  :duration duration
-                  :timestamp (current-time))
-            vui--timing-data)
-      ;; Trim to max entries
-      (when (> (length vui--timing-data) vui--timing-max-entries)
-        (setq vui--timing-data (cl-subseq vui--timing-data 0 vui--timing-max-entries))))
-    (setq vui--timing-start-time nil)))
+START is a `float-time' value.  Use `vui--with-timing' to time a phase."
+  (push (list :phase phase
+              :component component
+              :duration (- (float-time) start)
+              :timestamp (current-time))
+        vui--timing-data)
+  ;; Trim to max entries
+  (when (> (length vui--timing-data) vui--timing-max-entries)
+    (setq vui--timing-data (cl-subseq vui--timing-data 0 vui--timing-max-entries))))
+
+(defmacro vui--with-timing (phase component &rest body)
+  "Run BODY as PHASE of COMPONENT and record how long it took.
+Return the value of BODY.  PHASE and COMPONENT are evaluated after
+BODY, and only when a record is made.
+
+The start time is local to this form, so timed phases nest: a phase
+that runs inside BODY (a child component rendered while its parent
+commits, a lifecycle hook that mounts something) does not disturb the
+measurement of the phase around it.
+
+When `vui-timing-enabled' is nil at the start, this only reads that
+variable and runs BODY.  Nothing is recorded when BODY exits
+non-locally."
+  (declare (indent 2) (debug (form form body)))
+  (let ((start (make-symbol "start")))
+    `(let ((,start (and vui-timing-enabled (float-time))))
+       (prog1 (progn ,@body)
+         (when ,start
+           (vui--timing-record ,phase ,component ,start))))))
 
 (defun vui-get-timing ()
-  "Return the collected timing data."
+  "Return the collected timing data, newest record first.
+See `vui--timing-data' for the format of a record."
   vui--timing-data)
 
 (defun vui-clear-timing ()
   "Clear all collected timing data."
-  (setq vui--timing-data nil)
-  (setq vui--timing-start-time nil))
+  (setq vui--timing-data nil))
 
 ;;; Render Cycle Debugging
 
@@ -211,7 +229,9 @@ Only logs if `vui-debug-enabled' is non-nil and PHASE is in
 
 (defun vui-report-timing (&optional last-n)
   "Display a timing report for the last LAST-N entries (default all).
-Groups by component and shows total time per phase."
+Groups by component and shows total time per phase.  Commit times
+include child components (see `vui--timing-data'), so the times of
+nested components overlap and the totals count them more than once."
   (interactive "P")
   (let* ((data (if last-n
                    (cl-subseq vui--timing-data 0 (min last-n (length vui--timing-data)))
@@ -3850,10 +3870,9 @@ the root re-render commit incrementally (see `vui--commit-root')."
                     (progn
                       (vui--debug-log 'render "<%s> rendering (first=%s)"
                                       component-name first-render-p)
-                      (vui--timing-start)
-                      (let ((new-vtree (vui--with-debug-indent
-                                        (funcall render-fn props state))))
-                        (vui--timing-record 'render component-name)
+                      (let ((new-vtree (vui--with-timing 'render component-name
+                                         (vui--with-debug-indent
+                                          (funcall render-fn props state)))))
                         (setf (vui-instance-cached-vtree instance) new-vtree)
                         new-vtree))
                   ;; Use cached vtree
@@ -3861,9 +3880,9 @@ the root re-render commit incrementally (see `vui--commit-root')."
                                   component-name)
                   (vui-instance-cached-vtree instance))))
     (when vtree
-      (vui--timing-start)
-      (if commit-fn (funcall commit-fn vtree) (vui--render-vnode vtree))
-      (vui--timing-record 'commit component-name))
+      ;; Child components in VTREE render here, inside this commit
+      (vui--with-timing 'commit component-name
+        (if commit-fn (funcall commit-fn vtree) (vui--render-vnode vtree))))
     ;; Update children list for next reconciliation
     (let ((new-children (nreverse vui--new-children)))
       ;; Two sibling vnodes with the same key reconcile to the same
@@ -3906,26 +3925,24 @@ the root re-render commit incrementally (see `vui--commit-root')."
           (progn
             (setf (vui-instance-mounted-p instance) t)
             (vui--debug-log 'mount "<%s> mounted" component-name)
-            (vui--timing-start)
-            (let ((result (vui--call-lifecycle-hook
-                           "on-mount"
-                           (vui-component-def-on-mount def)
-                           instance
-                           props state)))
-              ;; If on-mount returns a function, store it as cleanup
-              (when (functionp result)
-                (setf (vui-instance-mount-cleanup instance) result)))
-            (vui--timing-record 'mount component-name))
+            (vui--with-timing 'mount component-name
+              (let ((result (vui--call-lifecycle-hook
+                             "on-mount"
+                             (vui-component-def-on-mount def)
+                             instance
+                             props state)))
+                ;; If on-mount returns a function, store it as cleanup
+                (when (functionp result)
+                  (setf (vui-instance-mount-cleanup instance) result)))))
         ;; Re-render: call on-update only if we actually rendered
         (when should-render-p
           (vui--debug-log 'update "<%s> updated" component-name)
-          (vui--timing-start)
-          (vui--call-lifecycle-hook
-           "on-update"
-           (vui-component-def-on-update def)
-           instance
-           props state prev-props prev-state)
-          (vui--timing-record 'update component-name))))
+          (vui--with-timing 'update component-name
+            (vui--call-lifecycle-hook
+             "on-update"
+             (vui-component-def-on-update def)
+             instance
+             props state prev-props prev-state)))))
     ;; Store current props/state for next render's on-update.  A
     ;; shallow copy is enough: it owns its own plist cells, so the
     ;; in-place plist-put done by `vui-set-state' cannot reach it,
@@ -3955,14 +3972,13 @@ the root re-render commit incrementally (see `vui--commit-root')."
          (component-name (vui-component-def-name def))
          (vui--current-instance instance))
     (vui--debug-log 'unmount "<%s> unmounting" component-name)
-    (vui--timing-start)
-    (vui--call-lifecycle-hook
-     "on-unmount"
-     (vui-component-def-on-unmount def)
-     instance
-     (vui-instance-props instance)
-     (vui-instance-state instance))
-    (vui--timing-record 'unmount component-name)))
+    (vui--with-timing 'unmount component-name
+      (vui--call-lifecycle-hook
+       "on-unmount"
+       (vui-component-def-on-unmount def)
+       instance
+       (vui-instance-props instance)
+       (vui-instance-state instance)))))
 
 (defun vui--detach-instance (instance)
   "Clear buffer references for INSTANCE and all its children, recursively.

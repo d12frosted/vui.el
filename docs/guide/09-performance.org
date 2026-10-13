@@ -261,10 +261,15 @@ The report shows time spent in each phase per component.
 
 #+begin_src elisp
 (vui-get-timing)
-;; => ((:phase render :component my-component :duration 0.012 :timestamp ...)
-;;     (:phase commit :component my-component :duration 0.003 :timestamp ...)
+;; => ((:phase commit :component my-component :duration 0.003 :timestamp ...)
+;;     (:phase render :component my-component :duration 0.012 :timestamp ...)
 ;;     ...)
 #+end_src
+
+A =commit= duration includes the components rendered below: their
+render, commit and mount (or update). So the commit of a parent is
+never shorter than the render of its child, and the times of nested
+components overlap.
 
 * Performance Checklist
 

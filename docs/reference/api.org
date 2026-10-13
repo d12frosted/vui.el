@@ -1412,7 +1412,9 @@ Find all instances of COMPONENT-TYPE.
 
 Display timing report in buffer.
 
-Groups by component, shows time per phase.
+Groups by component, shows time per phase. Commit times include child
+components (see =vui-get-timing=), so the totals count nested time once
+per level of nesting.
 
 ** vui-get-timing
 
@@ -1420,9 +1422,17 @@ Groups by component, shows time per phase.
 (vui-get-timing) -> list
 #+end_src
 
-Return raw timing data.
+Return raw timing data, newest entry first.
 
 Each entry: =(:phase PHASE :component NAME :duration SECONDS :timestamp TIME)=
+
+PHASE is one of =render=, =commit=, =mount=, =update=, =unmount=.
+=render= is the component's render function, and =mount=, =update=
+and =unmount= are its lifecycle hooks. =commit= is writing the
+component's output to the buffer. Child components are rendered during
+their parent's commit, so a =commit= duration includes the render,
+commit and mount (or update) of every component below, and the unmount
+of the components they remove.
 
 ** vui-clear-timing
 

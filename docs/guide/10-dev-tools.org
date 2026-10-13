@@ -116,18 +116,18 @@ Total entries: 42
 
 Totals by Phase:
   render:  0.0234s
-  commit:  0.0089s
+  commit:  0.0289s
   mount:   0.0012s
   update:  0.0156s
   unmount: 0.0003s
-  TOTAL:   0.0494s
+  TOTAL:   0.0694s
 
 By Component:
 ------------------------------------------------------------
 
 app (renders: 5)
   render:  0.0102s
-  commit:  0.0034s
+  commit:  0.0234s
   mount:   0.0004s
   update:  0.0078s
 
@@ -137,13 +137,50 @@ todo-list (renders: 12)
   update:  0.0067s
 #+end_example
 
+Here =todo-list= is rendered by =app=, so the commit time of =app=
+includes the time of =todo-list= (see "What Each Phase Measures"
+below).
+
 ** Access Raw Data
 
 #+begin_src elisp
 (vui-get-timing)
-;; => ((:phase render :component todo-list :duration 0.0023 :timestamp ...)
+;; => ((:phase update :component app :duration 0.0019 :timestamp ...)
+;;     (:phase commit :component app :duration 0.0058 :timestamp ...)
 ;;     ...)
 #+end_src
+
+The newest record comes first. =:duration= is in seconds, and
+=:timestamp= is the time the phase ended.
+
+Only the newest 100 records are kept (=vui--timing-max-entries=). A
+component makes about three records per render pass, so raise the
+limit before you profile a tree of more than 30 components or so.
+
+** What Each Phase Measures
+
+| Phase     | Time spent in                                |
+|-----------+----------------------------------------------|
+| =render=  | The component's =:render= function           |
+| =commit=  | Writing the component's output to the buffer |
+| =mount=   | The =:on-mount= hook                         |
+| =update=  | The =:on-update= hook                        |
+| =unmount= | The =:on-unmount= hook                       |
+
+Phases nest. Child components are rendered while their parent commits,
+so a =commit= duration includes the render, commit and mount (or
+update) of every component below it, and the unmount of the components
+they remove. A parent's commit is never shorter than the render of its
+child.
+
+This means the times of nested components overlap, and the totals in
+the report count the same time once per level of nesting. To find a
+slow component, start with =render=: it is the component's own render
+function and nothing else. Then compare a component's =commit= with
+the entries of its children to see how much of it is its own. That is
+an estimate: a layout that measures its children (=vui-flex=,
+=vui-grid=, =vui-table=, =vui-box=) renders them again inside the
+commit, and the extra render does not always get an entry.
 
 ** Clear Data
 

@@ -262,6 +262,82 @@ this is called in the middle of a render."
       (when (get-buffer "*test-timing15*")
         (kill-buffer "*test-timing15*"))))
 
+  (it "records every phase of a parent and of its component child"
+    (setq vui-timing-enabled t)
+    (vui-defcomponent timing-nested-child ()
+      :render (vui-text "child"))
+    (vui-defcomponent timing-nested-parent ()
+      :render (vui-component 'timing-nested-child))
+    (let ((instance (vui-mount (vui-component 'timing-nested-parent) "*test-timing10*")))
+      (unwind-protect
+          (progn
+            ;; Oldest entry first.  The child is rendered while the parent
+            ;; commits, so the parent's commit ends after the child's mount.
+            (expect (mapcar (lambda (e)
+                              (list (plist-get e :phase) (plist-get e :component)))
+                            (reverse (vui-get-timing)))
+                    :to-equal '((render timing-nested-parent)
+                                (render timing-nested-child)
+                                (commit timing-nested-child)
+                                (mount timing-nested-child)
+                                (commit timing-nested-parent)
+                                (mount timing-nested-parent)))
+            ;; The same on re-render, with update in place of mount
+            (vui-clear-timing)
+            (vui--rerender-instance instance)
+            (expect (mapcar (lambda (e)
+                              (list (plist-get e :phase) (plist-get e :component)))
+                            (reverse (vui-get-timing)))
+                    :to-equal '((render timing-nested-parent)
+                                (render timing-nested-child)
+                                (commit timing-nested-child)
+                                (update timing-nested-child)
+                                (commit timing-nested-parent)
+                                (update timing-nested-parent))))
+        (kill-buffer "*test-timing10*"))))
+
+  (it "counts the child's render in the parent's commit"
+    (setq vui-timing-enabled t)
+    ;; The child's render keeps the parent's commit busy for 20ms.  The
+    ;; parent's hook runs after its commit, so the commit and the hook
+    ;; together must fit in the whole operation.
+    (let ((inside nil))
+      (vui-defcomponent timing-covered-child ()
+        :render (progn
+                  (setq inside (vui-test--busy-wait 0.02))
+                  (vui-text "child")))
+      (vui-defcomponent timing-covered-parent ()
+        :render (vui-component 'timing-covered-child))
+      (let* ((before (float-time))
+             (instance (vui-mount (vui-component 'timing-covered-parent) "*test-timing11*"))
+             (whole (- (float-time) before)))
+        (unwind-protect
+            (progn
+              (let ((child-render (vui-test--timing-duration 'render 'timing-covered-child))
+                    (parent-commit (vui-test--timing-duration 'commit 'timing-covered-parent))
+                    (parent-mount (vui-test--timing-duration 'mount 'timing-covered-parent)))
+                (expect child-render :to-be-truthy)
+                (expect parent-commit :to-be-truthy)
+                (expect child-render :not :to-be-less-than inside)
+                (expect parent-commit :not :to-be-less-than child-render)
+                (expect (+ parent-commit parent-mount) :not :to-be-greater-than whole))
+              ;; The same on re-render, with update in place of mount
+              (vui-clear-timing)
+              (setq inside nil)
+              (let ((before (float-time)))
+                (vui--rerender-instance instance)
+                (let ((whole (- (float-time) before))
+                      (child-render (vui-test--timing-duration 'render 'timing-covered-child))
+                      (parent-commit (vui-test--timing-duration 'commit 'timing-covered-parent))
+                      (parent-update (vui-test--timing-duration 'update 'timing-covered-parent)))
+                  (expect inside :to-be-truthy)
+                  (expect child-render :to-be-truthy)
+                  (expect parent-commit :to-be-truthy)
+                  (expect child-render :not :to-be-less-than inside)
+                  (expect parent-commit :not :to-be-less-than child-render)
+                  (expect (+ parent-commit parent-update) :not :to-be-greater-than whole))))
+          (kill-buffer "*test-timing11*")))))
+
   (it "clears timing data"
     (setq vui-timing-enabled t)
     (vui-defcomponent timing-clear-test ()
@@ -378,6 +454,31 @@ this is called in the middle of a render."
                                             "Totals by Phase:\n"
                                             "  render:  0.2500s\n"
                                             "  commit:  0.5000s\n")))))
+        (when (get-buffer "*vui-timing*")
+          (kill-buffer "*vui-timing*")))))
+
+  (it "reports the commit time of a parent with a component child"
+    (setq vui-timing-enabled t)
+    (vui-defcomponent timing-report-child ()
+      :render (progn
+                (vui-test--busy-wait 0.02)
+                (vui-text "child")))
+    (vui-defcomponent timing-report-parent ()
+      :render (vui-component 'timing-report-child))
+    (let ((instance (vui-mount (vui-component 'timing-report-parent) "*test-timing12*")))
+      (unwind-protect
+          (let ((commit (vui-test--timing-duration 'commit 'timing-report-parent)))
+            (expect commit :to-be-truthy)
+            (save-window-excursion
+              (vui-report-timing))
+            ;; The render line is there only when the render took
+            ;; measurable time
+            (with-current-buffer "*vui-timing*"
+              (expect (buffer-string) :to-match
+                      (concat "^timing-report-parent (renders: [0-9]+)\n"
+                              "\\(?:  render: .*\n\\)?"
+                              (regexp-quote (format "  commit:  %.4fs\n" commit))))))
+        (kill-buffer "*test-timing12*")
         (when (get-buffer "*vui-timing*")
           (kill-buffer "*vui-timing*"))))))
 
