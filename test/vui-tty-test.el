@@ -15,9 +15,11 @@
 ;; what it reports back.  They are skipped where such a child cannot
 ;; open a terminal, except on CI, where that is a failure.
 ;;
-;; One more spec is about the harness itself and needs no terminal: a
-;; child without one has to be reported as such even when it is gone
-;; before anything it printed was read.
+;; The last specs are about the harness itself, which has to tell a
+;; child with no terminal from one that died.  It has to hear a child
+;; that is gone before anything it printed was read, and it must not
+;; take what a child with a terminal put on its screen for a terminal
+;; problem.
 
 ;;; Code:
 
@@ -31,6 +33,15 @@
           "is not a tty"
           "ould not open"))
   "Matches what Emacs prints when it cannot use its terminal.")
+
+(defun vui-tty-test--no-terminal-p (output)
+  "Return non-nil when OUTPUT is from a child that could not use its terminal.
+Such a child says so and exits, and it never draws.  A child with a
+terminal sets it up before it draws anything, which takes escape
+sequences, so only what OUTPUT has before the first of them counts.
+What comes later is a frame, and a frame can show any words."
+  (string-match-p vui-tty-test--no-terminal
+                  (substring output 0 (string-search "\e" output))))
 
 (defun vui-tty-test--eval (prelude form)
   "Evaluate FORM in a child Emacs with a real tty frame; return its value.
@@ -116,7 +127,7 @@ signalled, the child did not finish in time, or it died."
                 (with-temp-buffer
                   (insert-file-contents result)
                   (read (current-buffer))))
-               ((string-match-p vui-tty-test--no-terminal said)
+               ((vui-tty-test--no-terminal-p said)
                 (list 'unavailable said))
                (t (list 'error (list 'child-died
                                      (process-exit-status process))))))))
@@ -280,32 +291,6 @@ anyone noticing."
          (assume nil (format "no tty child: %s" why)))))
     (`(error ,data) (buttercup-fail "The tty child failed: %S" data))))
 
-(describe "the tty harness"
-  (it "hears a child with no terminal that is gone before it listens"
-    ;; A child on a pipe has no terminal: it says so and exits.  What
-    ;; it said is then still in the pipe, and the harness used to look
-    ;; at its empty buffer and take this for a child that died.
-    (let ((real (symbol-function 'make-process))
-          (gone nil))
-      (spy-on 'make-process :and-call-fake
-              (lambda (&rest args)
-                (let ((process (apply real
-                                      (plist-put args :connection-type 'pipe)))
-                      (deadline (+ (float-time) 10)))
-                  ;; Nothing reads from the child while this waits
-                  (while (and (process-live-p process)
-                              (< (float-time) deadline))
-                    (call-process "sleep" nil nil nil "0.01"))
-                  (setq gone (not (process-live-p process)))
-                  process)))
-      (pcase (vui-tty-test--eval nil nil)
-        (`(unavailable ,output) (expect output :to-match "is not a tty"))
-        (result (buttercup-fail "Expected (unavailable OUTPUT), got %S"
-                                result)))
-      ;; A child that was still there was read the usual way, and that
-      ;; shows nothing
-      (expect gone :to-be t))))
-
 (describe "re-render under real redisplay"
   (before-all
     (setq vui-tty-test--report nil))
@@ -382,6 +367,67 @@ anyone noticing."
                  (vui-tty-test--scenario :native-comp)))
       (expect native-comp :to-be 'off)
       (expect processes :to-be nil))))
+
+(describe "the tty harness"
+  (it "hears a child with no terminal that is gone before it listens"
+    ;; A child on a pipe has no terminal: it says so and exits.  What
+    ;; it said is then still in the pipe, and the harness used to look
+    ;; at its empty buffer and take this for a child that died.
+    (let ((real (symbol-function 'make-process))
+          (gone nil))
+      (spy-on 'make-process :and-call-fake
+              (lambda (&rest args)
+                (let ((process (apply real
+                                      (plist-put args :connection-type 'pipe)))
+                      (deadline (+ (float-time) 10)))
+                  ;; Nothing reads from the child while this waits
+                  (while (and (process-live-p process)
+                              (< (float-time) deadline))
+                    (call-process "sleep" nil nil nil "0.01"))
+                  (setq gone (not (process-live-p process)))
+                  process)))
+      (pcase (vui-tty-test--eval nil nil)
+        (`(unavailable ,output) (expect output :to-match "is not a tty"))
+        (result (buttercup-fail "Expected (unavailable OUTPUT), got %S"
+                                result)))
+      ;; A child that was still there was read the usual way, and that
+      ;; shows nothing
+      (expect gone :to-be t)))
+
+  (it "looks for a terminal problem only in what a child printed before it drew"
+    (expect (vui-tty-test--no-terminal-p "emacs: standard input is not a tty\n")
+            :to-be-truthy)
+    ;; Not always on the first line
+    (expect (vui-tty-test--no-terminal-p
+             "some warning\nemacs: standard input is not a tty\n")
+            :to-be-truthy)
+    ;; A child that said nothing of the kind just died
+    (expect (vui-tty-test--no-terminal-p "") :not :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p "Fatal error 11: Segmentation fault\n")
+            :not :to-be-truthy)
+    ;; A child with a terminal sets it up before it draws anything, and
+    ;; that takes escape sequences.  The same words count without them.
+    (expect (vui-tty-test--no-terminal-p "Could not open the pod bay doors")
+            :to-be-truthy)
+    (expect (vui-tty-test--no-terminal-p
+             (concat "\n\n\e[?1h\e=\e[H\e[J\e[40;1H"
+                     "Could not open the pod bay doors\e[K\e[H"))
+            :not :to-be-truthy))
+
+  (it "is not fooled by what a child with a terminal put on its screen"
+    ;; Skipped like the specs above where no child gets a terminal
+    (vui-tty-test--scenario :sidebar)
+    (spy-on 'vui-tty-test--no-terminal-p :and-call-through)
+    ;; The harness used to look through all the child printed, its
+    ;; frame included, and took this child for one with no terminal
+    (expect (vui-tty-test--eval
+             nil '(progn (message "Could not open the pod bay doors")
+                         (redisplay t)
+                         (kill-emacs 1)))
+            :to-equal '(error (child-died 1)))
+    ;; And the words were there to be found
+    (expect (car (spy-calls-args-for 'vui-tty-test--no-terminal-p 0))
+            :to-match vui-tty-test--no-terminal)))
 
 (provide 'vui-tty-test)
 ;;; vui-tty-test.el ends here
