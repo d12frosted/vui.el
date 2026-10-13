@@ -54,7 +54,17 @@ signalled, the child did not finish in time, or it died."
           (with-temp-file program
             (insert ";;; -*- lexical-binding: t -*-\n")
             (dolist (top-level
-                     `((require 'vui)
+                     ;; No native compilation: unlike a batch Emacs the
+                     ;; child compiles every .elc it loads that has no
+                     ;; .eln yet, in a process of its own.  For vui.el
+                     ;; that takes far longer than the child lives, and
+                     ;; the compiler does not always die with the child.
+                     ;; The deny list is for what Emacs loaded on its
+                     ;; own before it got here: those compiles are
+                     ;; queued already and only start later
+                     `((setq native-comp-jit-compilation nil
+                             native-comp-jit-compilation-deny-list '(""))
+                       (require 'vui)
                        ,@prelude
                        (run-with-timer
                         0 nil
@@ -228,18 +238,27 @@ AFTER), the window's state once redisplay has run before the re-render
              (setq-local header-line-format "header")
              (setq-local tab-line-format "tabs")
              (set-window-start window (vui-tty-row 40))
-             (goto-char (vui-tty-row 45)))))
-  "Form the tty child evaluates: a plist of scenario name to (BEFORE AFTER).")
+             (goto-char (vui-tty-row 45))))
+    ;; Not a scenario: whether the child compiles what it loads, and
+    ;; the processes it has running.
+    :native-comp
+    (list (if (bound-and-true-p native-comp-jit-compilation) 'jit 'off)
+          (mapcar #'process-name (process-list))))
+  "Form the tty child evaluates: a plist of scenario name to (BEFORE AFTER).
+Under :native-comp it has (JIT PROCESSES) instead: `jit' or `off' for
+whether the child compiles what it loads, and the names of the
+processes it has running.")
 
 (defvar vui-tty-test--report nil
   "What the tty child returned for `vui-tty-test--scenarios'.")
 
 (defun vui-tty-test--scenario (name)
-  "Return (BEFORE AFTER) of the scenario NAME from the tty child.
-The child runs once, for the first spec that asks.  Fails the spec when
-the child broke.  When the child could not open a terminal the spec is
-skipped, except on CI: the runners there have one, and a skip would
-drop these specs without anyone noticing."
+  "Return what the tty child reports under NAME.
+That is (BEFORE AFTER) for a scenario.  The child runs once, for the
+first spec that asks.  Fails the spec when the child broke.  When the
+child could not open a terminal the spec is skipped, except on CI: the
+runners there have one, and a skip would drop these specs without
+anyone noticing."
   (pcase (or vui-tty-test--report
              (setq vui-tty-test--report
                    (vui-tty-test--eval vui-tty-test--prelude
@@ -319,7 +338,15 @@ drop these specs without anyone noticing."
       (expect (plist-get after :screen-row)
               :to-equal (plist-get before :screen-row))
       (expect (plist-get after :start-line)
-              :to-equal (+ 3 (plist-get before :start-line))))))
+              :to-equal (+ 3 (plist-get before :start-line)))))
+
+  (it "runs in a child that starts no native compilation"
+    ;; It starts one for vui.elc otherwise, and that process can
+    ;; outlive the child and never exit.
+    (pcase-let ((`(,native-comp ,processes)
+                 (vui-tty-test--scenario :native-comp)))
+      (expect native-comp :to-be 'off)
+      (expect processes :to-be nil))))
 
 (provide 'vui-tty-test)
 ;;; vui-tty-test.el ends here
