@@ -14,8 +14,9 @@
 ;; This is the catch-all guard for the fiddly invariants the targeted specs
 ;; check one at a time: separator bookkeeping in before/after/remove, marker
 ;; insertion types, region-end/last-start sync at the bottom boundary, and
-;; items-rev ordering.  Seeds are fixed so any failure reproduces, and the
-;; failing op trace is reported.
+;; items-rev ordering.  The item ids (each item's step in the render path)
+;; are checked along the way: they must stay with their items.  Seeds are
+;; fixed so any failure reproduces, and the failing op trace is reported.
 
 ;;; Code:
 
@@ -114,11 +115,21 @@
                        (setq lines (assq-delete-all pid lines))
                        (setq live (assq-delete-all pid live))))
                     (let ((exp (vui-snfz--oracle (mapcar #'cdr lines)))
-                          (got (vui-snfz--buf)))
-                      (unless (equal exp got)
+                          (got (vui-snfz--buf))
+                          ;; The stream numbers its items the way this
+                          ;; model does: one id per item, counted up
+                          ;; from 0 as the items are made.  So its ids,
+                          ;; top to bottom, are the model's, as long as
+                          ;; every id stays with its item through each
+                          ;; insert and remove.
+                          (exp-ids (mapcar #'car lines))
+                          (got-ids (reverse (vui-stream-handle-ids-rev s))))
+                      (unless (and (equal exp got) (equal exp-ids got-ids))
                         (setq failure (list :seed seed :step step
                                             :trace (reverse trace)
-                                            :expected exp :got got))
+                                            :expected exp :got got
+                                            :expected-ids exp-ids
+                                            :got-ids got-ids))
                         (cl-return-from done)))))
               (vui-snfz--kill)))))
       (expect failure :to-be nil))))

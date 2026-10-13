@@ -28,6 +28,31 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A re-render that rewrites a =vui-stream= no longer moves the cursor to
+  the first item. A render that cannot patch around a stream (content
+  before the stream, for example) rewrites its text, and point is put
+  back on its widget, which is found by its place in the tree. The items
+  of a stream had no place of their own there, so the same button in two
+  messages (a =[copy]= with no =:key=, say) had one path and the first
+  one in the buffer won. The selected window scrolled to the top with
+  it, and a window that is not selected lost its position the same way.
+  Each item is now a step of its own in that path, like the children of
+  any container. The step is an id the item keeps for its life: it is
+  the same in =vui-stream-append=, =vui-stream-update-last=, the node
+  functions and a rebuild of the stream, and no other item gets it after
+  =vui-stream-remove=. Component rows start their paths at the same
+  step. When a rebuild does not find the item point was on (the root was
+  handed another stream) and no single widget has its key or its label,
+  point moves to the item with the nearest id. A =vui-error-boundary=
+  without an =:id= is told apart by the same path, so one inside a
+  stream item no longer shares its caught error with the boundaries of
+  the other items: one failed item turned the other items into their
+  fallback too, at the latest after two rebuilds of the stream. Not
+  covered: the cells of a =vui-grid= row or a wrapping =vui-flex= row
+  that is composed as text (a row with a multi-line cell) are not steps
+  in the path, so a stream in such a cell can share paths with the
+  widgets of the other cells.
+
 - Widgets below a live =vui-stream= have the same place in the tree
   whether the render patched around the stream or rewrote the whole
   buffer. A render that leaves the stream's text alone rewrites only
@@ -78,7 +103,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   fine: it patches around a live stream and leaves the stream's text
   alone, so the text under point was still there. But after every render
   point was looked up again through its widget, by its place in the
-  tree, and all items =vui-stream-append= writes into a live stream have
+  tree, and all items =vui-stream-append= writes into a live stream had
   the same place. When every message has the same button (a =[copy]=
   with no =:key=, say), the first of them in the buffer won. Now point
   is recovered through its widget only when the text under it was really
@@ -87,11 +112,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   for the segments =vui-incremental-render= leaves in place (a position
   on plain text was put back by line and column, which is other text
   once a segment above it grew) and for a root that skips its update
-  (=:should-update=) and commits nothing. Not covered: a stream the
-  render cannot patch around (content before the stream, for example) is
-  still rewritten, and point on one of its items is still recovered
-  through the widget, so with the same button on every item it goes to
-  the first one. A =:key= on the button avoids that.
+  (=:should-update=) and commits nothing. A stream the render cannot
+  patch around (content before the stream, for example) is still
+  rewritten, and point on one of its items is recovered through the
+  widget. That finds the same item again now that each item has a place
+  of its own (see the entry about a re-render that rewrites a
+  =vui-stream=).
 
 - Point at the edges of a =vui-mount-inline= region is kept by position.
   Point right after the region stays right after it when the region

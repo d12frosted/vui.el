@@ -86,21 +86,44 @@ keeps the `target' row."
   :render (vui-vstack (vui-stream stream)
                       (vui-text (format "status: %s" label))))
 
-(defun vui-rr--mount-chat (buffer count)
+(vui-defcomponent vui-rr-chat-head (stream label)
+  "Like `vui-rr-chat', with a header above the STREAM.
+The stream is not the first child, so a render cannot patch around it
+and rewrites its text every time."
+  :render (vui-vstack (vui-text "header")
+                      (vui-stream stream)
+                      (vui-text (format "status: %s" label))))
+
+(defun vui-rr--message (n)
+  "Return message N: a line of text followed by a [copy] button."
+  (vui-fragment (vui-text (format "message %d " n))
+                (vui-button "copy")))
+
+(defun vui-rr--append-messages (stream count &optional from)
+  "Append COUNT messages to STREAM, numbered from FROM (default 0)."
+  (dotimes (i count)
+    (vui-stream-append stream (vui-rr--message (+ i (or from 0))))))
+
+(defun vui-rr--mount-chat (buffer count &optional type)
   "Mount `vui-rr-chat' in BUFFER with COUNT messages in its stream.
 Each message is a line of text followed by a [copy] button.  Returns
 \(INSTANCE . STREAM).  The stream is live by then, so the next render
-patches around it."
+patches around it.  TYPE is another component to mount around the
+stream: `vui-rr-chat-head', whose render rewrites the stream."
   (let* ((stream (vui-make-stream))
-         (inst (vui-mount (vui-component 'vui-rr-chat
+         (inst (vui-mount (vui-component (or type 'vui-rr-chat)
                                          :stream stream :label "a")
                           buffer)))
-    (dotimes (i count)
-      (vui-stream-append
-       stream (vui-fragment (vui-text (format "message %d " i))
-                            (vui-button "copy"))))
+    (vui-rr--append-messages stream count)
     (vui-update inst (list :stream stream :label "b"))
     (cons inst stream)))
+
+(defun vui-rr--copy-pos (n)
+  "Return the start of the [copy] button of message N."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward (format "message %d " n))
+    (point)))
 
 ;;; Faces and keymaps survive a re-render
 
@@ -1303,10 +1326,8 @@ patches around it."
   (it "leaves a window point where it is when the render keeps its text"
     ;; Not every render rewrites the whole buffer.  Here a live stream
     ;; is patched around: only the line below it is rewritten, the
-    ;; stream's text stays, and so does a point marker in it.  Finding
-    ;; that position again through its widget can only do worse, and
-    ;; does: every appended item has the same place in the tree, so the
-    ;; first one would win.
+    ;; stream's text stays, and so does a point marker in it.  There is
+    ;; nothing to find again.
     (let ((vui-render-delay nil))
       (pcase-let ((`(,inst . ,stream) (vui-rr--mount-chat "*rr-wpk*" 20)))
         (unwind-protect
@@ -1349,6 +1370,101 @@ patches around it."
                     (expect (window-point win) :to-equal button)
                     (expect (window-start win) :to-equal start)))))
           (kill-buffer "*rr-spk*")))))
+
+  (it "puts a window point back on its stream item when the render rewrites the stream"
+    ;; With a header above it a stream cannot be patched around.  Its
+    ;; text is rewritten, and a position in it is found again through
+    ;; its widget.  Every message has the same [copy] button at the same
+    ;; place inside it, so the only thing that tells two of them apart
+    ;; is the item's own step in the path.  Without that step the first
+    ;; message in the buffer won.
+    (let ((vui-render-delay nil))
+      (pcase-let ((`(,inst . ,stream)
+                   (vui-rr--mount-chat "*rr-wsi*" 20 'vui-rr-chat-head)))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-wsi*"
+              ;; Two positions in two items, each inside its button.
+              (goto-char (+ 3 (vui-rr--copy-pos 4)))
+              (set-window-point win (+ 2 (vui-rr--copy-pos 15)))
+              (let ((probe (copy-marker (window-point win))))
+                (vui-update inst (list :stream stream :label "c"))
+                (expect (buffer-substring (- (point-max) 9) (point-max))
+                        :to-equal "status: c")
+                ;; The text under both positions was erased.
+                (expect (marker-position probe) :to-equal (point-min))
+                (expect (window-point win)
+                        :to-equal (+ 2 (vui-rr--copy-pos 15)))
+                (expect (point) :to-equal (+ 3 (vui-rr--copy-pos 4)))))
+          (kill-buffer "*rr-wsi*")))))
+
+  (it "puts the selected window's point back on its stream item when the render rewrites the stream"
+    ;; The same render seen from the selected window.  Its start follows
+    ;; point, so on the first message the window was at the top too.
+    (let ((vui-render-delay nil))
+      (pcase-let ((`(,inst . ,stream)
+                   (vui-rr--mount-chat "*rr-ssi*" 200 'vui-rr-chat-head)))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win (get-buffer "*rr-ssi*"))
+                (with-current-buffer "*rr-ssi*"
+                  (goto-char (point-min))
+                  (search-forward "message 142 ")
+                  (set-window-start win (match-beginning 0))
+                  (goto-char (vui-rr--copy-pos 145))
+                  (let ((button (point))
+                        (start (window-start win))
+                        (probe (copy-marker (point))))
+                    (expect (vui-rr--tag-at button) :to-equal "copy")
+                    (vui-update inst (list :stream stream :label "c"))
+                    (expect (buffer-substring (- (point-max) 9) (point-max))
+                            :to-equal "status: c")
+                    (expect (marker-position probe) :to-equal (point-min))
+                    (expect (point) :to-equal button)
+                    (expect (window-point win) :to-equal button)
+                    (expect (window-start win) :to-equal start)))))
+          (kill-buffer "*rr-ssi*")))))
+
+  (it "puts point back on a stream item that was appended since the last render"
+    ;; Such an item was written by `vui-stream-append', not by a render
+    ;; of the stream.  Both have to give it the same path.
+    (let ((vui-render-delay nil))
+      (pcase-let ((`(,inst . ,stream)
+                   (vui-rr--mount-chat "*rr-sil*" 10 'vui-rr-chat-head)))
+        (unwind-protect
+            (with-current-buffer "*rr-sil*"
+              (vui-rr--append-messages stream 10 10)
+              (goto-char (+ 3 (vui-rr--copy-pos 15)))
+              (let ((probe (copy-marker (point))))
+                (vui-update inst (list :stream stream :label "c"))
+                (expect (buffer-substring (- (point-max) 9) (point-max))
+                        :to-equal "status: c")
+                (expect (marker-position probe) :to-equal (point-min))
+                (expect (point) :to-equal (+ 3 (vui-rr--copy-pos 15)))))
+          (kill-buffer "*rr-sil*")))))
+
+  (it "moves point to the nearest stream item when its item is gone"
+    ;; The root is handed another stream, one that lost its message 15.
+    ;; The item made right after the missing one is the closest: not the
+    ;; first item, and not the last.
+    (let ((vui-render-delay nil))
+      (pcase-let ((`(,inst . ,holed)
+                   (vui-rr--mount-chat "*rr-sig*" 0 'vui-rr-chat-head)))
+        (unwind-protect
+            (with-current-buffer "*rr-sig*"
+              (let ((full (vui-make-stream))
+                    (nodes nil))
+                (dotimes (i 20)
+                  (push (vui-stream-open holed (vui-rr--message i)) nodes))
+                (vui-stream-remove (nth 15 (reverse nodes)))
+                (vui-rr--append-messages full 20)
+                (vui-update inst (list :stream full :label "c"))
+                (goto-char (vui-rr--copy-pos 15))
+                (vui-update inst (list :stream holed :label "d"))
+                (expect (string-match-p "message 15 " (buffer-string))
+                        :to-be nil)
+                (expect (point) :to-equal (vui-rr--copy-pos 16))))
+          (kill-buffer "*rr-sig*")))))
 
   (it "leaves point where it is when the render has nothing to commit"
     ;; A root that skips its update hands back the tree it rendered

@@ -879,7 +879,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   region-end   ; Marker: end of managed region (inline instances only)
   render-record ; Incremental-render bookkeeping for the root (see vui--commit-root)
   consumed-contexts ; Alist (context . value) read by this instance and its subtree
-  r-len)       ; Rendered length in chars (component-list incremental patching)
+  r-len        ; Rendered length in chars (component-list incremental patching)
+  base-path)   ; Render path an inline instance starts from (stream rows only)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -2781,9 +2782,9 @@ Returns a plist with :status, :data, and :error."
 ;; a position in text that stayed is exact as it is.  What
 ;; `vui--save-cursor-position' records is for text that was rewritten:
 ;; the widget is found again by path or identity.  That search is a
-;; guess (items appended to a live stream all have the same path, so
-;; the first of them wins) and must not replace a position that needs
-;; no recovery.
+;; guess (rows that came and went above the widget shift its path onto
+;; a neighbour, and a neighbour with the same label is taken for it)
+;; and must not replace a position that needs no recovery.
 ;;
 ;; A render of an inline region rewrites all of the region and nothing
 ;; else, so there the position alone tells (see
@@ -3083,7 +3084,8 @@ ephemeral chrome, not document content."
                ;; Same for the point of each window showing the buffer
                (window-points (vui--save-window-points buffer pos end-pos))
                (vui--root-instance instance)
-               (vui--render-path nil)
+               ;; Nil but for a stream row, which is one step of its stream
+               (vui--render-path (vui-instance-base-path instance))
                (vui--pending-effects nil))
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
@@ -5848,14 +5850,22 @@ function of the root `vui--render-instance' call."
   "State for a `vui-stream': its buffer region and items.
 ITEMS-REV holds the appended vnodes in REVERSE order, so append is O(1)
 \(a `push'); render reverses once.  BUFFER and the REGION-* markers are
-bound when the stream is first rendered, and are nil until then."
+bound when the stream is first rendered, and are nil until then.
+
+IDS-REV runs parallel to ITEMS-REV and holds the id of each item, its
+step in the render path; NEXT-ID is the next free one.  PATH is the
+render path of the stream itself as of its last render.  See
+`vui--stream-item-path'."
   buffer
   region-start
   region-end
   last-start        ; Marker at the start of the last item (for update-last)
   (items-rev nil)
   (nodes nil)       ; Live `vui-stream-node's (open, not finalized); bounds append cost
-  (separator "\n"))
+  (separator "\n")
+  (ids-rev nil)
+  (next-id 0)
+  (path nil))
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -5901,6 +5911,57 @@ repositions END explicitly instead."
     (set-marker-insertion-type m nil)
     (setf (vui-stream-handle-last-start handle) m)))
 
+;; --- Render paths: every item is a step of its own ---
+;;
+;; A widget records its place in the tree (`:vui-path'), and a re-render
+;; that rewrote the text under point finds the widget again by that path
+;; (see `vui--restore-cursor-position').  The items of a stream are
+;; siblings like the children of any container, so each one adds a step
+;; to the path.  Without it every "copy" button of a chat log has the
+;; same path, and the first one in the buffer wins.
+;;
+;; The step is the item's ID, not its position.  An item is written to
+;; the buffer once and its text stays as it is while items are inserted
+;; or removed above it, so a position recorded in that text would go
+;; stale: two items would end up with one path, and a rebuild of the
+;; stream would number them differently.  The id is taken from a counter
+;; when the item is added and kept with it (IDS-REV), so it is the same
+;; in every render of the item and no other item gets it.  In a stream
+;; that only ever appends, it is the item's index.
+
+(defun vui--stream-new-id (handle)
+  "Return an item id that HANDLE has not used yet."
+  (prog1 (vui-stream-handle-next-id handle)
+    (cl-incf (vui-stream-handle-next-id handle))))
+
+(defun vui--stream-push (handle item &optional id)
+  "Make ITEM the last item of HANDLE and return its id.
+ID is an id taken earlier with `vui--stream-new-id', for an item that
+was rendered before it is recorded.  When nil, a new id is taken."
+  (let ((id (or id (vui--stream-new-id handle))))
+    (push item (vui-stream-handle-items-rev handle))
+    (push id (vui-stream-handle-ids-rev handle))
+    id))
+
+(defun vui--stream-cells-before (handle cell)
+  "Return (PREV . ID-PREV), the conses before CELL in HANDLE's two lists.
+PREV is the cons of ITEMS-REV whose cdr is CELL, and ID-PREV is the cons
+at the same place in IDS-REV.  CELL must not be the head of ITEMS-REV.
+When CELL is not in the list, PREV is its last cons."
+  (let ((prev (vui-stream-handle-items-rev handle))
+        (id-prev (vui-stream-handle-ids-rev handle)))
+    (while (and (cdr prev) (not (eq (cdr prev) cell)))
+      (setq prev (cdr prev)
+            id-prev (cdr id-prev)))
+    (cons prev id-prev)))
+
+(defun vui--stream-item-path (handle id)
+  "Return the render path of HANDLE's item ID.
+In the form of `vui--render-path', innermost step first: bind that
+variable to the result around every render of the item, so its widgets
+get the path a rebuild of the stream gives them."
+  (cons id (vui-stream-handle-path handle)))
+
 (defun vui--stream-render (handle)
   "Render HANDLE's items at point and bind its region around them.
 Used by the `vui-vnode-stream' branch of `vui--render-vnode'.
@@ -5913,18 +5974,23 @@ subsequent streamed append."
   (let ((sep (vui-stream-handle-separator handle))
         (start (point))
         (first t)
-        (last-start nil))
+        (last-start nil)
+        (path vui--render-path)
+        (ids (reverse (vui-stream-handle-ids-rev handle))))
     (dolist (item (reverse (vui-stream-handle-items-rev handle)))
-      ;; Component rows are inline instances that render and persist on
-      ;; their own; a full re-emit cannot reproduce them, and (because the
-      ;; stream-tail patch leaves the region intact) does not run once rows
-      ;; exist.  Skip them defensively here.
-      (unless (vui-instance-p item)
-        (unless first (insert sep))
-        (setq first nil)
-        (setq last-start (point))
-        (vui--render-vnode item)))
+      (let ((vui--render-path (cons (pop ids) path)))
+        ;; Component rows are inline instances that render and persist on
+        ;; their own; a full re-emit cannot reproduce them, and (because the
+        ;; stream-tail patch leaves the region intact) does not run once rows
+        ;; exist.  Skip them defensively here.
+        (unless (vui-instance-p item)
+          (unless first (insert sep))
+          (setq first nil)
+          (setq last-start (point))
+          (vui--render-vnode item))))
     (unless vui--measuring-p
+      ;; Edits to the live stream render their item under the same path
+      (setf (vui-stream-handle-path handle) path)
       (vui--stream-bind-region handle (current-buffer) start (point))
       (when last-start
         (vui--stream-set-last-start handle last-start (current-buffer))))))
@@ -5991,11 +6057,11 @@ component appended to an empty stream falls back to a plain child render."
 
 (defun vui--stream-append-content (handle vnode)
   "Append content VNODE (text/fragment) to HANDLE's stream."
-  (let ((prev-last (car (vui-stream-handle-items-rev handle)))
-        (buf (vui-stream-handle-buffer handle))
-        (start (vui-stream-handle-region-start handle))
-        (end (vui-stream-handle-region-end handle)))
-    (push vnode (vui-stream-handle-items-rev handle))
+  (let* ((prev-last (car (vui-stream-handle-items-rev handle)))
+         (buf (vui-stream-handle-buffer handle))
+         (start (vui-stream-handle-region-start handle))
+         (end (vui-stream-handle-region-end handle))
+         (id (vui--stream-push handle vnode)))
     (cond
      ;; Not live yet: emitted on the next render.
      ((not (and buf (buffer-live-p buf) end (marker-position end)))
@@ -6010,7 +6076,8 @@ component appended to an empty stream falls back to a plain child render."
         (let ((inhibit-read-only t)
               (inhibit-modification-hooks t)
               ;; Stream text is ephemeral UI, not document history.
-              (buffer-undo-list t))
+              (buffer-undo-list t)
+              (vui--render-path (vui--stream-item-path handle id)))
           (save-excursion
             (goto-char (marker-position end))
             (insert (vui-stream-handle-separator handle))
@@ -6037,7 +6104,7 @@ component appended to an empty stream falls back to a plain child render."
      ;; plain child component, not a scoped row - the documented fallback).
      ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
           (= (marker-position start) (marker-position end)))
-      (push vnode (vui-stream-handle-items-rev handle))
+      (vui--stream-push handle vnode)
       (when (and buf (buffer-live-p buf))
         (vui--stream-request-rerender handle))
       nil)                              ; no inline instance in the fallback
@@ -6050,14 +6117,18 @@ component appended to an empty stream falls back to a plain child render."
             (goto-char (marker-position end))
             (insert sep)
             (let* ((row-start (point))
-                   (row (vui-mount-inline vnode (point))))
+                   (id (vui--stream-new-id handle))
+                   ;; The row renders on its own from here on, always
+                   ;; under its item's path
+                   (row (vui--mount-inline
+                         vnode (point) (vui--stream-item-path handle id))))
               (vui--stream-set-last-start handle row-start buf)
               ;; Share the row's region-end as the stream's end: when the
               ;; row re-renders on its own (grows/shrinks), its marker moves
               ;; and the stream end - and the box below - stay correct.
               (setf (vui-stream-handle-region-end handle)
                     (vui-instance-region-end row))
-              (push row (vui-stream-handle-items-rev handle))
+              (vui--stream-push handle row id)
               row))))))))   ; return the inline instance (or nil on fallback)
 
 (defun vui--string-prefix-equal-including-properties-p (o n)
@@ -6166,7 +6237,10 @@ keeping its state."
                 (with-current-buffer buf
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t)
-                        (buffer-undo-list t))
+                        (buffer-undo-list t)
+                        (vui--render-path
+                         (vui--stream-item-path
+                          handle (car (vui-stream-handle-ids-rev handle)))))
                     (save-excursion
                       (if suffix
                           (progn
@@ -6214,8 +6288,28 @@ CONTENT node's region; both are nil once finalized (and nil throughout for
 a component node).  INSTANCE is the inline component for a COMPONENT node
 \(a stateful row), which owns its own region markers; nil for a content
 node.  PARENT and CHILDREN are reserved for a future section tree (see the
-design note) and unused today."
-  handle cell start end instance parent children)
+design note) and unused today.  ID-CELL is to HANDLE's IDS-REV what CELL
+is to ITEMS-REV: the cons whose car is the id of the node's item (see
+`vui--stream-node-id')."
+  handle cell start end instance parent children id-cell)
+
+(defun vui--stream-node-id (node)
+  "Return the id of NODE's item, its step in the render path.
+See `vui--stream-item-path'."
+  (car (vui--stream-node-id-cell node)))
+
+(defun vui--stream-node-vnode (vnode)
+  "Return VNODE in the form a content node keeps it in.
+`vui-stream-append-to' grows a node by making its vnode a fragment (see
+`vui--stream-vnode-combine').  A vnode with widgets of its own would
+move one level down in that fragment, and a rebuild of the stream would
+give those widgets another path than the one they have in the buffer.
+So anything but a text or a fragment is wrapped in a fragment from the
+start.  It renders the same text, and its widgets are one level down in
+every render."
+  (if (or (vui-vnode-text-p vnode) (vui-vnode-fragment-p vnode))
+      vnode
+    (vui-vnode-fragment--create :children (list vnode))))
 
 (defun vui--stream-vnode-combine (a b)
   "Combine vnodes A and B into the one vnode their renders concatenate to.
@@ -6236,6 +6330,21 @@ which renders its children back to back with no separator."
      :children (append (vui-vnode-fragment-children a) (list b))))
    (t
     (vui-vnode-fragment--create :children (list a b)))))
+
+(defun vui--stream-delta-path (node vnode)
+  "Return the render path for VNODE, just combined into NODE's item.
+`vui--stream-vnode-combine' made VNODE the last child of a fragment, and
+that child's path is what a rebuild of the stream gives VNODE's widgets.
+A text is the exception: it may have been merged into the text before
+it, and it has no widget to record a path anyway, so the fragment is
+not walked for it (this is the per-token call of a streaming reply)."
+  (let ((path (vui--stream-item-path (vui--stream-node-handle node)
+                                     (vui--stream-node-id node)))
+        (item (car (vui--stream-node-cell node))))
+    (if (and (vui-vnode-fragment-p item)
+             (not (vui-vnode-text-p vnode)))
+        (cons (1- (length (vui-vnode-fragment-children item))) path)
+      path)))
 
 (defun vui--stream-node-bind (node start end buffer)
   "Bind NODE's markers to BUFFER region [START, END).
@@ -6297,6 +6406,7 @@ content-only and no-op on a component node for now."
              (node (vui--stream-node-create
                     :handle handle
                     :cell (vui-stream-handle-items-rev handle)
+                    :id-cell (vui-stream-handle-ids-rev handle)
                     ;; Only a genuine inline row counts; on the empty-stream
                     ;; fallback `append-row' returns nil, so the node degrades
                     ;; to an inert content-style node rather than pointing at
@@ -6307,13 +6417,14 @@ content-only and no-op on a component node for now."
         node)
     ;; Content node: its own start/end markers bound around the inserted text.
     (progn
-      (vui--stream-append-content handle vnode)
+      (vui--stream-append-content handle (vui--stream-node-vnode vnode))
       (let ((buf (vui-stream-handle-buffer handle))
             (ls (vui-stream-handle-last-start handle))
             (end (vui-stream-handle-region-end handle))
             (node (vui--stream-node-create
                    :handle handle
-                   :cell (vui-stream-handle-items-rev handle))))
+                   :cell (vui-stream-handle-items-rev handle)
+                   :id-cell (vui-stream-handle-ids-rev handle))))
         (when (and buf (buffer-live-p buf)
                    ls (marker-position ls) end (marker-position end))
           (vui--stream-node-bind node (marker-position ls) (marker-position end) buf))
@@ -6344,7 +6455,8 @@ finalized, and on a component node (append-to is content-only)."
         (with-current-buffer buf
           (let ((inhibit-read-only t)
                 (inhibit-modification-hooks t)
-                (buffer-undo-list t))
+                (buffer-undo-list t)
+                (vui--render-path (vui--stream-delta-path node vnode)))
             (save-excursion
               (goto-char (marker-position end))
               (vui--render-vnode vnode)
@@ -6384,7 +6496,8 @@ its own region, keeping its state - the out-of-order counterpart of
              (cell (vui--stream-node-cell node))
              (buf (vui-stream-handle-buffer handle))
              (start (vui--stream-node-start node))
-             (end (vui--stream-node-end node)))
+             (end (vui--stream-node-end node))
+             (vnode (vui--stream-node-vnode vnode)))
         (when (and buf (buffer-live-p buf)
                    start (marker-position start) end (marker-position end))
           (when cell (setcar cell vnode))
@@ -6392,7 +6505,9 @@ its own region, keeping its state - the out-of-order counterpart of
             (with-current-buffer buf
               (let ((inhibit-read-only t)
                     (inhibit-modification-hooks t)
-                    (buffer-undo-list t))
+                    (buffer-undo-list t)
+                    (vui--render-path
+                     (vui--stream-item-path handle (vui--stream-node-id node))))
                 (save-excursion
                   (delete-region (marker-position start) (marker-position end))
                   (goto-char (marker-position start))
@@ -6438,15 +6553,22 @@ screen.  A no-op returning nil if NODE is not live."
          ;; `vui-stream-update-last') must follow to the re-seated start.
          (last-p (eq cell (vui-stream-handle-items-rev handle))))
     (when (and buf (buffer-live-p buf) start (marker-position start))
-      (let ((new (vui--stream-node-create :handle handle)))
+      (let ((new (vui--stream-node-create :handle handle))
+            (id (vui--stream-new-id handle))
+            (id-cell (vui--stream-node-id-cell node))
+            (vnode (vui--stream-node-vnode vnode)))
         ;; items-rev is reverse render order, so an item ABOVE NODE is OLDER
-        ;; and sits just after NODE's cell.
+        ;; and sits just after NODE's cell.  Its id goes to the same place
+        ;; in ids-rev.
         (setcdr cell (cons vnode (cdr cell)))
-        (setf (vui--stream-node-cell new) (cdr cell))
+        (setcdr id-cell (cons id (cdr id-cell)))
+        (setf (vui--stream-node-cell new) (cdr cell)
+              (vui--stream-node-id-cell new) (cdr id-cell))
         (with-current-buffer buf
           (let ((inhibit-read-only t)
                 (inhibit-modification-hooks t)
-                (buffer-undo-list t))
+                (buffer-undo-list t)
+                (vui--render-path (vui--stream-item-path handle id)))
             (save-excursion
               (goto-char (marker-position start))
               (let ((x-start (point)))
@@ -6472,22 +6594,30 @@ if NODE is not live."
          (end (vui--stream-node-end node)))
     (when (and buf (buffer-live-p buf) end (marker-position end))
       (let ((new (vui--stream-node-create :handle handle))
-            (head (vui-stream-handle-items-rev handle)))
+            (id (vui--stream-new-id handle))
+            (head (vui-stream-handle-items-rev handle))
+            (vnode (vui--stream-node-vnode vnode)))
         ;; An item BELOW NODE is NEWER and sits just before NODE's cell.
+        ;; Its id goes to the same place in ids-rev.
         (if (eq cell head)
             (progn
-              (setf (vui-stream-handle-items-rev handle) (cons vnode head))
+              (vui--stream-push handle vnode id)
               (setf (vui--stream-node-cell new)
-                    (vui-stream-handle-items-rev handle)))
-          (let ((prev head))
-            (while (and (cdr prev) (not (eq (cdr prev) cell)))
-              (setq prev (cdr prev)))
+                    (vui-stream-handle-items-rev handle)
+                    (vui--stream-node-id-cell new)
+                    (vui-stream-handle-ids-rev handle)))
+          (pcase-let ((`(,prev . ,id-prev)
+                       (vui--stream-cells-before handle cell)))
             (setcdr prev (cons vnode cell))
-            (setf (vui--stream-node-cell new) (cdr prev))))
+            (setf (vui--stream-node-cell new) (cdr prev))
+            (when id-prev
+              (setcdr id-prev (cons id (cdr id-prev)))
+              (setf (vui--stream-node-id-cell new) (cdr id-prev)))))
         (with-current-buffer buf
           (let ((inhibit-read-only t)
                 (inhibit-modification-hooks t)
-                (buffer-undo-list t))
+                (buffer-undo-list t)
+                (vui--render-path (vui--stream-item-path handle id)))
             (save-excursion
               (goto-char (marker-position end))
               (insert sep)
@@ -6530,13 +6660,17 @@ if NODE is not live."
            ((cdr cell) (delete-region (max (point-min) (- s seplen)) e))
            ((not (eq cell head)) (delete-region s (min (point-max) (+ e seplen))))
            (t (delete-region s e)))))
-      ;; splice NODE's cell out of items-rev
+      ;; splice NODE's cell out of items-rev, and its id out of ids-rev
       (if (eq cell head)
-          (setf (vui-stream-handle-items-rev handle) (cdr cell))
-        (let ((prev head))
-          (while (and (cdr prev) (not (eq (cdr prev) cell)))
-            (setq prev (cdr prev)))
-          (when (cdr prev) (setcdr prev (cdr cell)))))
+          (progn
+            (setf (vui-stream-handle-items-rev handle) (cdr cell))
+            (pop (vui-stream-handle-ids-rev handle)))
+        (pcase-let ((`(,prev . ,id-prev)
+                     (vui--stream-cells-before handle cell)))
+          (when (cdr prev)
+            (setcdr prev (cdr cell))
+            (when (cdr id-prev)
+              (setcdr id-prev (cddr id-prev))))))
       (vui-stream-finalize node)
       ;; If NODE was the last item, the handle's last-start now dangles in the
       ;; deleted span - re-point it at the new last item so a later content
@@ -7476,38 +7610,46 @@ Example - an ephemeral form that dismisses itself on submit:
              :on-submit (lambda (params)
                           (vui-unmount form)
                           (run-query params))))))"
-  (let ((pos (or position (point))))
-    (when (cl-find-if (lambda (instance)
-                        (let ((s (vui-instance-region-start instance))
-                              (e (vui-instance-region-end instance)))
-                          (and s e (marker-position s)
-                               (> pos (marker-position s))
-                               (< pos (marker-position e)))))
-                      vui--inline-instances)
-      (error "Position %d is inside an existing inline VUI instance" pos))
-    (let ((instance (vui--create-instance component-vnode nil))
-          (start (make-marker))
-          (end (make-marker)))
-      (setf (vui-instance-buffer instance) (current-buffer))
-      (set-marker start pos)
-      (set-marker end pos)
-      ;; Text typed by the user at the boundaries stays outside the
-      ;; region: START advances past insertions at its position, END
-      ;; stays before them.  Render itself repositions both markers
-      ;; explicitly.
-      (set-marker-insertion-type start t)
-      (set-marker-insertion-type end nil)
-      (setf (vui-instance-region-start instance) start)
-      (setf (vui-instance-region-end instance) end)
-      (push instance vui--inline-instances)
-      ;; Release component resources when the buffer is killed
-      (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
-      ;; Reflow window-width-dependent layouts on resize (see
-      ;; `vui-rerender-on-resize-default')
-      (when vui-rerender-on-resize-default
-        (vui-rerender-on-resize))
-      (vui--rerender-instance instance)
-      instance)))
+  (vui--mount-inline component-vnode (or position (point))))
+
+(defun vui--mount-inline (component-vnode pos &optional base-path)
+  "Mount COMPONENT-VNODE inline at POS, as `vui-mount-inline' does.
+BASE-PATH is the render path the instance starts from, in the form of
+`vui--render-path'.  A row of a `vui-stream' passes the path of its
+item, so that its widgets do not share their `:vui-path' with those of
+the other rows."
+  (when (cl-find-if (lambda (instance)
+                      (let ((s (vui-instance-region-start instance))
+                            (e (vui-instance-region-end instance)))
+                        (and s e (marker-position s)
+                             (> pos (marker-position s))
+                             (< pos (marker-position e)))))
+                    vui--inline-instances)
+    (error "Position %d is inside an existing inline VUI instance" pos))
+  (let ((instance (vui--create-instance component-vnode nil))
+        (start (make-marker))
+        (end (make-marker)))
+    (setf (vui-instance-buffer instance) (current-buffer))
+    (setf (vui-instance-base-path instance) base-path)
+    (set-marker start pos)
+    (set-marker end pos)
+    ;; Text typed by the user at the boundaries stays outside the
+    ;; region: START advances past insertions at its position, END
+    ;; stays before them.  Render itself repositions both markers
+    ;; explicitly.
+    (set-marker-insertion-type start t)
+    (set-marker-insertion-type end nil)
+    (setf (vui-instance-region-start instance) start)
+    (setf (vui-instance-region-end instance) end)
+    (push instance vui--inline-instances)
+    ;; Release component resources when the buffer is killed
+    (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
+    ;; Reflow window-width-dependent layouts on resize (see
+    ;; `vui-rerender-on-resize-default')
+    (when vui-rerender-on-resize-default
+      (vui-rerender-on-resize))
+    (vui--rerender-instance instance)
+    instance))
 
 (defun vui-inline-instance-at (&optional position)
   "Return the inline VUI instance whose region contains POSITION.
