@@ -14,6 +14,10 @@
 ;; tty frame (it is started under a pty), let it redisplay, and check
 ;; what it reports back.  They are skipped where such a child cannot
 ;; open a terminal, except on CI, where that is a failure.
+;;
+;; One more spec is about the harness itself and needs no terminal: a
+;; child without one has to be reported as such even when it is gone
+;; before anything it printed was read.
 
 ;;; Code:
 
@@ -100,17 +104,22 @@ signalled, the child did not finish in time, or it died."
           (let ((deadline (+ (float-time) 30)))
             (while (and (process-live-p process) (< (float-time) deadline))
               (accept-process-output process 0.1)))
-          (let ((said (with-current-buffer output (buffer-string))))
-            (cond
-             ((process-live-p process) (list 'error 'timeout))
-             ((< 0 (file-attribute-size (file-attributes result)))
-              (with-temp-buffer
-                (insert-file-contents result)
-                (read (current-buffer))))
-             ((string-match-p vui-tty-test--no-terminal said)
-              (list 'unavailable said))
-             (t (list 'error (list 'child-died
-                                   (process-exit-status process)))))))
+          (if (process-live-p process)
+              (list 'error 'timeout)
+            ;; The child can be gone before all it said was read, and
+            ;; what it said is what tells a child with no terminal from
+            ;; one that died
+            (while (accept-process-output process))
+            (let ((said (with-current-buffer output (buffer-string))))
+              (cond
+               ((< 0 (file-attribute-size (file-attributes result)))
+                (with-temp-buffer
+                  (insert-file-contents result)
+                  (read (current-buffer))))
+               ((string-match-p vui-tty-test--no-terminal said)
+                (list 'unavailable said))
+               (t (list 'error (list 'child-died
+                                     (process-exit-status process))))))))
       (when (process-live-p process)
         (delete-process process))
       (kill-buffer output)
@@ -270,6 +279,32 @@ anyone noticing."
            (buttercup-fail "No tty child on CI: %s" why)
          (assume nil (format "no tty child: %s" why)))))
     (`(error ,data) (buttercup-fail "The tty child failed: %S" data))))
+
+(describe "the tty harness"
+  (it "hears a child with no terminal that is gone before it listens"
+    ;; A child on a pipe has no terminal: it says so and exits.  What
+    ;; it said is then still in the pipe, and the harness used to look
+    ;; at its empty buffer and take this for a child that died.
+    (let ((real (symbol-function 'make-process))
+          (gone nil))
+      (spy-on 'make-process :and-call-fake
+              (lambda (&rest args)
+                (let ((process (apply real
+                                      (plist-put args :connection-type 'pipe)))
+                      (deadline (+ (float-time) 10)))
+                  ;; Nothing reads from the child while this waits
+                  (while (and (process-live-p process)
+                              (< (float-time) deadline))
+                    (call-process "sleep" nil nil nil "0.01"))
+                  (setq gone (not (process-live-p process)))
+                  process)))
+      (pcase (vui-tty-test--eval nil nil)
+        (`(unavailable ,output) (expect output :to-match "is not a tty"))
+        (result (buttercup-fail "Expected (unavailable OUTPUT), got %S"
+                                result)))
+      ;; A child that was still there was read the usual way, and that
+      ;; shows nothing
+      (expect gone :to-be t))))
 
 (describe "re-render under real redisplay"
   (before-all
