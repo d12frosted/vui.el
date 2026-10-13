@@ -49,16 +49,29 @@
 
   (it "records render phase"
     (setq vui-timing-enabled t)
-    (vui-defcomponent timing-render-test ()
-      :render (vui-text "OK"))
-    (let ((instance (vui-mount (vui-component 'timing-render-test) "*test-timing3*")))
-      (unwind-protect
-          (let ((render-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'render))
-                                          (vui-get-timing))))
-            (expect render-entry :to-be-truthy)
-            (expect (plist-get render-entry :component) :to-equal 'timing-render-test)
-            (expect (plist-get render-entry :duration) :to-be-greater-than 0))
-        (kill-buffer "*test-timing3*"))))
+    ;; The clock behind `float-time' ticks once per microsecond on macOS,
+    ;; and a trivial render is faster than that, so it sometimes measures
+    ;; exactly 0.0.  Keep render busy for 20ms instead, and check that the
+    ;; duration covers the time spent inside render and is not longer than
+    ;; the whole mount.  A busy loop, not `sleep-for', so that no timer
+    ;; runs in the middle of the render.
+    (let ((inside nil))
+      (vui-defcomponent timing-render-test ()
+        :render (let ((start (float-time)))
+                  (while (< (float-time) (+ start 0.02)))
+                  (setq inside (- (float-time) start))
+                  (vui-text "OK")))
+      (let* ((before (float-time))
+             (instance (vui-mount (vui-component 'timing-render-test) "*test-timing3*"))
+             (whole (- (float-time) before)))
+        (unwind-protect
+            (let ((render-entry (cl-find-if (lambda (e) (eq (plist-get e :phase) 'render))
+                                            (vui-get-timing))))
+              (expect render-entry :to-be-truthy)
+              (expect (plist-get render-entry :component) :to-equal 'timing-render-test)
+              (expect (plist-get render-entry :duration) :not :to-be-less-than inside)
+              (expect (plist-get render-entry :duration) :not :to-be-greater-than whole))
+          (kill-buffer "*test-timing3*")))))
 
   (it "records commit phase"
     (setq vui-timing-enabled t)
