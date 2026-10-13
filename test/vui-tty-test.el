@@ -138,13 +138,15 @@ signalled, the child did not finish in time, or it died."
                                (line-number-at-pos start))
                 :visible (and (pos-visible-in-window-p point window) t)))))
 
-    (defun vui-tty-scenario (count select park)
+    (defun vui-tty-scenario (count select park &optional move)
       "Re-render a side window showing COUNT rows; report its state around it.
 SELECT non-nil selects the side window, otherwise the cursor stays in
 the main one.  PARK is called with the side window, in its buffer, to
 scroll it and place its point.  The re-render then adds three rows at
-the top of the buffer.  Returns (BEFORE AFTER), the window's state once
-redisplay has run before the re-render and once it has run after."
+the top of the buffer.  MOVE, when given, is called like PARK right
+before the re-render, with no redisplay in between.  Returns (BEFORE
+AFTER), the window's state once redisplay has run before the re-render
+\(and before MOVE) and once it has run after."
       (let* ((main (selected-window))
              (instance (save-window-excursion
                          (vui-mount (vui-component 'vui-tty-rows :count count)
@@ -159,6 +161,8 @@ redisplay has run before the re-render and once it has run after."
         (redisplay t)
         (setq before (vui-tty-window-state side))
         (with-current-buffer buffer
+          (when move
+            (funcall move side))
           (let ((vui--current-instance instance))
             (vui-set-state :extra 3)))
         (redisplay t)
@@ -199,6 +203,14 @@ redisplay has run before the re-render and once it has run after."
      100 t (lambda (window)
              (set-window-start window (vui-tty-row 40))
              (goto-char (vui-tty-row 45))))
+    ;; The same, with point moved out of view right before the
+    ;; re-render.
+    :selected-moved
+    (vui-tty-scenario
+     100 t (lambda (window)
+             (set-window-start window (vui-tty-row 40))
+             (goto-char (vui-tty-row 45)))
+     (lambda (_window) (goto-char (vui-tty-row 90))))
     ;; The short sidebar while another frame is the selected one.
     :other-frame
     (let ((frame (selected-frame)))
@@ -288,6 +300,17 @@ drop these specs without anyone noticing."
               :to-equal (plist-get before :screen-row))
       (expect (plist-get after :start-line)
               :to-equal (+ 3 (plist-get before :start-line)))))
+
+  (it "scrolls the selected window to a point that was moved out of view"
+    ;; Point moves and the buffer re-renders with no redisplay in
+    ;; between, the way a command does that jumps to a row and then
+    ;; refreshes.  The start that keeps the cursor's screen row is the
+    ;; old one then, and point is not in view from it: held there by
+    ;; force, the window gets its point moved back into the old view.
+    (pcase-let ((`(,before ,after) (vui-tty-test--scenario :selected-moved)))
+      (expect (plist-get before :label) :to-equal "row45")
+      (expect (plist-get after :label) :to-equal "row90")
+      (expect (plist-get after :visible) :to-be t)))
 
   (it "does not take a long buffer for one that fits under a header and a tab line"
     ;; Sent back to the top, the window then recenters on its point.

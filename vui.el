@@ -2904,13 +2904,14 @@ whatever the spec says: there is nothing to scroll, and following the
 cursor there only pushes the first lines out of view, a few more each
 time rows appear above it, with blank rows left at the bottom.
 
-Only the relative start is forced.  Point is as far below it as it was
-before the render; below any other start it may be out of view (rows
-appeared above it, or the buffer shrank), and redisplay answers a
-forced start by moving the window's point into view, which loses the
-position just restored.  Unforced, redisplay keeps the start when point
-is visible from it and scrolls to point otherwise.  A window that was
-deleted or shows another buffer by now is left alone."
+No start is forced.  Redisplay answers a forced start by moving the
+window's point into view, which loses the position just restored, and
+point is not always in view from the start worked out here: rows
+appeared above it in a window that keeps its start line, the buffer
+shrank, or point moved since the window was last drawn.  Unforced,
+redisplay keeps the start when point is visible from it and scrolls to
+point otherwise.  A window that was deleted or shows another buffer by
+now is left alone."
   (let ((buffer (current-buffer)))
     (pcase-dolist (`(,window . ,spec) window-info)
       (when (and (window-live-p window)
@@ -2928,11 +2929,12 @@ deleted or shows another buffer by now is left alone."
                           (unless (zerop (forward-line (1- line)))
                             (forward-line (- 1 (window-body-height window))))
                           (line-beginning-position))))))
-          (if (and (> start (point-min))
-                   (vui--window-fits-buffer-p window))
-              (set-window-start window (point-min) t)
-            (set-window-start window start
-                              (not (eq (car spec) 'relative)))))))))
+          (set-window-start window
+                            (if (and (> start (point-min))
+                                     (vui--window-fits-buffer-p window))
+                                (point-min)
+                              start)
+                            t))))))
 
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.

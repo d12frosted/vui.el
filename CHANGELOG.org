@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A re-render right after point moved out of view no longer puts the
+  cursor back into the old view. The selected window follows its cursor
+  across a re-render by restoring its start relative to point, and that
+  start was forced. When point is not in view from it, redisplay answers
+  a forced start by moving point, to the middle line of the window. It
+  takes a move and a re-render in one command, with no redisplay in
+  between: =vui-goto-key= followed by a refresh, which is the use its
+  docstring suggests, or a window that got shorter before the render.
+  The start is no longer forced, so the window scrolls to its point.
+
 - A re-render no longer throws away the cursor of a window that is not
   selected. The render saved and restored the buffer's point, which is
   also the point of the selected window, but every other window showing

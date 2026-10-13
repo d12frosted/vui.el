@@ -317,9 +317,11 @@ around an update.
 
 - The selected window follows its cursor: the cursor's row keeps the screen
   row it had, even when rows appear or go away above it.
-- Any other window keeps its own scroll position. It scrolls only when its
-  point would end up out of view.
+- Any other window keeps its own scroll position.
 - A window tall enough to show the whole buffer shows it from the top.
+
+Point comes first in every window: when it would end up out of view, the
+window scrolls to it.
 
 Give interactive rows a =:key= when their label can change or repeat: the
 key is what lets point follow the same row.
