@@ -40,15 +40,20 @@ inside other messages, as in \"could not load dump file ...: could not
 open file\".  Match them with `case-fold-search' nil, so that only the
 spelling of Emacs itself counts.")
 
+(defun vui-tty-test--before-frame (output)
+  "Return what OUTPUT, all that a child printed, has before its frame.
+A child with a terminal sets it up before it draws anything, which
+takes escape sequences, so its frame starts at the first of them.
+Before it there is only what Emacs says on its way up."
+  (substring output 0 (string-search "\e" output)))
+
 (defun vui-tty-test--no-terminal-p (output)
   "Return non-nil when OUTPUT is from a child that could not use its terminal.
-Such a child says so and exits, and it never draws.  A child with a
-terminal sets it up before it draws anything, which takes escape
-sequences, so only what OUTPUT has before the first of them counts.
-What comes later is a frame, and a frame can show any words."
+Such a child says so and exits, and it never draws, so only what
+OUTPUT has before the frame counts.  A frame can show any words."
   (let ((case-fold-search nil))
     (string-match-p vui-tty-test--no-terminal
-                    (substring output 0 (string-search "\e" output)))))
+                    (vui-tty-test--before-frame output))))
 
 (defun vui-tty-test--eval (prelude form)
   "Evaluate FORM in a child Emacs with a real tty frame; return its value.
@@ -59,7 +64,10 @@ print readably.
 
 Returns (ok VALUE); (unavailable OUTPUT) when the child could not open
 its terminal; (error DATA) for everything else: PRELUDE or FORM
-signalled, the child did not finish in time, or it died."
+signalled, the child did not finish in time, or it died.  For a child
+that died DATA is (child-died STATUS SAID), where SAID is what the
+child printed before its frame: nothing, a warning of Emacs on its way
+up, or what was wrong with it."
   (let* ((program (make-temp-file "vui-tty-" nil ".el"))
          (result (make-temp-file "vui-tty-" nil ".out"))
          (output (generate-new-buffer " *vui-tty*"))
@@ -136,8 +144,14 @@ signalled, the child did not finish in time, or it died."
                   (read (current-buffer))))
                ((vui-tty-test--no-terminal-p said)
                 (list 'unavailable said))
-               (t (list 'error (list 'child-died
-                                     (process-exit-status process))))))))
+               ;; A broken Emacs says what is wrong with it before it
+               ;; gets to its frame.  The frame is left out: it is
+               ;; hundreds of characters of escape sequences.
+               (t (list 'error
+                        (list 'child-died
+                              (process-exit-status process)
+                              (string-trim
+                               (vui-tty-test--before-frame said)))))))))
       (when (process-live-p process)
         (delete-process process))
       (kill-buffer output)
@@ -480,15 +494,32 @@ anyone noticing."
     ;; The child prints the very line of a child with no terminal, but
     ;; with its frame up.  The harness used to look through all the
     ;; child printed and took this child for one with no terminal.
-    (expect (vui-tty-test--eval
-             nil '(progn (princ "\nemacs: standard input is not a tty\n"
-                                #'external-debugging-output)
-                         (redisplay t)
-                         (kill-emacs 1)))
-            :to-equal '(error (child-died 1)))
+    (pcase (vui-tty-test--eval
+            nil '(progn (princ "\nemacs: standard input is not a tty\n"
+                               #'external-debugging-output)
+                        (redisplay t)
+                        (kill-emacs 1)))
+      ;; Nothing of its frame is in what it is said to have printed
+      (`(error (child-died 1 ,said))
+       (expect (string-search "\e" said) :to-be nil))
+      (`(unavailable ,_)
+       (buttercup-fail "Taken for a child with no terminal"))
+      (result (buttercup-fail "Expected (error (child-died 1 SAID)), got %S"
+                              result)))
     ;; And the line was there to be found
     (expect (car (spy-calls-args-for 'vui-tty-test--no-terminal-p 0))
-            :to-match vui-tty-test--no-terminal)))
+            :to-match vui-tty-test--no-terminal))
+
+  (it "says what a child that died printed before it drew"
+    ;; That is where a broken Emacs says what is wrong with it
+    (let ((real (symbol-function 'make-process)))
+      (spy-on 'make-process :and-call-fake
+              (lambda (&rest args)
+                (apply real
+                       (plist-put args :command
+                                  '("sh" "-c" "echo it broke; exit 3"))))))
+    (expect (vui-tty-test--eval nil nil)
+            :to-equal '(error (child-died 3 "it broke")))))
 
 (provide 'vui-tty-test)
 ;;; vui-tty-test.el ends here
