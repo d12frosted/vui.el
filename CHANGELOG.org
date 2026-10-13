@@ -28,6 +28,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A tree that =vui-mount= or =vui-render= puts up from a lifecycle hook
+  or an effect of another tree starts its paths at its own root. The
+  call runs while the other tree is being rendered, and the new tree
+  took over the path of that render. Its widgets then changed their
+  paths on its next render, and point on a button whose label changed in
+  that render moved to another button.
+
 - The timing data has a =commit= entry for components with component
   children. With =vui-timing-enabled= set, a component that rendered
   another component never got one in =(vui-get-timing)= or in

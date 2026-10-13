@@ -7294,7 +7294,10 @@ one from a timer, an async callback, or a window resize."
     ;; TODO: Implement cursor preservation across re-renders.
     ;; Should track position relative to logical elements (keys/components),
     ;; not buffer positions. Will be part of component instance system.
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          ;; The paths of this tree start here, also when it is rendered
+          ;; from a hook or an effect of a tree that is being rendered
+          (vui--render-path nil))
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))
@@ -7343,7 +7346,10 @@ Returns the root instance."
          (buf (get-buffer-create buf-name))
          (instance (vui--create-instance component-vnode nil))
          ;; Clear pending effects before initial render
-         (vui--pending-effects nil))
+         (vui--pending-effects nil)
+         ;; The paths of this tree start here.  A mount from a hook or
+         ;; an effect of another tree runs inside that tree's render.
+         (vui--render-path nil))
     ;; Store buffer reference in instance for re-rendering
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf

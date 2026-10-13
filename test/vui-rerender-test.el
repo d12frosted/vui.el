@@ -750,7 +750,40 @@ patches around it."
               ;; must follow "Banana", not drift onto the look-alike.
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
                       :to-equal "Banana"))
-          (kill-buffer "*rr-xk*"))))))
+          (kill-buffer "*rr-xk*")))))
+
+  (it "starts the paths of a tree mounted from a hook at that tree"
+    ;; A mount from the on-mount hook of a component runs while another
+    ;; tree is being rendered.  The path of that render must not go into
+    ;; the new tree: its next render starts from nothing, so every
+    ;; widget would change its path, and point would be looked up by a
+    ;; path that is gone.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent rr-hook-panel (n)
+        :render (vui-hstack (vui-button "close")
+                            (vui-button (format "pin %s" n))))
+      (vui-defcomponent rr-hook-child ()
+        :on-mount (progn
+                    (save-current-buffer
+                      (vui-mount (vui-component 'rr-hook-panel :n 0)
+                                 "*rr-hook-panel*"))
+                    nil)
+        :render (vui-text "child"))
+      (vui-defcomponent rr-hook-root ()
+        :render (vui-vstack (vui-hstack (vui-component 'rr-hook-child)
+                                        (vui-text "b"))))
+      (vui-mount (vui-component 'rr-hook-root) "*rr-hook*")
+      (unwind-protect
+          (with-current-buffer "*rr-hook-panel*"
+            (expect (mapcar (lambda (w) (vui--elt-get w :vui-path))
+                            (vui--collect-widgets))
+                    :to-equal '((0) (1)))
+            (goto-char (vui-rr--button-pos "pin 0"))
+            (vui-update (vui-get-instance) '(:n 1))
+            (expect (buffer-string) :to-equal "[close] [pin 1]")
+            (expect (vui-rr--tag-at (point)) :to-equal "pin 1"))
+        (kill-buffer "*rr-hook-panel*")
+        (kill-buffer "*rr-hook*")))))
 
 (describe "vui-goto-key"
   (it "moves point onto the widget carrying KEY and returns its position"
