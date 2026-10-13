@@ -6583,8 +6583,9 @@ if NODE is not live."
 (defun vui--stream-tail-eligible (vtree)
   "Return (HANDLE SUFFIX) when VTREE is a flat container whose first child
 is a live stream and no other child is a stream; else nil.  SUFFIX is the
-list of vnodes after the stream.  Only plain (indent 0, no face/keymap)
-vstacks and fragments qualify."
+list of VTREE's children with nil in place of the stream and of what is
+before it, so the vnodes after the stream keep their index.  Only plain
+\(indent 0, no face/keymap) vstacks and fragments qualify."
   (let ((children
          (cond ((vui-vnode-fragment-p vtree) (vui-vnode-fragment-children vtree))
                ((and (vui-vnode-vstack-p vtree)
@@ -6606,7 +6607,15 @@ vstacks and fragments qualify."
                        ;; until there is content; then patch.
                        (/= (marker-position (vui-stream-handle-region-start h))
                            (marker-position (vui-stream-handle-region-end h))))
-              (list h (cdr cs)))))))))
+              ;; A child's index is a step in the path of its widgets
+              ;; (`:vui-path').  Rendered as children 0, 1, ... the
+              ;; vnodes after the stream would get other paths than a
+              ;; wholesale render gives them, and could share one with
+              ;; an item of the stream.
+              (let ((after (cdr (memq (car cs) children))))
+                (list h (nconc (make-list (- (length children) (length after))
+                                          nil)
+                               after))))))))))
 
 (defun vui--render-children-as (vtree children)
   "Render CHILDREN as a container shaped like VTREE; return chars written.
@@ -6624,10 +6633,11 @@ component reconciliation all match a wholesale render exactly."
 
 (defun vui--patch-stream-tail (vtree handle suffix)
   "Re-render only the content after HANDLE's region, leaving the region.
-SUFFIX is the list of vnodes after the stream in VTREE.  The stream is
-non-empty (live), so the suffix is separated from it by one container
-separator, which we drop if the suffix renders to nothing (matching a
-wholesale render's empty-child handling)."
+SUFFIX is the list of vnodes after the stream in VTREE, behind a nil for
+the stream and for each child before it (see `vui--stream-tail-eligible').
+The stream is non-empty (live), so the suffix is separated from it by one
+container separator, which we drop if the suffix renders to nothing
+\(matching a wholesale render's empty-child handling)."
   (let* ((sep (vui--incremental-separator vtree))
          (from (marker-position (vui-stream-handle-region-end handle))))
     (vui--forget-region-fields from (point-max))

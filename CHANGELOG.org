@@ -28,6 +28,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Widgets below a live =vui-stream= have the same place in the tree
+  whether the render patched around the stream or rewrote the whole
+  buffer. A render that leaves the stream's text alone rewrites only
+  what is below it, and it numbered those children from the first one
+  after the stream, not from the start of the container. So their paths
+  changed with the kind of render and could be the path of a stream
+  item: point on a button below the stream whose label changed in that
+  render jumped into the stream. The same place is the identity of a
+  =vui-error-boundary= without an =:id=, and a boundary below a stream
+  forgot its caught error on the first patched render: the failing child
+  ran once more and =:on-error= was called a second time.
+
 - The children of a context provider and of a =vui-error-boundary= each
   have a place of their own in the tree, and so has the fallback of a
   boundary. Both rendered their children without counting them, so the
