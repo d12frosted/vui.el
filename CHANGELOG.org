@@ -28,6 +28,22 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= in a component mounted with =vui-mount-inline= shows
+  its first item. The first item of an empty stream changes the layout
+  around the stream, so the stream asks for a render of the tree that
+  holds it. It asked the root mounted in the buffer, and a host buffer
+  has none, so the first item never showed, and an only item emptied in
+  place with =vui-stream-update-last= kept the separator of a non-empty
+  stream. Now the stream asks the root that rendered it last, which is
+  the inline instance in a host buffer. The same makes the first item
+  of a stream inside a component row of another stream show. Text the
+  stream writes at the start or the end of the inline region now stays
+  inside the region: it showed twice after the next render of the
+  instance, and stayed in the buffer after unmount. A component
+  appended to a stream in an inline mount, or in a component row,
+  renders as a plain child, as one appended to an empty stream does: a
+  row is an inline instance itself and cannot be mounted inside one.
+
 - A sticky =vui-table= with no border keeps pinning its own header when
   the text right before it is written again: a component before it in
   a =vui-fragment= that renders again on its own (with

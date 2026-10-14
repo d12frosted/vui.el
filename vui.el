@@ -5952,7 +5952,10 @@ bound when the stream is first rendered, and are nil until then.
 IDS-REV runs parallel to ITEMS-REV and holds the id of each item, its
 step in the render path; NEXT-ID is the next free one.  PATH is the
 render path of the stream itself as of its last render.  See
-`vui--stream-item-path'."
+`vui--stream-item-path'.  ROOT is the root instance that rendered the
+stream last, when it belongs to the stream's buffer: the buffer root of
+a `vui-mount', or an inline instance (see `vui--stream-request-rerender'
+and `vui--stream-in-root')."
   buffer
   region-start
   region-end
@@ -5962,7 +5965,8 @@ render path of the stream itself as of its last render.  See
   (separator "\n")
   (ids-rev nil)
   (next-id 0)
-  (path nil))
+  (path nil)
+  (root nil))
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -6088,15 +6092,85 @@ subsequent streamed append."
     (unless vui--measuring-p
       ;; Edits to the live stream render their item under the same path
       (setf (vui-stream-handle-path handle) path)
+      (setf (vui-stream-handle-root handle)
+            (and vui--root-instance
+                 (eq (vui-instance-buffer vui--root-instance)
+                     (current-buffer))
+                 vui--root-instance))
       (vui--stream-bind-region handle (current-buffer) start (point))
       (when last-start
         (vui--stream-set-last-start handle last-start (current-buffer))))))
 
+(defun vui--stream-inline-root (handle)
+  "Return the inline instance that holds HANDLE's region, or nil.
+That is the root that rendered the stream last, when it is an inline
+instance still mounted in the stream's buffer and its region still holds
+the stream's region.  A row that a rebuild erased keeps an empty region
+somewhere else, so it does not hold the stream any more."
+  (let ((root (vui-stream-handle-root handle))
+        (s (vui-stream-handle-region-start handle))
+        (e (vui-stream-handle-region-end handle)))
+    (when (and root (vui--inline-p root)
+               (eq (vui-instance-buffer root) (vui-stream-handle-buffer handle))
+               s (marker-position s) e (marker-position e))
+      (let ((rs (marker-position (vui-instance-region-start root)))
+            (re (marker-position (vui-instance-region-end root))))
+        (when (and rs re (<= rs (marker-position s))
+                   (<= (marker-position e) re))
+          root)))))
+
+(defun vui--stream-root-edges (handle)
+  "Return (ROOT AT-START AT-END) for the inline root holding HANDLE, or nil.
+AT-START and AT-END say whether the stream starts and ends where the
+region of ROOT does."
+  (when-let* ((root (vui--stream-inline-root handle)))
+    (list root
+          (= (marker-position (vui-stream-handle-region-start handle))
+             (marker-position (vui-instance-region-start root)))
+          (= (marker-position (vui-stream-handle-region-end handle))
+             (marker-position (vui-instance-region-end root))))))
+
+(defmacro vui--stream-in-root (handle &rest body)
+  "Run BODY, which writes HANDLE's text, and keep that text in its root.
+An inline region moves its start past text inserted at it and keeps its
+end before such text, so that what others write at its edges stays
+outside.  A stream that starts or ends the region writes at those edges
+too, and its text belongs inside: the next render of the root rewrites
+the region, and unmounting deletes it.  So the region edges the stream
+was on before BODY follow the stream again after it."
+  (declare (indent 1) (debug t))
+  (let ((h (make-symbol "handle"))
+        (edges (make-symbol "edges")))
+    `(let* ((,h ,handle)
+            (,edges (vui--stream-root-edges ,h)))
+       (prog1 (progn ,@body)
+         (when ,edges
+           (let ((root (nth 0 ,edges)))
+             (when (nth 1 ,edges)
+               (set-marker (vui-instance-region-start root)
+                           (marker-position
+                            (vui-stream-handle-region-start ,h))))
+             (when (nth 2 ,edges)
+               (set-marker (vui-instance-region-end root)
+                           (marker-position
+                            (vui-stream-handle-region-end ,h))))))))))
+
 (defun vui--stream-request-rerender (handle)
-  "Re-render the root of HANDLE's buffer so the layout reflects new items."
-  (let ((buf (vui-stream-handle-buffer handle)))
+  "Re-render the root that holds HANDLE so the layout reflects new items.
+That is the root that rendered the stream last (an inline instance, in
+a host buffer) while it is still mounted there, or else the root
+mounted in HANDLE's buffer."
+  (let ((buf (vui-stream-handle-buffer handle))
+        (last (vui-stream-handle-root handle)))
     (when (and buf (buffer-live-p buf))
-      (when-let* ((root (vui-get-instance buf)))
+      ;; Only a component row can be erased by a rebuild and stay mounted
+      ;; away from its stream; it is the only inline root with a base path
+      (when-let* ((root (if (and last (eq (vui-instance-buffer last) buf)
+                                 (or (not (vui--inline-p last))
+                                     (null (vui-instance-base-path last))
+                                     (vui--stream-inline-root handle)))
+                            last
+                          (vui-get-instance buf))))
         (vui-rerender root)))))
 
 (defun vui--stream-region-empty-p (handle)
@@ -6146,7 +6220,11 @@ re-renders only that region when its state changes (a collapsible tool
 card, say), independent of how many items are above it.  A component row
 requires the stream to be live and non-empty first (the empty -> non-empty
 transition does a full re-render, which cannot re-emit an inline row); a
-component appended to an empty stream falls back to a plain child render."
+component appended to an empty stream falls back to a plain child render.
+In a stream that an inline instance renders (in a `vui-mount-inline'
+host, or inside a component row) a component renders as a plain child
+too: a row is an inline instance itself, and one cannot be mounted
+inside another."
   (if (vui-vnode-component-p vnode)
       (vui--stream-append-row handle vnode)
     (vui--stream-append-content handle vnode))
@@ -6169,25 +6247,26 @@ component appended to an empty stream falls back to a plain child render."
       (vui--stream-request-rerender handle))
      ;; Live and non-empty: O(1) imperative insert at the region end.
      (t
-      (with-current-buffer buf
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              ;; Stream text is ephemeral UI, not document history.
-              (buffer-undo-list t)
-              (vui--render-path (vui--stream-item-path handle id)))
-          (save-excursion
-            (goto-char (marker-position end))
-            (insert (vui-stream-handle-separator handle))
-            (vui--stream-set-last-start handle (point) buf)
-            (vui--render-vnode vnode)
-            ;; If the previous last item was a component row, END is that
-            ;; row's own marker - do NOT move it (that would corrupt the
-            ;; row's region); install a fresh marker.  Otherwise reuse the
-            ;; stream's own END marker.
-            (if (vui-instance-p prev-last)
-                (setf (vui-stream-handle-region-end handle)
-                      (copy-marker (point) nil))
-              (set-marker end (point))))))))))
+      (vui--stream-in-root handle
+        (with-current-buffer buf
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                ;; Stream text is ephemeral UI, not document history.
+                (buffer-undo-list t)
+                (vui--render-path (vui--stream-item-path handle id)))
+            (save-excursion
+              (goto-char (marker-position end))
+              (insert (vui-stream-handle-separator handle))
+              (vui--stream-set-last-start handle (point) buf)
+              (vui--render-vnode vnode)
+              ;; If the previous last item was a component row, END is that
+              ;; row's own marker - do NOT move it (that would corrupt the
+              ;; row's region); install a fresh marker.  Otherwise reuse the
+              ;; stream's own END marker.
+              (if (vui-instance-p prev-last)
+                  (setf (vui-stream-handle-region-end handle)
+                        (copy-marker (point) nil))
+                (set-marker end (point)))))))))))
 
 (defun vui--stream-append-row (handle vnode)
   "Append component VNODE as a stateful inline row at HANDLE's tail."
@@ -6199,8 +6278,12 @@ component appended to an empty stream falls back to a plain child render."
      ;; Not live, or still empty: a row needs a live, non-empty stream.
      ;; Record the vnode and lay it out with a full render (it renders as a
      ;; plain child component, not a scoped row - the documented fallback).
+     ;; In an inline root a row cannot be mounted: it is an inline
+     ;; instance itself, and one cannot be mounted inside another.
      ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
-          (= (marker-position start) (marker-position end)))
+          (= (marker-position start) (marker-position end))
+          (let ((root (vui-stream-handle-root handle)))
+            (and root (vui--inline-p root))))
       (vui--stream-push handle vnode)
       (when (and buf (buffer-live-p buf))
         (vui--stream-request-rerender handle))
@@ -6331,34 +6414,35 @@ keeping its state."
             (when (and buf (buffer-live-p buf)
                        ls (marker-position ls) end (marker-position end))
               (let ((was-empty (vui--stream-region-empty-p handle)))
-                (with-current-buffer buf
-                  (let ((inhibit-read-only t)
-                        (inhibit-modification-hooks t)
-                        (buffer-undo-list t)
-                        (vui--render-path
-                         (vui--stream-item-path
-                          handle (car (vui-stream-handle-ids-rev handle)))))
-                    (save-excursion
-                      (if suffix
-                          (progn
-                            (goto-char (marker-position end))
-                            (vui--render-vnode
-                             (vui-vnode-text--create
-                              :content suffix
-                              :face (vui-vnode-text-face vnode)
-                              :properties (vui-vnode-text-properties vnode)))
-                            (set-marker end (point)))
-                        (delete-region (marker-position ls) (marker-position end))
-                        (goto-char (marker-position ls))
-                        (vui--render-vnode vnode)
-                        (set-marker end (point))))
-                    ;; The old item may have had the last sticky table:
-                    ;; no render of the root follows to put back the
-                    ;; header line it replaced, so do it here.  Not on
-                    ;; the per-token path above: it only inserts, which
-                    ;; never takes a table out.
-                    (unless suffix
-                      (vui--table-restore-header-line))))
+                (vui--stream-in-root handle
+                  (with-current-buffer buf
+                    (let ((inhibit-read-only t)
+                          (inhibit-modification-hooks t)
+                          (buffer-undo-list t)
+                          (vui--render-path
+                           (vui--stream-item-path
+                            handle (car (vui-stream-handle-ids-rev handle)))))
+                      (save-excursion
+                        (if suffix
+                            (progn
+                              (goto-char (marker-position end))
+                              (vui--render-vnode
+                               (vui-vnode-text--create
+                                :content suffix
+                                :face (vui-vnode-text-face vnode)
+                                :properties (vui-vnode-text-properties vnode)))
+                              (set-marker end (point)))
+                          (delete-region (marker-position ls) (marker-position end))
+                          (goto-char (marker-position ls))
+                          (vui--render-vnode vnode)
+                          (set-marker end (point))))
+                      ;; The old item may have had the last sticky table:
+                      ;; no render of the root follows to put back the
+                      ;; header line it replaced, so do it here.  Not on
+                      ;; the per-token path above: it only inserts, which
+                      ;; never takes a table out.
+                      (unless suffix
+                        (vui--table-restore-header-line)))))
                 (vui--stream-relay-empty-transition handle was-empty)))))))))
   handle)
 
@@ -6502,7 +6586,9 @@ preserved) no matter where it has drifted to - a tool card that flips
 running -> result while later messages sit below it.  A component node owns
 its markers for its life (it must, to stay interactive), so `finalize' only
 stops tracking it; `append-to' / `before' / `after' / `remove' are
-content-only and no-op on a component node for now."
+content-only and no-op on a component node for now.  Where
+`vui-stream-append' renders a component as a plain child (an empty
+stream, or one an inline instance renders), the node is inert."
   (if (vui-vnode-component-p vnode)
       ;; Component node: a stateful inline row addressable by ref.  The row
       ;; owns its own region markers, so the node carries no start/end.
@@ -6556,16 +6642,17 @@ finalized, and on a component node (append-to is content-only)."
       (when cell
         (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
       (let ((was-empty (vui--stream-region-empty-p handle)))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-delta-path node vnode)))
-            (save-excursion
-              (goto-char (marker-position end))
-              (vui--render-vnode vnode)
-              (set-marker end (point))
-              (vui--stream-sync-end handle (point)))))
+        (vui--stream-in-root handle
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-delta-path node vnode)))
+              (save-excursion
+                (goto-char (marker-position end))
+                (vui--render-vnode vnode)
+                (set-marker end (point))
+                (vui--stream-sync-end handle (point))))))
         (vui--stream-relay-empty-transition handle was-empty node)))
     node))
 
@@ -6606,20 +6693,21 @@ its own region, keeping its state - the out-of-order counterpart of
                    start (marker-position start) end (marker-position end))
           (when cell (setcar cell vnode))
           (let ((was-empty (vui--stream-region-empty-p handle)))
-            (with-current-buffer buf
-              (let ((inhibit-read-only t)
-                    (inhibit-modification-hooks t)
-                    (buffer-undo-list t)
-                    (vui--render-path
-                     (vui--stream-item-path handle (vui--stream-node-id node))))
-                (save-excursion
-                  (delete-region (marker-position start) (marker-position end))
-                  (goto-char (marker-position start))
-                  (vui--render-vnode vnode)
-                  (set-marker end (point))
-                  (vui--stream-sync-end handle (point)))
-                ;; As in `vui-stream-update-last'
-                (vui--table-restore-header-line)))
+            (vui--stream-in-root handle
+              (with-current-buffer buf
+                (let ((inhibit-read-only t)
+                      (inhibit-modification-hooks t)
+                      (buffer-undo-list t)
+                      (vui--render-path
+                       (vui--stream-item-path handle (vui--stream-node-id node))))
+                  (save-excursion
+                    (delete-region (marker-position start) (marker-position end))
+                    (goto-char (marker-position start))
+                    (vui--render-vnode vnode)
+                    (set-marker end (point))
+                    (vui--stream-sync-end handle (point)))
+                  ;; As in `vui-stream-update-last'
+                  (vui--table-restore-header-line))))
             (vui--stream-relay-empty-transition handle was-empty node))))))
   node)
 
@@ -6670,22 +6758,23 @@ screen.  A no-op returning nil if NODE is not live."
         (setcdr id-cell (cons id (cdr id-cell)))
         (setf (vui--stream-node-cell new) (cdr cell)
               (vui--stream-node-id-cell new) (cdr id-cell))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-item-path handle id)))
-            (save-excursion
-              (goto-char (marker-position start))
-              (let ((x-start (point)))
-                (vui--render-vnode vnode)
-                (let ((x-end (point)))
-                  (insert sep)
-                  ;; NODE's content now begins after the inserted separator.
-                  (set-marker start (point))
-                  (when last-p
-                    (vui--stream-set-last-start handle (point) buf))
-                  (vui--stream-node-bind new x-start x-end buf))))))
+        (vui--stream-in-root handle
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-item-path handle id)))
+              (save-excursion
+                (goto-char (marker-position start))
+                (let ((x-start (point)))
+                  (vui--render-vnode vnode)
+                  (let ((x-end (point)))
+                    (insert sep)
+                    ;; NODE's content now begins after the inserted separator.
+                    (set-marker start (point))
+                    (when last-p
+                      (vui--stream-set-last-start handle (point) buf))
+                    (vui--stream-node-bind new x-start x-end buf)))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
 
@@ -6719,23 +6808,24 @@ if NODE is not live."
             (when id-prev
               (setcdr id-prev (cons id (cdr id-prev)))
               (setf (vui--stream-node-id-cell new) (cdr id-prev)))))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-item-path handle id)))
-            (save-excursion
-              (goto-char (marker-position end))
-              (insert sep)
-              (let ((x-start (point)))
-                (vui--render-vnode vnode)
-                (let ((x-end (point)))
-                  (vui--stream-node-bind new x-start x-end buf)
-                  (vui--stream-sync-end handle x-end)
-                  ;; If NODE was the last item, the new node is now last:
-                  ;; last-start (used by `vui-stream-update-last') follows it.
-                  (when (eq cell head)
-                    (vui--stream-set-last-start handle x-start buf)))))))
+        (vui--stream-in-root handle
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-item-path handle id)))
+              (save-excursion
+                (goto-char (marker-position end))
+                (insert sep)
+                (let ((x-start (point)))
+                  (vui--render-vnode vnode)
+                  (let ((x-end (point)))
+                    (vui--stream-node-bind new x-start x-end buf)
+                    (vui--stream-sync-end handle x-end)
+                    ;; If NODE was the last item, the new node is now last:
+                    ;; last-start (used by `vui-stream-update-last') follows it.
+                    (when (eq cell head)
+                      (vui--stream-set-last-start handle x-start buf))))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
 
