@@ -28,6 +28,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A root component keeps its component children when a re-render gives
+  the same tree as last time: its =:should-update= (or =:memo=) says
+  nothing changed, or its render returns the same tree object (for
+  example from =vui-use-memo=). The commit of that tree leaves the
+  buffer as it is, so no child is rendered. The root then rebuilt its
+  children list from that empty render: every child got =:on-unmount=
+  (and its effect and async cleanup) while its text was still on
+  screen, and the next real render made new instances, so their state
+  was lost. With =vui-incremental-render= set and a root that renders
+  a flat list of components, that next render also put the new list in
+  front of the old text instead of replacing it. Now a commit that
+  leaves the buffer as it is keeps the children as they are.
+
 - With =vui-incremental-render= set, the fields next to a component that
   is rendered again in a patched list keep their text. The patch deletes
   the old text of that component and inserts the new text in its place,

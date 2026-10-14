@@ -197,6 +197,131 @@
                 (expect (overlay-end ov) :to-equal 4)))
           (kill-buffer "*eqskip*"))))))
 
+(describe "whole-tree eq-skip keeps the root's component children"
+  ;; A root that gives the same tree object as last time (its
+  ;; should-update says skip, or its render returns a memoized tree)
+  ;; reaches the eq-skip, which renders nothing, so no child is
+  ;; reconciled.  The children are still on screen: they must stay
+  ;; mounted and in the root's children list, so the next real render
+  ;; reuses them.
+  (dolist (flag '(nil t))
+    (it (format "keeps them mounted and reuses them (flag %s)"
+                (if flag "on" "off"))
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil)
+            (log nil))
+        (vui-defcomponent eqskip-kid (name)
+          :on-unmount (push (format "unmount %s" name) log)
+          :render (vui-text (format "kid %s" name)))
+        (vui-defcomponent eqskip-root (tick)
+          ;; renders again only for an even tick
+          :should-update (= 0 (% (plist-get props :tick) 2))
+          :render (vui-vstack
+                   (vui-component 'eqskip-kid :name (format "a%s" tick))
+                   (vui-component 'eqskip-kid :name (format "b%s" tick))))
+        (let ((inst (vui-mount (vui-component 'eqskip-root :tick 0)
+                               "*eqskip-kids*")))
+          (unwind-protect
+              (with-current-buffer "*eqskip-kids*"
+                ;; First re-render establishes the record (with the flag
+                ;; on, a component-list record).
+                (vui-update inst '(:tick 2))
+                (let ((kids (vui-instance-children inst)))
+                  (expect (length kids) :to-equal 2)
+                  ;; odd tick: the root skips, the commit renders nothing
+                  (vui-update inst '(:tick 3))
+                  (expect (buffer-string) :to-equal "kid a2\nkid b2")
+                  (expect (length (vui-instance-children inst)) :to-equal 2)
+                  (expect (cl-mapcar #'eq (vui-instance-children inst) kids)
+                          :to-equal '(t t))
+                  (expect log :to-equal nil)
+                  ;; the next real render reuses the same instances (with
+                  ;; the flag on it patches them in place)
+                  (vui-update inst '(:tick 4))
+                  (expect (buffer-string) :to-equal "kid a4\nkid b4")
+                  (expect (length (vui-instance-children inst)) :to-equal 2)
+                  (expect (cl-mapcar #'eq (vui-instance-children inst) kids)
+                          :to-equal '(t t))
+                  (expect log :to-equal nil)))
+            (kill-buffer "*eqskip-kids*"))))))
+
+  (dolist (flag '(nil t))
+    (it (format "keeps them when the root's render returns the same tree (flag %s)"
+                (if flag "on" "off"))
+      ;; Here the root does render, but `vui-use-memo' gives back the
+      ;; tree it returned last time, so the commit reaches the same skip.
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil)
+            (renders 0)
+            (log nil))
+        (vui-defcomponent eqskip-memo-kid (name)
+          :on-unmount (push (format "unmount %s" name) log)
+          :render (vui-text (format "kid %s" name)))
+        (vui-defcomponent eqskip-memo-root (label)
+          :state ((tick 0))
+          :render (progn
+                    (setq renders (1+ renders))
+                    (vui-use-memo (label)
+                      (vui-vstack
+                       (vui-component 'eqskip-memo-kid :name (format "a-%s" label))
+                       (vui-component 'eqskip-memo-kid :name (format "b-%s" label))))))
+        (let ((inst (vui-mount (vui-component 'eqskip-memo-root :label "x")
+                               "*eqskip-memo*")))
+          (unwind-protect
+              (with-current-buffer "*eqskip-memo*"
+                ;; First re-render establishes the record.
+                (let ((vui--current-instance inst)) (vui-set-state :tick 1))
+                (let ((kids (vui-instance-children inst))
+                      (tree (vui-instance-cached-vtree inst)))
+                  (expect (length kids) :to-equal 2)
+                  (setq renders 0)
+                  ;; the root renders, the memo gives back the same tree
+                  (let ((vui--current-instance inst)) (vui-set-state :tick 2))
+                  (expect renders :to-equal 1)
+                  (expect (vui-instance-cached-vtree inst) :to-be tree)
+                  (expect (buffer-string) :to-equal "kid a-x\nkid b-x")
+                  (expect (length (vui-instance-children inst)) :to-equal 2)
+                  (expect (cl-mapcar #'eq (vui-instance-children inst) kids)
+                          :to-equal '(t t))
+                  (expect log :to-equal nil)
+                  ;; a new label renders the same instances again
+                  (vui-update inst '(:label "y"))
+                  (expect (buffer-string) :to-equal "kid a-y\nkid b-y")
+                  (expect (length (vui-instance-children inst)) :to-equal 2)
+                  (expect (cl-mapcar #'eq (vui-instance-children inst) kids)
+                          :to-equal '(t t))
+                  (expect log :to-equal nil)))
+            (kill-buffer "*eqskip-memo*"))))))
+
+  (it "keeps the contexts recorded for the subtree"
+    ;; The record is the root's own reads plus each child's.  A skipped
+    ;; root reads nothing this time, and its children did not render, so
+    ;; the record from the last real render still describes the buffer.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcontext eqskip-root-ctx 'root)
+      (vui-defcontext eqskip-kid-ctx 'kid)
+      (vui-defcomponent eqskip-ctx-kid ()
+        :render (vui-text (format "%s" (vui-use-context eqskip-kid-ctx-context))))
+      (vui-defcomponent eqskip-ctx-root (tick)
+        :should-update (= 0 (% (plist-get props :tick) 2))
+        :render (vui-vstack
+                 (vui-text (format "%s %s" tick
+                                   (vui-use-context eqskip-root-ctx-context)))
+                 (vui-component 'eqskip-ctx-kid)))
+      (let ((inst (vui-mount (vui-component 'eqskip-ctx-root :tick 0)
+                             "*eqskip-ctx*")))
+        (unwind-protect
+            (with-current-buffer "*eqskip-ctx*"
+              (vui-update inst '(:tick 2))
+              (let ((recorded (vui-instance-consumed-contexts inst)))
+                (expect (length recorded) :to-equal 2)
+                (vui-update inst '(:tick 3))
+                (expect (buffer-string) :to-equal "2 root\nkid")
+                (expect (vui-instance-consumed-contexts inst)
+                        :to-equal recorded)))
+          (kill-buffer "*eqskip-ctx*"))))))
+
 (describe "incremental component-list patching"
   ;; A keyed list of child components with should-update: unchanged
   ;; children bail out of re-rendering and keep their buffer regions.

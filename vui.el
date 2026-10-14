@@ -3838,7 +3838,10 @@ INSTANCE is the component instance."
   "Render a component INSTANCE into the current buffer.
 When COMMIT-FN is non-nil it is called with the computed vtree to write
 it to the buffer, instead of the default `vui--render-vnode'.  This lets
-the root re-render commit incrementally (see `vui--commit-root')."
+the root re-render commit incrementally (see `vui--commit-root').  When
+COMMIT-FN returns `unchanged' it left the buffer as it was and rendered
+nothing, so INSTANCE keeps its children and the record of the contexts
+its subtree read."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
@@ -3849,6 +3852,8 @@ the root re-render commit incrementally (see `vui--commit-root')."
          (vui--memo-index 0)      ; Reset memo counter for this component
          (vui--async-index 0)     ; Reset async counter for this component
          (old-children (vui-instance-children instance))
+         ;; Set when COMMIT-FN reports it rendered nothing
+         (unchanged nil)
          ;; O(1) child lookup for this render, so reconciling S children is
          ;; O(S) not O(S^2).  Nil when there is nothing to reuse.
          (vui--reconcile-lookup (and old-children
@@ -3884,40 +3889,46 @@ the root re-render commit incrementally (see `vui--commit-root')."
     (when vtree
       ;; Child components in VTREE render here, inside this commit
       (vui--with-timing 'commit component-name
-        (if commit-fn (funcall commit-fn vtree) (vui--render-vnode vtree))))
-    ;; Update children list for next reconciliation
-    (let ((new-children (nreverse vui--new-children)))
-      ;; Two sibling vnodes with the same key reconcile to the same
-      ;; instance, silently sharing state - warn, it is always a bug
-      (unless vui--measuring-p
-        (let ((seen (make-hash-table :test 'eq)))
-          (dolist (child new-children)
-            (if (gethash child seen)
-                (display-warning
-                 'vui
-                 (format "Duplicate reconciliation key %S under <%s>; siblings share one component instance"
-                         (vui-vnode-key (vui-instance-vnode child))
-                         component-name)
-                 :warning)
-              (puthash child t seen)))))
-      ;; Call on-unmount for children that were removed
-      (dolist (old-child old-children)
-        (unless (memq old-child new-children)
-          (vui--call-unmount-recursive old-child)))
-      (setf (vui-instance-children instance) new-children)
-      ;; Record the contexts this instance's whole subtree depends on:
-      ;; its own reads plus every child's recorded set.  Used only to
-      ;; decide whether the instance may bail out of a future re-render,
-      ;; so it is skipped entirely (no per-instance union) with the flag
-      ;; off.  Safe because a bail can only follow a flag-on render, which
-      ;; rebuilds this set (a flag-off render leaves no patchable record).
-      (when vui-incremental-render
-        (setf (vui-instance-consumed-contexts instance)
-              (let ((acc (copy-sequence vui--consumed-contexts)))
-                (dolist (child new-children acc)
-                  (setq acc (nconc (copy-sequence
-                                    (vui-instance-consumed-contexts child))
-                                   acc)))))))
+        (if commit-fn
+            (setq unchanged (eq (funcall commit-fn vtree) 'unchanged))
+          (vui--render-vnode vtree))))
+    ;; Update children list for next reconciliation.  Not when the commit
+    ;; rendered nothing: no child was reconciled, yet the old children
+    ;; are still on screen, so they must not be unmounted or dropped.
+    ;; The contexts record of the subtree stays as it was too.
+    (unless unchanged
+      (let ((new-children (nreverse vui--new-children)))
+        ;; Two sibling vnodes with the same key reconcile to the same
+        ;; instance, silently sharing state - warn, it is always a bug
+        (unless vui--measuring-p
+          (let ((seen (make-hash-table :test 'eq)))
+            (dolist (child new-children)
+              (if (gethash child seen)
+                  (display-warning
+                   'vui
+                   (format "Duplicate reconciliation key %S under <%s>; siblings share one component instance"
+                           (vui-vnode-key (vui-instance-vnode child))
+                           component-name)
+                   :warning)
+                (puthash child t seen)))))
+        ;; Call on-unmount for children that were removed
+        (dolist (old-child old-children)
+          (unless (memq old-child new-children)
+            (vui--call-unmount-recursive old-child)))
+        (setf (vui-instance-children instance) new-children)
+        ;; Record the contexts this instance's whole subtree depends on:
+        ;; its own reads plus every child's recorded set.  Used only to
+        ;; decide whether the instance may bail out of a future re-render,
+        ;; so it is skipped entirely (no per-instance union) with the flag
+        ;; off.  Safe because a bail can only follow a flag-on render, which
+        ;; rebuilds this set (a flag-off render leaves no patchable record).
+        (when vui-incremental-render
+          (setf (vui-instance-consumed-contexts instance)
+                (let ((acc (copy-sequence vui--consumed-contexts)))
+                  (dolist (child new-children acc)
+                    (setq acc (nconc (copy-sequence
+                                      (vui-instance-consumed-contexts child))
+                                     acc))))))))
     ;; Lifecycle hooks (wrapped with error handling).
     ;; Skipped during measure passes: those render throwaway instances
     ;; into a temp buffer and must not produce side effects.
@@ -5797,7 +5808,8 @@ Requires a record for the same container kind and separator as VTREE."
 Patches incrementally when `vui-incremental-render' is on and VTREE is
 an eligible flat content container; otherwise erases and rebuilds.
 Maintains the instance's render record either way.  Used as the commit
-function of the root `vui--render-instance' call."
+function of the root `vui--render-instance' call.  Return `unchanged'
+when the buffer already matches VTREE and nothing was rendered."
   (let* ((instance vui--current-instance)
          (record (vui-instance-render-record instance)))
     (cond
@@ -5806,9 +5818,10 @@ function of the root `vui--render-instance' call."
      ;; the buffer already matches - skip everything (O(1)).  This is
      ;; always on: it only ever skips provably-unchanged work, costs one
      ;; `eq', and needs no bookkeeping, so it does not depend on the
-     ;; experimental `vui-incremental-render' flag.
+     ;; experimental `vui-incremental-render' flag.  No child component
+     ;; renders either, so tell `vui--render-instance' to keep them.
      ((and record (eq vtree (plist-get record :vnode)))
-      nil)
+      'unchanged)
      ;; Stream-tail patch: a flat container whose first child is a live
      ;; stream.  The stream's region is already current (append /
      ;; update-last keep the buffer in sync), so leave it untouched and
