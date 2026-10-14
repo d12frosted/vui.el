@@ -1453,7 +1453,8 @@ Table properties:
                      moves through it.  Requires plain string headers.
                      The previous `header-line-format' is restored once
                      no sticky table is left: on unmount, or when a
-                     re-render shows none.
+                     re-render or an edit of a `vui-stream' item
+                     leaves none.
   :header-face FACE  - face for header cells (default `vui-table-header')
   :border-face FACE  - face for border characters (default `vui-table-border')
   :key KEY           - for reconciliation
@@ -6350,7 +6351,14 @@ keeping its state."
                         (delete-region (marker-position ls) (marker-position end))
                         (goto-char (marker-position ls))
                         (vui--render-vnode vnode)
-                        (set-marker end (point))))))
+                        (set-marker end (point))))
+                    ;; The old item may have had the last sticky table:
+                    ;; no render of the root follows to put back the
+                    ;; header line it replaced, so do it here.  Not on
+                    ;; the per-token path above: it only inserts, which
+                    ;; never takes a table out.
+                    (unless suffix
+                      (vui--table-restore-header-line))))
                 (vui--stream-relay-empty-transition handle was-empty)))))))))
   handle)
 
@@ -6609,7 +6617,9 @@ its own region, keeping its state - the out-of-order counterpart of
                   (goto-char (marker-position start))
                   (vui--render-vnode vnode)
                   (set-marker end (point))
-                  (vui--stream-sync-end handle (point)))))
+                  (vui--stream-sync-end handle (point)))
+                ;; As in `vui-stream-update-last'
+                (vui--table-restore-header-line)))
             (vui--stream-relay-empty-transition handle was-empty node))))))
   node)
 
@@ -6755,7 +6765,9 @@ if NODE is not live."
           (cond
            ((cdr cell) (delete-region (max (point-min) (- s seplen)) e))
            ((not (eq cell head)) (delete-region s (min (point-max) (+ e seplen))))
-           (t (delete-region s e)))))
+           (t (delete-region s e)))
+          ;; As in `vui-stream-update-last'
+          (vui--table-restore-header-line)))
       ;; splice NODE's cell out of items-rev, and its id out of ids-rev
       (if (eq cell head)
           (progn

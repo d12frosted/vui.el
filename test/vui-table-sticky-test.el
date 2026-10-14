@@ -613,5 +613,74 @@ its own, \"mine\", for a sticky table to replace."
                     (expect (window-start win) :to-equal (point-min))))))
           (kill-buffer "*sticky-tall*"))))))
 
+(describe "the sticky header line across a stream edit"
+  ;; An edit of a content item rewrites that item in place, without a
+  ;; render of the root, so it has to put back the header line itself
+  ;; when the item had the last sticky table.  The edits run from another
+  ;; buffer, as from a process filter or a timer.
+  (it "puts back the header line when update-last replaces a table item"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'text :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (vui-stream-append stream (vui-sticky--table "S"))
+        (expect header-line-format :not :to-equal "mine")
+        (with-temp-buffer (vui-stream-update-last stream (vui-text "m1")))
+        (expect (buffer-string) :to-equal "m0\nm1\nplain")
+        (expect header-line-format :to-equal "mine")
+        (expect vui--table-saved-header-line :to-be nil)
+        (expect vui--table-sticky-registry :to-be nil))))
+
+  (it "keeps the header line pinned when update-last draws the table again"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'text :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (vui-stream-append stream (vui-sticky--table "S"))
+        (vui-stream-update-last stream (vui-sticky--table "S"))
+        (expect header-line-format :not :to-equal "mine")
+        (expect (vui-sticky--at (vui-sticky--pos-of "s2")) :to-equal "S "))))
+
+  (it "puts back the header line when a node drops its table"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'text :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (let ((node (vui-stream-open stream (vui-sticky--table "S"))))
+          (vui-stream-append stream (vui-text "m2"))
+          (expect header-line-format :not :to-equal "mine")
+          (with-temp-buffer (vui-stream-update node (vui-text "m1")))
+          (expect (buffer-string) :to-equal "m0\nm1\nm2\nplain")
+          (expect header-line-format :to-equal "mine")))))
+
+  (it "puts back the header line when the node with the table is removed"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'text :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (let ((node (vui-stream-open stream (vui-sticky--table "S"))))
+          (vui-stream-append stream (vui-text "m2"))
+          (expect header-line-format :not :to-equal "mine")
+          (with-temp-buffer (vui-stream-remove node))
+          (expect (buffer-string) :to-equal "m0\nm2\nplain")
+          (expect header-line-format :to-equal "mine")))))
+
+  (it "keeps the header line while the root still shows a sticky table"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'table :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (vui-stream-append stream (vui-sticky--table "S"))
+        (vui-stream-update-last stream (vui-text "m1"))
+        (expect header-line-format :not :to-equal "mine")
+        (expect (vui-sticky--at (vui-sticky--pos-of "h2")) :to-equal "H "))))
+
+  (it "keeps the header line when node edits leave the root's sticky table"
+    (let ((stream (vui-make-stream)))
+      (vui-sticky--with-switch inst (:mode 'table :stream stream)
+        (vui-stream-append stream (vui-text "m0"))
+        (let ((node (vui-stream-open stream (vui-sticky--table "S")))
+              (other (vui-stream-open stream (vui-sticky--table "T"))))
+          (vui-stream-update node (vui-text "m1"))
+          (vui-stream-remove other)
+          (expect (buffer-string) :to-match "\\`m0\nm1\nH ")
+          (expect header-line-format :not :to-equal "mine")
+          (expect (vui-sticky--at (vui-sticky--pos-of "h2")) :to-equal "H "))))))
+
 (provide 'vui-table-sticky-test)
 ;;; vui-table-sticky-test.el ends here

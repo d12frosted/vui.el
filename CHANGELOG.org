@@ -38,13 +38,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   had replaced did not come back.
 
 - The header line that a sticky =vui-table= replaced comes back when a
-  re-render leaves no sticky table in the buffer, the same as on
-  unmount. A root that showed a sticky table and then other content
-  kept an empty header line at the top of its windows. This works for
-  a full rebuild, for a patch with =vui-incremental-render= set, for
-  the content after a live =vui-stream=, for a component row of a
-  stream, and for roots mounted with =vui-mount-inline=. While another
-  sticky table is still in the buffer, the header line stays as it is.
+  re-render or an edit of a =vui-stream= item leaves no sticky table in
+  the buffer, the same as on unmount. A root that showed a sticky table
+  and then other content kept an empty header line at the top of its
+  windows. This works for a full rebuild, for a patch with
+  =vui-incremental-render= set, for the content after a live stream,
+  for a component row of a stream, for =vui-stream-update-last=,
+  =vui-stream-update= and =vui-stream-remove=, and for roots mounted
+  with =vui-mount-inline=. While another sticky table is still in the
+  buffer, the header line stays as it is.
 
 - A root component whose render goes from a tree to nil now empties its
   buffer. The old text stayed in the buffer, with its fields and
