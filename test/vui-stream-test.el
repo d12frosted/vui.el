@@ -580,5 +580,291 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '("hi" "b") "x")))
           (vui-st--kill))))))
 
+;;; In an inline mount
+
+(defun vui-st--inline (stream note)
+  "Insert host text into the current buffer and mount `vui-st-app' inline.
+The app shows STREAM and NOTE between the lines HEAD and TAIL.  Return
+the instance."
+  (insert "HEAD\nTAIL\n")
+  (vui-mount-inline (vui-component 'vui-st-app :stream stream :note note) 6))
+
+(defun vui-st--inline-oracle (lines note)
+  "Expected host buffer: the app with LINES and NOTE between HEAD and TAIL."
+  (concat "HEAD\n" (vui-st--oracle lines note) "TAIL\n"))
+
+(vui-defcomponent vui-st-tail (stream)
+  "A line of text with STREAM after it, so the stream ends the tree."
+  :render (vui-vstack (vui-text "top") (vui-stream stream)))
+
+(vui-defcomponent vui-st-chip ()
+  "A small component, for an item that is not plain text."
+  :render (vui-text "[c]"))
+
+(vui-defcomponent vui-st-holder (stream)
+  "A component with STREAM in it, above a line of text."
+  :render (vui-vstack (vui-stream stream) (vui-text "row")))
+
+(describe "vui-stream: in an inline mount"
+  ;; The stream asks for a render of the tree around it when its layout
+  ;; changes (the first item of an empty stream, the last one removed).
+  ;; In a host buffer that is the inline instance, not a buffer root.
+  ;; The stream starts or ends the region of that instance here, so its
+  ;; text must stay inside that region: the next render of the instance
+  ;; rewrites the region, and unmounting deletes it.
+  (it "shows the first item appended to an empty stream"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (vui-stream-append s (vui-text "first"))
+          (expect (buffer-string)
+                  :to-equal (vui-st--inline-oracle '("first") "n"))
+          (vui-stream-append s (vui-text "second"))
+          (expect (buffer-string)
+                  :to-equal (vui-st--inline-oracle '("first" "second") "n"))
+          (vui-unmount inst)))))
+
+  (it "shows the first item when the edit comes from another buffer"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((host (current-buffer))
+              (inst (vui-st--inline s "n")))
+          (with-temp-buffer (vui-stream-append s (vui-text "first")))
+          (expect (with-current-buffer host (buffer-string))
+                  :to-equal (vui-st--inline-oracle '("first") "n"))
+          (vui-unmount inst)))))
+
+  (it "lays out the tree again when the last item is removed"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (let ((node (vui-stream-open s (vui-text "only"))))
+            (expect (buffer-string)
+                    :to-equal (vui-st--inline-oracle '("only") "n"))
+            (vui-stream-remove node))
+          (expect (buffer-string) :to-equal (vui-st--inline-oracle nil "n"))
+          (vui-unmount inst)))))
+
+  (it "renders the inline instance that holds the stream, not another one"
+    (let ((vui-render-delay nil)
+          (a (vui-make-stream))
+          (b (vui-make-stream)))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL\n")
+        (let* ((ia (vui-mount-inline
+                    (vui-component 'vui-st-app :stream a :note "a") 6))
+               (ib (vui-mount-inline
+                    (vui-component 'vui-st-app :stream b :note "b")
+                    (point-max))))
+          (spy-on 'vui--rerender-inline :and-call-through)
+          (vui-stream-append b (vui-text "b0"))
+          (expect 'vui--rerender-inline :not :to-have-been-called-with ia)
+          (expect (buffer-string)
+                  :to-equal (concat "HEAD\nnote: aTAIL\n"
+                                    (vui-st--oracle '("b0") "b")))
+          (spy-calls-reset 'vui--rerender-inline)
+          (vui-stream-append a (vui-text "a0"))
+          (expect 'vui--rerender-inline :not :to-have-been-called-with ib)
+          (expect (buffer-string)
+                  :to-equal (concat "HEAD\n" (vui-st--oracle '("a0") "a")
+                                    "TAIL\n" (vui-st--oracle '("b0") "b")))
+          (vui-unmount ia)
+          (vui-unmount ib)))))
+
+  (it "keeps an update of the first item inside the region"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (let ((node (vui-stream-open s (vui-text "only"))))
+            (vui-stream-update node (vui-text "new"))
+            (expect (buffer-string) :to-equal (vui-st--inline-oracle '("new") "n"))
+            (vui-stream-update node (vui-text ""))
+            (vui-stream-update node (vui-text "back"))
+            (expect (buffer-string) :to-equal (vui-st--inline-oracle '("back") "n")))
+          (vui-rerender inst)
+          (expect (buffer-string) :to-equal (vui-st--inline-oracle '("back") "n"))
+          (vui-unmount inst)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))
+
+  (it "keeps an item put before the first one inside the region"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (vui-stream-before (vui-stream-open s (vui-text "x")) (vui-text "w"))
+          (expect (buffer-string) :to-equal (vui-st--inline-oracle '("w" "x") "n"))
+          (vui-rerender inst)
+          (expect (buffer-string) :to-equal (vui-st--inline-oracle '("w" "x") "n"))
+          (vui-unmount inst)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))
+
+  (it "keeps appends inside the region when the stream ends it"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL\n")
+        (let ((inst (vui-mount-inline (vui-component 'vui-st-tail :stream s) 6)))
+          (vui-stream-append s (vui-text "a"))
+          (vui-stream-append s (vui-text "b"))
+          (vui-stream-update-last s (vui-text "bb"))
+          (expect (buffer-string) :to-equal "HEAD\ntop\na\nbbTAIL\n")
+          (vui-rerender inst)
+          (expect (buffer-string) :to-equal "HEAD\ntop\na\nbbTAIL\n")
+          (vui-unmount inst)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))
+
+  (it "lays out the tree again when its only item is emptied in place"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (vui-stream-append s (vui-text "a"))
+          (vui-stream-update-last s (vui-text ""))
+          (expect (buffer-string) :to-equal (vui-st--inline-oracle nil "n"))
+          (vui-unmount inst)))))
+
+  (it "renders a component appended after an item as a plain child"
+    ;; A stateful row is an inline instance of its own, and one cannot be
+    ;; mounted inside another inline instance
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (vui-stream-append s (vui-text "a"))
+          (expect (vui-stream-append s (vui-component 'vui-st-chip))
+                  :to-be s)
+          (expect (buffer-string)
+                  :to-equal (vui-st--inline-oracle '("a" "[c]") "n"))
+          (vui-unmount inst)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))
+
+  (it "shows the first item of a stream inside a component row"
+    ;; A component row is an inline instance in the buffer of a full mount
+    (let ((vui-render-delay nil)
+          (outer (vui-make-stream))
+          (inner (vui-make-stream)))
+      (unwind-protect
+          (progn
+            (vui-st--mount outer "n")
+            (vui-stream-append outer (vui-text "a"))
+            (vui-stream-append outer (vui-component 'vui-st-holder :stream inner))
+            (expect (vui-st--buffer) :to-equal "a\nrow\nnote: n")
+            (vui-stream-append inner (vui-text "x"))
+            (expect (vui-st--buffer) :to-equal "a\nx\nrow\nnote: n"))
+        (vui-st--kill))))
+
+  (it "keeps each edit at the end of the region inside it"
+    ;; Each edit, then a render and the unmount, which must not find any
+    ;; of the stream's text outside the region
+    (let ((vui-render-delay nil))
+      (dolist (edit (list (lambda (s) (vui-stream-append s (vui-text "b")))
+                          (lambda (s) (vui-stream-open s (vui-text "b")))
+                          (lambda (s) (vui-stream-update-last s (vui-text "z")))
+                          (lambda (s)
+                            (vui-stream-append-to
+                             (car (vui-stream-handle-nodes s)) (vui-text "b")))
+                          (lambda (s)
+                            (vui-stream-after
+                             (car (vui-stream-handle-nodes s)) (vui-text "b")))))
+        (let ((s (vui-make-stream)))
+          (with-temp-buffer
+            (insert "HEAD\nTAIL\n")
+            (let ((inst (vui-mount-inline (vui-component 'vui-st-tail :stream s) 6)))
+              (vui-stream-open s (vui-text "a"))
+              (funcall edit s)
+              (let ((text (buffer-string)))
+                (expect text :not :to-equal "HEAD\ntop\naTAIL\n")
+                (vui-rerender inst)
+                (expect (buffer-string) :to-equal text))
+              (vui-unmount inst)
+              (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))))
+
+  (it "keeps each edit at the start of the region inside it"
+    (let ((vui-render-delay nil))
+      (dolist (edit (list (lambda (node) (vui-stream-update node (vui-text "b")))
+                          (lambda (node) (vui-stream-before node (vui-text "b")))))
+        (let ((s (vui-make-stream)))
+          (with-temp-buffer
+            (let ((inst (vui-st--inline s "n")))
+              (funcall edit (vui-stream-open s (vui-text "a")))
+              (let ((text (buffer-string)))
+                (vui-rerender inst)
+                (expect (buffer-string) :to-equal text))
+              (vui-unmount inst)
+              (expect (buffer-string) :to-equal "HEAD\nTAIL\n")))))))
+
+  (it "leaves the text before the region outside it"
+    ;; Another inline instance mounted right at the start, and text a
+    ;; process put there: neither is the stream's
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let ((inst (vui-st--inline s "n")))
+          (vui-stream-append s (vui-text "a"))
+          (let ((other (vui-mount-inline (vui-component 'vui-st-chip) 6))
+                (inhibit-read-only t))
+            (save-excursion
+              (goto-char (marker-position (vui-instance-region-start inst)))
+              (insert "host "))
+            (vui-stream-append s (vui-text "b"))
+            (vui-rerender inst)
+            (expect (buffer-string)
+                    :to-equal (concat "HEAD\n[c]host "
+                                      (vui-st--oracle '("a" "b") "n") "TAIL\n"))
+            (vui-unmount inst)
+            (expect (buffer-string) :to-equal "HEAD\n[c]host TAIL\n")
+            (vui-unmount other))))))
+
+  (it "does not render a row that a rebuild of its stream erased"
+    ;; The row stays mounted with an empty region, away from its stream
+    (let ((vui-render-delay nil)
+          (outer (vui-make-stream))
+          (inner (vui-make-stream))
+          (inst nil))
+      (unwind-protect
+          (progn
+            (setq inst (vui-mount (vui-component 'vui-st-tail :stream outer)
+                                  "*vui-st*"))
+            (vui-stream-append outer (vui-text "a"))
+            (vui-stream-append outer (vui-component 'vui-st-holder :stream inner))
+            (vui-stream-append inner (vui-text "x"))
+            (vui-rerender inst)
+            (let ((text (vui-st--buffer)))
+              (vui-stream-append inner (vui-text "y"))
+              (expect (vui-st--buffer) :to-equal text)))
+        (vui-st--kill))))
+
+  (it "shows the first item when another inline instance sits right before it"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (with-temp-buffer
+        (let* ((inst (vui-st--inline s "n"))
+               (other (vui-mount-inline (vui-component 'vui-st-chip) 6)))
+          (vui-stream-append s (vui-text "first"))
+          (expect (buffer-string)
+                  :to-equal (concat "HEAD\n[c]" (vui-st--oracle '("first") "n")
+                                    "TAIL\n"))
+          (vui-unmount inst)
+          (vui-unmount other)))))
+
+  (it "renders a component in a stream inside a component row as a plain child"
+    (let ((vui-render-delay nil)
+          (outer (vui-make-stream))
+          (inner (vui-make-stream)))
+      (unwind-protect
+          (progn
+            (vui-st--mount outer "n")
+            (vui-stream-append outer (vui-text "a"))
+            (vui-stream-append outer (vui-component 'vui-st-holder :stream inner))
+            (vui-stream-append inner (vui-text "x"))
+            (expect (vui-stream-append inner (vui-component 'vui-st-chip))
+                    :to-be inner)
+            (expect (vui-st--buffer) :to-equal "a\nx\n[c]\nrow\nnote: n"))
+        (vui-st--kill)))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
