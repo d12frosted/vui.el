@@ -4719,7 +4719,11 @@ header-line machinery on first use, saving the previous
 `header-line-format' so `vui--table-restore-header-line' can put it
 back once no sticky table is left."
   (vui--table-prune-sticky-registry)
-  (push (cons (copy-marker header-pos) (copy-marker end-pos))
+  ;; Text inserted where the header row starts is not the table's: with
+  ;; no border, that is where the table starts, and what comes before
+  ;; it (a line in a fragment, a stream) can be written again there.
+  ;; The header marker moves past it, so it stays on the header row.
+  (push (cons (copy-marker header-pos t) (copy-marker end-pos))
         vui--table-sticky-registry)
   (unless vui--table-saved-header-line
     (setq vui--table-saved-header-line (cons t header-line-format)))

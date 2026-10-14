@@ -28,6 +28,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A sticky =vui-table= with no border keeps pinning its own header when
+  the text right before it is written again: a component before it in
+  a =vui-fragment= that renders again on its own (with
+  =vui-incremental-render= set), an append or an update of a
+  =vui-stream= right before it, or another inline mount right before
+  it that renders again. The header line showed the first line of that
+  text instead, and when the table went away later, the header line it
+  had replaced did not come back.
+
 - The header line that a sticky =vui-table= replaced comes back when a
   re-render leaves no sticky table in the buffer, the same as on
   unmount. A root that showed a sticky table and then other content

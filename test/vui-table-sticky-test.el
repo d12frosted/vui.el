@@ -358,6 +358,25 @@ It renders again only when its props change."
            (vui-component 'vui-sticky--card :key "K" :header "K"
                           :table (and (member "K" tables) t))))
 
+(vui-defcomponent vui-sticky--line (n)
+  "A line of text showing N, with its newline."
+  :render (vui-text (format "line %d\n" n)))
+
+(vui-defcomponent vui-sticky--after-line (n table)
+  "A `vui-sticky--line' showing N, then a card titled H showing TABLE.
+They are in a fragment, so the card starts right where the line ends."
+  :render (vui-fragment
+           (vui-component 'vui-sticky--line :n n)
+           (vui-component 'vui-sticky--card :header "H" :table table)))
+
+(vui-defcomponent vui-sticky--after-stream (stream table)
+  "STREAM, then a sticky table titled T when TABLE, else a line of text.
+They are in a fragment, so the table starts right where the stream ends."
+  :render (vui-fragment (vui-stream stream)
+                        (if table
+                            (vui-sticky--table "T")
+                          (vui-text "plain"))))
+
 (defmacro vui-sticky--with-switch (inst props &rest body)
   "Mount `vui-sticky--switch' with PROPS, run BODY in its buffer, clean up.
 INST is bound to the root instance.  Its buffer gets a header line of
@@ -495,7 +514,71 @@ its own, \"mine\", for a sticky table to replace."
             (vui-sticky--mode inst 'text)
             (setq header-line-format (delete "crumb" header-line-format))
             (expect header-line-format :to-equal "mine")
-            (expect vui--table-saved-header-line :to-be nil))))))
+            (expect vui--table-saved-header-line :to-be nil))))
+
+      (it "pins its own header after the line before it is written again"
+        ;; With the flag on, only the line renders again: its new text is
+        ;; inserted right where the table starts
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil))
+          (let ((inst (vui-mount (vui-component 'vui-sticky--after-line
+                                                :n 1 :table nil)
+                                 "*sticky-after*")))
+            (unwind-protect
+                (with-current-buffer "*sticky-after*"
+                  (vui-rerender inst)
+                  (setq header-line-format "mine")
+                  (vui-update inst '(:n 1 :table t))
+                  (vui-update inst '(:n 22 :table t))
+                  (expect (buffer-string) :to-match "\\`line 22\nH ")
+                  (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
+                          :to-equal "H ")
+                  (vui-update inst '(:n 22 :table nil))
+                  (expect header-line-format :to-equal "mine"))
+              (kill-buffer "*sticky-after*")))))
+
+      (it "pins its own header after the stream before it changes"
+        ;; Stream edits write at the end of the stream, which is where
+        ;; the table starts
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil)
+              (stream (vui-make-stream)))
+          (let ((inst (vui-mount (vui-component 'vui-sticky--after-stream
+                                                :stream stream :table nil)
+                                 "*sticky-after*")))
+            (unwind-protect
+                (with-current-buffer "*sticky-after*"
+                  (setq header-line-format "mine")
+                  (vui-stream-append stream (vui-text "m0\n"))
+                  (vui-update inst (list :stream stream :table t))
+                  (vui-stream-append stream (vui-text "m1\n"))
+                  (vui-stream-update-last stream (vui-text "m1!\n"))
+                  (expect (buffer-string) :to-match "\\`m0\n\nm1!\nT ")
+                  (expect (vui-sticky--at (vui-sticky--pos-of "t2"))
+                          :to-equal "T ")
+                  (vui-update inst (list :stream stream :table nil))
+                  (expect header-line-format :to-equal "mine"))
+              (kill-buffer "*sticky-after*")))))
+
+      (it "pins its own header after the inline mount before it renders again"
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil))
+          (with-temp-buffer
+            (setq header-line-format "mine")
+            (insert "host\n")
+            (let* ((line (vui-mount-inline
+                          (vui-component 'vui-sticky--line :n 1) (point-max)))
+                   (card (vui-mount-inline
+                          (vui-component 'vui-sticky--card :header "H" :table t)
+                          (point-max))))
+              (vui-update line '(:n 333))
+              (expect (buffer-string) :to-match "\\`host\nline 333\nH ")
+              (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
+                      :to-equal "H ")
+              (vui-update card '(:header "H" :table nil))
+              (expect header-line-format :to-equal "mine")
+              (vui-unmount line)
+              (vui-unmount card)))))))
 
   (it "puts back the header line before it restores the window start"
     ;; Text one line taller than the window body under the sticky header
