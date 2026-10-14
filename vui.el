@@ -5654,6 +5654,23 @@ widgets) untouched."
                        (vui-instance-prev-state instance)))
          (vui--instance-contexts-unchanged-p instance))))
 
+(defun vui--component-path-steps (vnode)
+  "Return the render path step of each component child of VNODE.
+VNODE is a container `vui--component-container-p' holds for.  The step
+is what the wholesale render conses onto `vui--render-path' around a
+child: its index among VNODE's children, nil ones counted.  A fragment
+keeps its nil children, so the index can differ from the child's
+position among the components."
+  (let ((idx 0)
+        (steps nil))
+    (dolist (child (cond ((vui-vnode-fragment-p vnode)
+                          (vui-vnode-fragment-children vnode))
+                         ((vui-vnode-vstack-p vnode)
+                          (vui-vnode-vstack-children vnode))))
+      (when child (push idx steps))
+      (setq idx (1+ idx)))
+    (nreverse steps)))
+
 (defun vui--patch-component-list (instance vtree)
   "Patch INSTANCE's buffer (a list of component children) to match VTREE.
 Point starts at the list's beginning.  Walks the new component vnodes
@@ -5662,11 +5679,20 @@ key, skipping those that bail out (leaving their buffer region intact),
 re-rendering changed ones in place, inserting new children, and deleting
 removed ones.  Pushes the resulting child instances onto
 `vui--new-children' in order so the caller's reconcile tail finalizes
-the children list and unmounts whatever was removed."
+the children list and unmounts whatever was removed.
+
+A child renders under the step VTREE gives it in `vui--render-path' (see
+`vui--component-path-steps'), as in a wholesale render: widgets and
+error boundaries are found again by that path.  The buffer still holds
+the list as INSTANCE's render record describes it, and that record is
+where the steps of the last render come from."
   (let* ((sep (vui--incremental-separator vtree))
          (sep-len (length sep))
          (old-children (vui-instance-children instance))
          (new-vnodes (remq nil (vui--incremental-segments vtree)))
+         (steps (vui--component-path-steps vtree))
+         (old-steps (vui--component-path-steps
+                     (plist-get (vui-instance-render-record instance) :vnode)))
          (i 0))
     (goto-char (point-min))
     (dolist (vnode new-vnodes)
@@ -5685,6 +5711,8 @@ the children list and unmounts whatever was removed."
                                         (vui-instance-vnode old-at-i)))))
              (old-seg-len (+ (if (> i 0) sep-len 0)
                              (if old-at-i (or (vui-instance-r-len old-at-i) 0) 0)))
+             (step (pop steps))
+             (old-step (pop old-steps))
              (chosen (cond
                       (same-pos old-at-i)
                       ;; key match elsewhere: reuse the instance (preserve
@@ -5703,7 +5731,11 @@ the children list and unmounts whatever was removed."
             (progn (setf (vui-instance-props chosen) props-wc)
                    (setf (vui-instance-vnode chosen) vnode))
           (setq chosen (vui--create-instance vnode instance)))
-        (if (and same-pos (vui--instance-may-bail-p chosen))
+        (if (and same-pos
+                 ;; what stays in place keeps the paths of its last
+                 ;; render, which are right only under the same step
+                 (eql step old-step)
+                 (vui--instance-may-bail-p chosen))
             ;; bail: leave separator+content in place, advance past it
             (forward-char old-seg-len)
           ;; render the chosen instance here, replacing what was at i
@@ -5713,7 +5745,8 @@ the children list and unmounts whatever was removed."
               (vui--remove-widget-overlays p (+ p old-seg-len))
               (delete-region p (+ p old-seg-len)))
             (when (> i 0) (insert sep))
-            (let ((s (point)))
+            (let ((s (point))
+                  (vui--render-path (cons step vui--render-path)))
               (vui--render-instance chosen)
               (setf (vui-instance-r-len chosen) (- (point) s)))))
         (push chosen vui--new-children))

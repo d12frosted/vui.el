@@ -28,6 +28,25 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- With =vui-incremental-render= set, a component of a list that is
+  patched in place has the same place in the tree as in a full render.
+  A root whose tree is a flat list of components (a =vui-vstack= or
+  =vui-fragment= of =vui-component= children) skips the components that
+  use =:memo= or =:should-update= and did not change, and renders the
+  others again. Those were rendered without the step their container
+  adds to the path, so their widgets got other paths than a full render
+  gives them. Point is put back on its widget by that path: with the
+  same button on every card, point on the last card jumped to the first
+  one. The same place is the identity of a =vui-error-boundary= without
+  an =:id=, so a boundary forgot its caught error (the failing child ran
+  once more and =:on-error= was called a second time), and the
+  boundaries at the same place in two cards shared one error: a card
+  that was fine showed its fallback. The step is the index among the
+  container's children, nil children of a fragment counted, so it can
+  differ from the position among the components. A component that could
+  skip its update is rendered again when that index changed, because
+  what it left in the buffer has the old paths.
+
 - A re-render that rewrites a =vui-stream= no longer moves the cursor to
   the first item. A render that cannot patch around a stream (content
   before the stream, for example) rewrites its text, and point is put

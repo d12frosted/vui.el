@@ -21,6 +21,16 @@
   "Return the wholesale-rendered string of VNODE."
   (with-temp-buffer (vui--render-vnode vnode) (buffer-string)))
 
+(defun vui-inc--paths ()
+  "Return the render path of every widget in the current buffer, in order."
+  (mapcar (lambda (widget) (vui--elt-get widget :vui-path))
+          (vui--collect-widgets)))
+
+(defun vui-inc--tag-at-point ()
+  "Return the label of the widget at point, or nil when there is none."
+  (when-let* ((elt (vui--elt-at (point))))
+    (vui--elt-get elt :vui-tag)))
+
 (describe "incremental rendering parity"
   (it "matches wholesale output across update / append / truncate"
     (let ((vui-incremental-render t)
@@ -265,7 +275,137 @@
               (vui-update inst '(:order ("c" "b" "a")))
               ;; a kept its state and moved to the end
               (expect (buffer-string) :to-equal "[c:0]\n[b:0]\n[a:5]"))
-          (kill-buffer "*inc-cl3*"))))))
+          (kill-buffer "*inc-cl3*")))))
+
+  (it "keeps point and a caught error on a patched component"
+    ;; A widget and a `vui-error-boundary' without :id are found again by
+    ;; their render path, so a patched component has to render under the
+    ;; step its container gives it in a wholesale render.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (errors nil))
+      (vui-defcomponent inc-cl-card (name fail)
+        :render (vui-hstack
+                 (vui-text (format "card %s" name))
+                 (vui-button "open")
+                 (when fail
+                   (vui-error-boundary
+                    :fallback (lambda (_e) (vui-text "FALLBACK"))
+                    :on-error (lambda (_e) (push name errors))
+                    :children (list 'boom)))))
+      (vui-defcomponent inc-cl-cards (tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cl-card :name (format "A%s" tick))
+                 (vui-component 'inc-cl-card :name (format "B%s" tick) :fail t)
+                 (vui-component 'inc-cl-card :name (format "C%s" tick))))
+      (let ((inst (vui-mount (vui-component 'inc-cl-cards :tick 0)
+                             "*inc-cl-path*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cl-path*"
+              ;; Point on the [open] button of card C.
+              (goto-char (point-max))
+              (search-backward "[open]")
+              ;; The first re-render is wholesale and records the list,
+              ;; the second one patches it.
+              (vui-update inst (list :tick 1))
+              (expect (plist-get (vui-instance-render-record inst) :kind)
+                      :to-be 'components)
+              (vui-update inst (list :tick 2))
+              (expect (buffer-string)
+                      :to-equal (concat "card A2 [open]\n"
+                                        "card B2 [open] FALLBACK\n"
+                                        "card C2 [open]"))
+              (expect (vui-inc--tag-at-point) :to-equal "open")
+              (expect (line-number-at-pos) :to-equal 3)
+              ;; The boundary of card B still holds its error.
+              (expect errors :to-equal '("B0")))
+          (kill-buffer "*inc-cl-path*")))))
+
+  (it "gives widgets the paths of a wholesale render"
+    ;; The step is the index among the container's children, nil ones
+    ;; counted, and a fragment keeps its nil children.  A child that
+    ;; bails out keeps the paths of its last render, so it may bail only
+    ;; while its index stays the same.
+    (let ((vui-render-delay nil)
+          (shapes '((nil a b c)         ; mount
+                    (nil a b c)         ; wholesale, records the list
+                    (nil a b c)         ; patched, index is not position
+                    (a nil b c)         ; a moves up, b and c stay
+                    (a b nil c)         ; b moves up
+                    (a b c)             ; c moves up
+                    (b a c)             ; reorder by key
+                    (a nil nil c)       ; b is gone
+                    (a nil b c))))      ; b is back: a new instance
+      (vui-defcomponent inc-cl-row (id)
+        :memo t
+        :render (vui-hstack (vui-text (format "row %s" id))
+                            (vui-button "open")))
+      (vui-defcomponent inc-cl-rows (shape)
+        :render (apply #'vui-fragment
+                       (mapcar (lambda (id)
+                                 (and id (vui-component 'inc-cl-row
+                                           :key id :id id)))
+                               shape)))
+      (cl-flet ((render-all (flag)
+                  ;; The buffer text and widget paths after each shape.
+                  (let* ((vui-incremental-render flag)
+                         (inst (vui-mount (vui-component 'inc-cl-rows
+                                            :shape (car shapes))
+                                          "*inc-cl-steps*")))
+                    (unwind-protect
+                        (with-current-buffer "*inc-cl-steps*"
+                          (mapcar (lambda (shape)
+                                    (vui-update inst (list :shape shape))
+                                    (cons (buffer-substring-no-properties
+                                           (point-min) (point-max))
+                                          (vui-inc--paths)))
+                                  (cdr shapes)))
+                      (kill-buffer "*inc-cl-steps*")))))
+        (let ((wholesale (render-all nil)))
+          ;; Shape (a b nil c): rows a, b and c are children 0, 1 and 3.
+          (expect (cdr (nth 3 wholesale)) :to-equal '((0 1) (1 1) (3 1)))
+          (expect (render-all t) :to-equal wholesale)))))
+
+  (it "rewrites a child that bails out only when its index changed"
+    ;; Counterpart of the spec above: a child whose index is the same
+    ;; still bails out, and its text stays in the buffer.  A text
+    ;; property put on the rows tells which of them were rewritten.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-cl-kept (id)
+        :memo t
+        :render (vui-hstack (vui-text (format "row %s" id))
+                            (vui-button "open")))
+      (vui-defcomponent inc-cl-kept-rows (shape)
+        :render (apply #'vui-fragment
+                       (mapcar (lambda (id)
+                                 (and id (vui-component 'inc-cl-kept
+                                           :key id :id id)))
+                               shape)))
+      (let ((inst (vui-mount (vui-component 'inc-cl-kept-rows
+                               :shape '(nil a b))
+                             "*inc-cl-kept*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cl-kept*"
+              (cl-flet ((kept-p (text)
+                          (save-excursion
+                            (goto-char (point-min))
+                            (search-forward text)
+                            (get-text-property (match-beginning 0)
+                                               'inc-kept))))
+                (vui-update inst (list :shape '(nil a b)))
+                (with-silent-modifications
+                  (put-text-property (point-min) (point-max) 'inc-kept t))
+                ;; Same indexes: both rows stay.
+                (vui-update inst (list :shape '(nil a b)))
+                (expect (kept-p "row a") :to-be-truthy)
+                (expect (kept-p "row b") :to-be-truthy)
+                ;; Row a moves from index 1 to 0, row b stays at 2.
+                (vui-update inst (list :shape '(a nil b)))
+                (expect (kept-p "row a") :not :to-be-truthy)
+                (expect (kept-p "row b") :to-be-truthy)
+                (expect (vui-inc--paths) :to-equal '((0 1) (2 1)))))
+          (kill-buffer "*inc-cl-kept*"))))))
 
 (describe "incremental rendering falls back for ineligible trees"
   (it "renders an indented vstack correctly (wholesale fallback)"
