@@ -28,6 +28,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- With =vui-incremental-render= set, the fields next to a component that
+  is rendered again in a patched list keep their text. The patch deletes
+  the old text of that component and inserts the new text in its place,
+  and the fields on both sides took it in. A =vui-field= at the end of
+  the component before grew over the new text: its value took in the
+  text of the next component, and the next patch deleted the field. A field
+  at the start of the component after (in a =vui-fragment=, where
+  nothing separates the components) grew over the new text from its
+  start, its placeholder covered that text, and the field was forgotten,
+  so =vui-field-value= did not find it any more. Now what ends where the
+  new text starts, or starts where it ends, is put back around it.
+
 - With =vui-incremental-render= set, a component of a list that is
   patched in place has the same place in the tree as in a full render.
   A root whose tree is a flat list of components (a =vui-vstack= or

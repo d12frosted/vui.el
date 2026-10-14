@@ -405,7 +405,105 @@
                 (expect (kept-p "row a") :not :to-be-truthy)
                 (expect (kept-p "row b") :to-be-truthy)
                 (expect (vui-inc--paths) :to-equal '((0 1) (2 1)))))
-          (kill-buffer "*inc-cl-kept*"))))))
+          (kill-buffer "*inc-cl-kept*")))))
+
+  (it "leaves the fields around a rewritten child alone"
+    ;; A field that ends where a rewritten child starts must not take in
+    ;; its text, and a field that starts where it ends must not take it
+    ;; in or be forgotten, nor must its placeholder.  Rows of a fragment
+    ;; have no separator between them.
+    (let ((vui-render-delay nil)
+          (steps '((:shape (nil a b))
+                   (:shape (nil a b))                ; records the list
+                   (:shape (a nil b))                ; a rewritten, b kept
+                   (:shape (a b))                    ; b rewritten
+                   (:shape (a b) :label "changed"))))  ; b rewritten
+      (vui-defcomponent inc-cl-form (id label)
+        :memo t
+        :render (vui-hstack (vui-field :value "" :size 3
+                                       :placeholder (format "%s?" id))
+                            (vui-text (or label "row"))
+                            (vui-field :value (format ">%s" id) :size 3)))
+      (vui-defcomponent inc-cl-forms (shape label)
+        :render (apply #'vui-fragment
+                       (mapcar (lambda (id)
+                                 (and id (vui-component 'inc-cl-form
+                                           :key id :id id
+                                           :label (and (eq id 'b) label))))
+                               shape)))
+      (cl-flet ((render-all (flag)
+                  ;; The value and bounds of every known field after each
+                  ;; step, in buffer order (a dead field has no bounds),
+                  ;; and the bounds of the placeholders.
+                  (let* ((vui-incremental-render flag)
+                         (inst (vui-mount (vui-component 'inc-cl-forms
+                                            :shape '(nil a b))
+                                          "*inc-cl-forms*")))
+                    (unwind-protect
+                        (with-current-buffer "*inc-cl-forms*"
+                          (mapcar
+                           (lambda (props)
+                             (vui-update inst props)
+                             (list
+                              (sort (mapcar (lambda (w)
+                                              (list (widget-value w)
+                                                    (widget-field-start w)
+                                                    (widget-field-end w)))
+                                            widget-field-list)
+                                    (lambda (x y)
+                                      (< (or (nth 1 x) 0) (or (nth 1 y) 0))))
+                              (sort (mapcar (lambda (ov)
+                                              (list (overlay-start ov)
+                                                    (overlay-end ov)))
+                                            (seq-filter
+                                             (lambda (ov)
+                                               (overlay-get ov 'vui-placeholder))
+                                             (overlays-in (point-min)
+                                                          (point-max))))
+                                    #'car-less-than-car)))
+                           (cdr steps)))
+                      (kill-buffer "*inc-cl-forms*")))))
+        (let ((wholesale (render-all nil)))
+          (expect (car (last wholesale))
+                  :to-equal '((("" 1 4) (">a" 9 12) ("" 12 15) (">b" 24 27))
+                              ((1 4) (12 15))))
+          (expect (render-all t) :to-equal wholesale)))))
+
+  (it "keeps an empty overlay at the edge of a rewritten child empty"
+    ;; An empty overlay is a mark at one position (another package's,
+    ;; or the line highlight of `hl-line-mode' on an empty last line).
+    ;; One where a rewritten or an appended child ends stays after it.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil))
+      (vui-defcomponent inc-cl-mark-row (id label)
+        :memo t
+        :render (vui-text (format "[%s %s]" id label)))
+      (vui-defcomponent inc-cl-mark-rows (ids label)
+        :render (apply #'vui-fragment
+                       (mapcar (lambda (id)
+                                 (vui-component 'inc-cl-mark-row
+                                   :key id :id id
+                                   :label (if (eq id 'b) label "x")))
+                               ids)))
+      (let ((inst (vui-mount (vui-component 'inc-cl-mark-rows
+                               :ids '(a b c) :label "x")
+                             "*inc-cl-mark*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cl-mark*"
+              (vui-update inst '(:ids (a b c) :label "x"))
+              (let ((mark (make-overlay 11 11))
+                    (end-mark (make-overlay (point-max) (point-max))))
+                (expect (buffer-substring 11 (point-max)) :to-equal "[c x]")
+                ;; Row b is rewritten longer.
+                (vui-update inst '(:ids (a b c) :label "longer"))
+                (expect (buffer-string) :to-equal "[a x][b longer][c x]")
+                (expect (list (overlay-start mark) (overlay-end mark))
+                        :to-equal '(16 16))
+                ;; Row d is appended after the end mark.
+                (vui-update inst '(:ids (a b c d) :label "longer"))
+                (expect (list (overlay-start end-mark) (overlay-end end-mark))
+                        :to-equal (list (point-max) (point-max)))))
+          (kill-buffer "*inc-cl-mark*"))))))
 
 (describe "incremental rendering falls back for ineligible trees"
   (it "renders an indented vstack correctly (wholesale fallback)"

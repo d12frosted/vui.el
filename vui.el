@@ -5739,16 +5739,36 @@ where the steps of the last render come from."
             ;; bail: leave separator+content in place, advance past it
             (forward-char old-seg-len)
           ;; render the chosen instance here, replacing what was at i
-          (let ((p (point)))
+          (let* ((p (point))
+                 (end (if old-at-i (+ p old-seg-len) p))
+                 ;; Overlays of the children around this one: those that
+                 ;; end at P and those that start at END.  They would take
+                 ;; in the text inserted here (a field's overlay advances
+                 ;; at its end, and an overlay takes in text inserted at
+                 ;; its start), so they are put back around it below.
+                 (before (seq-filter (lambda (ov) (= (overlay-end ov) p))
+                                     (overlays-in (max (point-min) (1- p)) p)))
+                 (after (seq-filter (lambda (ov) (= (overlay-start ov) end))
+                                    (overlays-in end (min (point-max)
+                                                          (1+ end))))))
             (when (and old-at-i (> old-seg-len 0))
-              (vui--forget-region-fields p (+ p old-seg-len))
-              (vui--remove-widget-overlays p (+ p old-seg-len))
-              (delete-region p (+ p old-seg-len)))
+              ;; a field at END is the next child's, and the bounds of
+              ;; `vui--forget-region-fields' are inclusive
+              (vui--forget-region-fields p (1- end))
+              (vui--remove-widget-overlays p end)
+              (delete-region p end))
             (when (> i 0) (insert sep))
             (let ((s (point))
                   (vui--render-path (cons step vui--render-path)))
               (vui--render-instance chosen)
-              (setf (vui-instance-r-len chosen) (- (point) s)))))
+              (setf (vui-instance-r-len chosen) (- (point) s)))
+            (dolist (ov before)
+              (when (overlay-buffer ov)
+                (move-overlay ov (overlay-start ov) p)))
+            (dolist (ov after)
+              (when (overlay-buffer ov)
+                ;; an empty one stayed at P, before the new text
+                (move-overlay ov (point) (max (point) (overlay-end ov)))))))
         (push chosen vui--new-children))
       (setq i (1+ i)))
     ;; delete the buffer regions of any leftover (removed) old children;
