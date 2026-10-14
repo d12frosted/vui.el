@@ -3838,10 +3838,11 @@ INSTANCE is the component instance."
   "Render a component INSTANCE into the current buffer.
 When COMMIT-FN is non-nil it is called with the computed vtree to write
 it to the buffer, instead of the default `vui--render-vnode'.  This lets
-the root re-render commit incrementally (see `vui--commit-root').  When
-COMMIT-FN returns `unchanged' it left the buffer as it was and rendered
-nothing, so INSTANCE keeps its children and the record of the contexts
-its subtree read."
+the root re-render commit incrementally (see `vui--commit-root').
+COMMIT-FN is called with a nil vtree too, so it can clear what the last
+commit wrote.  When COMMIT-FN returns `unchanged' it left the buffer as
+it was and rendered nothing, so INSTANCE keeps its children and the
+record of the contexts its subtree read."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
@@ -3886,7 +3887,9 @@ its subtree read."
                   (vui--debug-log 'render "<%s> skipped (should-update=nil)"
                                   component-name)
                   (vui-instance-cached-vtree instance))))
-    (when vtree
+    ;; A commit function owns what its last commit wrote, so it gets a
+    ;; nil VTREE as well, to remove that text
+    (when (or vtree commit-fn)
       ;; Child components in VTREE render here, inside this commit
       (vui--with-timing 'commit component-name
         (if commit-fn
@@ -5807,12 +5810,27 @@ Requires a record for the same container kind and separator as VTREE."
   "Commit the root VTREE into the current buffer.
 Patches incrementally when `vui-incremental-render' is on and VTREE is
 an eligible flat content container; otherwise erases and rebuilds.
-Maintains the instance's render record either way.  Used as the commit
-function of the root `vui--render-instance' call.  Return `unchanged'
-when the buffer already matches VTREE and nothing was rendered."
+Maintains the instance's render record either way.  A nil VTREE empties
+the buffer.  Used as the commit function of the root
+`vui--render-instance' call.  Return `unchanged' when the buffer
+already matches VTREE and nothing was rendered."
   (let* ((instance vui--current-instance)
          (record (vui-instance-render-record instance)))
     (cond
+     ;; Nothing to show: remove what the last commit wrote, the way the
+     ;; wholesale rebuild below does.  Drop the record as well, so the
+     ;; next tree is built from the empty buffer instead of patched
+     ;; against text that is gone (or skipped when it is the same tree).
+     ;; A sticky table went with the text too, so its header line goes
+     ;; back to what it replaced, as on unmount.  Returns nil, not
+     ;; `unchanged': the children went with the text, so
+     ;; `vui--render-instance' unmounts them.
+     ((null vtree)
+      (setq widget-field-list nil widget-field-new nil)
+      (vui--remove-widget-overlays)
+      (erase-buffer)
+      (vui--table-restore-header-line)
+      (setf (vui-instance-render-record instance) nil))
      ;; Whole-tree identity unchanged: the same vtree object as last
      ;; commit (what should-update=nil and memoization produce) means
      ;; the buffer already matches - skip everything (O(1)).  This is

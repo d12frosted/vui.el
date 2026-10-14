@@ -1684,5 +1684,221 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
         (when inst (vui-unmount inst))
         (kill-buffer buf)))))
 
+;;; A root that renders nothing
+
+(defvar vui-rr-gone nil
+  "Ids of the `vui-rr-gone-row' instances unmounted so far.")
+
+(vui-defcomponent vui-rr-gone-row (id)
+  "A line showing ID that records its unmount in `vui-rr-gone'."
+  :on-unmount (push id vui-rr-gone)
+  :render (vui-text (format "row %s" id)))
+
+(vui-defcomponent vui-rr-maybe (show tree)
+  "The vtree TREE returns when SHOW, and nothing otherwise.
+TREE is a function of no arguments, called on each render that shows it."
+  :render (when show (funcall tree)))
+
+(defmacro vui-rr--with-maybe (inst tree &rest body)
+  "Mount `vui-rr-maybe' showing TREE, run BODY in its buffer, clean up.
+INST is bound to the root instance; BODY shows and hides the tree with
+`vui-rr--show'.  The root is rendered once more before BODY: the mount
+leaves no render record, the first re-render writes one."
+  (declare (indent 2))
+  `(let* ((vui-render-delay nil)
+          (vui-rr-gone nil)
+          (,inst (vui-mount (vui-component 'vui-rr-maybe :show t :tree ,tree)
+                            "*rr-maybe*")))
+     (unwind-protect
+         (with-current-buffer "*rr-maybe*"
+           (vui-rerender ,inst)
+           ,@body)
+       (kill-buffer "*rr-maybe*"))))
+
+(defun vui-rr--show (inst show)
+  "Re-render INST, a `vui-rr-maybe' root, with SHOW and the same tree."
+  (vui-update inst (list :show show
+                         :tree (plist-get (vui-instance-props inst) :tree))))
+
+(defun vui-rr--widget-overlays ()
+  "Return the overlays of widgets and placeholders in the current buffer."
+  (seq-filter (lambda (ov)
+                (or (overlay-get ov 'button) (overlay-get ov 'widget)
+                    (overlay-get ov 'field) (overlay-get ov 'vui-placeholder)))
+              (overlays-in (point-min) (point-max))))
+
+(defun vui-rr--rows (&rest ids)
+  "Return a vstack of keyed `vui-rr-gone-row' components, one per id in IDS."
+  (apply #'vui-vstack
+         (mapcar (lambda (id) (vui-component 'vui-rr-gone-row :key id :id id))
+                 ids)))
+
+(describe "a root that renders nothing"
+  ;; The root commit owns the whole buffer, so it has to clear what the
+  ;; last render wrote when the new tree is nil.  With
+  ;; `vui-incremental-render' on, the shapes below leave each kind of
+  ;; render record behind (wholesale, content, components, stream-tail),
+  ;; and the next tree must be built from an empty buffer, not patched
+  ;; against text that is gone.
+  (dolist (flag '(nil t))
+    (describe (format "with `vui-incremental-render' %s" flag)
+      (it "empties the buffer"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda () (vui-text "hello"))
+            (expect (vui-instance-render-record inst) :not :to-be nil)
+            (vui-rr--show inst nil)
+            (expect (buffer-string) :to-equal "")
+            (expect (vui-instance-render-record inst) :to-be nil))))
+
+      (it "empties the buffer of a list of text"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda () (vui-vstack (vui-text "a")
+                                                          (vui-text "b")))
+            (vui-rr--show inst nil)
+            (expect (buffer-string) :to-equal ""))))
+
+      (it "removes the text of its child components and unmounts them"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda () (vui-rr--rows "a" "b"))
+            (expect (buffer-string) :to-equal "row a\nrow b")
+            (vui-rr--show inst nil)
+            (expect (buffer-string) :to-equal "")
+            (expect (sort (copy-sequence vui-rr-gone) #'string<)
+                    :to-equal '("a" "b"))
+            (expect (vui-instance-children inst) :to-be nil))))
+
+      (it "forgets its fields and removes the overlays of its widgets"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda ()
+                                     (vui-vstack
+                                      (vui-field :key 'name :value "x" :size 4)
+                                      (vui-field :key 'note :value ""
+                                                 :placeholder "note" :size 6)
+                                      (vui-button "go")))
+            (expect (vui-field-value 'name) :to-equal "x")
+            (expect (vui-rr--widget-overlays) :not :to-be nil)
+            ;; point is on a widget that goes away; the render must not
+            ;; signal
+            (goto-char (vui-rr--button-pos "go"))
+            (vui-rr--show inst nil)
+            (expect (buffer-string) :to-equal "")
+            (expect widget-field-list :to-be nil)
+            (expect (vui-field-value 'name) :to-be nil)
+            (expect (vui-rr--widget-overlays) :to-be nil))))
+
+      (it "puts back the header line its sticky table replaced"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda ()
+                                     (vui-table :sticky-header t
+                                                :columns '((:header "H"))
+                                                :rows '(("x") ("y"))))
+            (expect header-line-format :not :to-be nil)
+            (vui-rr--show inst nil)
+            (expect header-line-format :to-be nil)
+            ;; a header line of its own, which the table replaces and
+            ;; which is not nil, so putting it back is not clearing it
+            (setq header-line-format "mine")
+            (vui-rr--show inst t)
+            (expect header-line-format :not :to-equal "mine")
+            (vui-rr--show inst nil)
+            (expect header-line-format :to-equal "mine")
+            (expect vui--table-saved-header-line :to-be nil))))
+
+      (it "builds the tree it shows again from an empty buffer"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda () (vui-vstack (vui-text "a")
+                                                          (vui-text "b")))
+            (vui-rr--show inst nil)
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "a\nb")
+            ;; and renders the next tree from there (a patch with the flag on)
+            (vui-update inst (list :show t
+                                   :tree (lambda () (vui-vstack (vui-text "a")
+                                                                (vui-text "c")))))
+            (expect (buffer-string) :to-equal "a\nc"))))
+
+      (it "shows the same tree object again after showing nothing"
+        ;; The tree it shows again is `eq' to the one of the last commit
+        ;; that wrote text, which a stale record takes for a tree the
+        ;; buffer already shows.
+        (let ((vui-incremental-render flag)
+              (tree (vui-vstack (vui-text "a") (vui-text "b"))))
+          (vui-rr--with-maybe inst (lambda () tree)
+            (vui-rr--show inst nil)
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "a\nb"))))
+
+      (it "mounts its child components again with their text"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda () (vui-rr--rows "a" "b"))
+            (vui-rr--show inst nil)
+            (setq vui-rr-gone nil)
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "row a\nrow b")
+            (expect (length (vui-instance-children inst)) :to-equal 2)
+            ;; the next render of the list finds the components where they are
+            (vui-update inst (list :show t
+                                   :tree (lambda () (vui-rr--rows "a" "c"))))
+            (expect (buffer-string) :to-equal "row a\nrow c")
+            (expect vui-rr-gone :to-equal '("b")))))
+
+      (it "brings back its fields, which take edits again"
+        (let ((vui-incremental-render flag))
+          (vui-rr--with-maybe inst (lambda ()
+                                     (vui-vstack
+                                      (vui-text "top")
+                                      (vui-field :key 'name :value "x" :size 4)))
+            (vui-rr--show inst nil)
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "top\nx   ")
+            (expect (length widget-field-list) :to-equal 1)
+            (goto-char (point-max))
+            (search-backward "x")
+            (forward-char 1)
+            (insert "y")
+            (expect (vui-field-value 'name) :to-equal "xy"))))
+
+      (it "brings back a stream with the items appended while it showed nothing"
+        (let* ((vui-incremental-render flag)
+               (stream (vui-make-stream))
+               (tree (lambda () (vui-vstack (vui-stream stream)
+                                            (vui-text "status")))))
+          (vui-rr--with-maybe inst tree
+            (vui-stream-append stream (vui-text "m0"))
+            (vui-stream-append stream (vui-text "m1"))
+            ;; the next render patches around the live stream
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "m0\nm1\nstatus")
+            (vui-rr--show inst nil)
+            (expect (buffer-string) :to-equal "")
+            (vui-stream-append stream (vui-text "m2"))
+            (expect (buffer-string) :to-equal "")
+            (vui-rr--show inst t)
+            (expect (buffer-string) :to-equal "m0\nm1\nm2\nstatus")
+            (vui-stream-append stream (vui-text "m3"))
+            (expect (buffer-string) :to-equal "m0\nm1\nm2\nm3\nstatus"))))))
+
+  (it "empties its region when it is mounted inline"
+    ;; An inline root deletes its region before every render, so it did
+    ;; not depend on the root commit for this.
+    (let ((vui-render-delay nil)
+          (vui-rr-gone nil))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL\n")
+        (let ((inst (vui-mount-inline
+                     (vui-component
+                      'vui-rr-maybe :show t
+                      :tree (lambda ()
+                              (vui-vstack
+                               (vui-field :key 'name :value "x" :size 4)
+                               (vui-rr--rows "a"))))
+                     6)))
+          (expect (buffer-string) :to-equal "HEAD\nx   \nrow aTAIL\n")
+          (vui-rr--show inst nil)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL\n")
+          (expect widget-field-list :to-be nil)
+          (expect vui-rr-gone :to-equal '("a"))
+          (vui-unmount inst))))))
+
 (provide 'vui-rerender-test)
 ;;; vui-rerender-test.el ends here

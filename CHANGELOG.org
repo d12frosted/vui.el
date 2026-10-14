@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A root component whose render goes from a tree to nil now empties its
+  buffer. The old text stayed in the buffer, with its fields and
+  buttons, and so did the text of its child components, which were
+  unmounted all the same. With =vui-incremental-render= set, a root
+  that then showed a list of components again put the new list in
+  front of the old text. Now the buffer is erased, its fields are
+  forgotten, the header line that a sticky table replaced comes back,
+  and the next tree is built from the empty buffer. Roots mounted with
+  =vui-mount-inline= were not affected.
+
 - A root component keeps its component children when a re-render gives
   the same tree as last time: its =:should-update= (or =:memo=) says
   nothing changed, or its render returns the same tree object (for
