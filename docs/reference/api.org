@@ -858,7 +858,8 @@ re-renders that change widths are picked up automatically. Evaluation
 is per window: two windows on the same buffer scrolled to different
 tables each pin their own header. Unmounting the tree (or mounting
 another one over the buffer) restores whatever =header-line-format=
-was there before.
+was there before, and so does a re-render that leaves no sticky table
+in the buffer.
 
 Faces: the pinned copy keeps =vui-table-header= (or =:header-face=)
 and =vui-table-border= (or =:border-face=), drawn on top of the
@@ -874,10 +875,10 @@ Limitations:
   =vui-backward=) and buttons cannot reach it; a vnode header signals
   an error when =:sticky-header= is on. (The in-buffer header row is
   plain text anyway, so nothing is lost.)
-- While any sticky table is mounted, the header line is reserved: it
-  shows an empty line when no table is pinned, rather than appearing
-  and disappearing as you scroll (which would make the window content
-  jump by a line).
+- While any sticky table is in the buffer, the header line is
+  reserved: it shows an empty line when no table is pinned, rather
+  than appearing and disappearing as you scroll (which would make the
+  window content jump by a line).
 
 See =docs/examples/16-sticky-table.el= for a runnable demo: a long
 filterable table with widgets before and after it.

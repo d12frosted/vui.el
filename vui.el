@@ -1451,8 +1451,9 @@ Table properties:
                      Windows outside the table pin nothing, and each
                      sticky table pins its own header as the window
                      moves through it.  Requires plain string headers.
-                     The previous `header-line-format' is restored on
-                     unmount.
+                     The previous `header-line-format' is restored once
+                     no sticky table is left: on unmount, or when a
+                     re-render shows none.
   :header-face FACE  - face for header cells (default `vui-table-header')
   :border-face FACE  - face for border characters (default `vui-table-border')
   :key KEY           - for reconciliation
@@ -3103,6 +3104,9 @@ ephemeral chrome, not document content."
                   ;; it back at the region's beginning
                   (set-marker start pos)
                   (set-marker end (point))
+                  ;; The header line of a sticky table that is gone, as
+                  ;; in `vui--rerender-buffer'
+                  (vui--table-restore-header-line)
                   (widget-setup)
                   (vui--setup-field-placeholders))
                 (when saved-point
@@ -3151,6 +3155,12 @@ ephemeral chrome, not document content."
                 ;; `vui--commit-root' erases and rebuilds, or patches in
                 ;; place when incremental rendering is eligible.
                 (vui--render-instance instance #'vui--commit-root)
+                ;; A sticky table the render did not draw again leaves the
+                ;; header line it installed; put back what that replaced
+                ;; once no sticky table is left (it was erased or patched
+                ;; away).  Before the windows are restored: their height
+                ;; depends on the header line.
+                (vui--table-restore-header-line)
                 (widget-setup)
                 (vui--setup-field-placeholders)
                 ;; Restore the cursor position
@@ -4706,7 +4716,8 @@ garbage collection, not behavior."
   "Register a sticky table spanning up to END-POS in the current buffer.
 HEADER-POS is where its in-buffer header row starts.  Installs the
 header-line machinery on first use, saving the previous
-`header-line-format' so unmounting can restore it."
+`header-line-format' so `vui--table-restore-header-line' can put it
+back once no sticky table is left."
   (vui--table-prune-sticky-registry)
   (push (cons (copy-marker header-pos) (copy-marker end-pos))
         vui--table-sticky-registry)
@@ -5821,15 +5832,12 @@ already matches VTREE and nothing was rendered."
      ;; wholesale rebuild below does.  Drop the record as well, so the
      ;; next tree is built from the empty buffer instead of patched
      ;; against text that is gone (or skipped when it is the same tree).
-     ;; A sticky table went with the text too, so its header line goes
-     ;; back to what it replaced, as on unmount.  Returns nil, not
-     ;; `unchanged': the children went with the text, so
-     ;; `vui--render-instance' unmounts them.
+     ;; Returns nil, not `unchanged': the children went with the text,
+     ;; so `vui--render-instance' unmounts them.
      ((null vtree)
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
       (erase-buffer)
-      (vui--table-restore-header-line)
       (setf (vui-instance-render-record instance) nil))
      ;; Whole-tree identity unchanged: the same vtree object as last
      ;; commit (what should-update=nil and memoization produce) means

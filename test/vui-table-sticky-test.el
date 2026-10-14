@@ -314,5 +314,221 @@
       (expect (length vui--table-sticky-registry) :to-equal 1)
       (expect (vui-sticky--at (vui-sticky--pos-of "1")) :to-equal "A  "))))
 
+;;; The header line across a re-render
+
+(defun vui-sticky--table (header)
+  "Return a sticky table with one column titled HEADER and three rows."
+  (vui-table :sticky-header t
+             :columns (list (list :header header))
+             :rows (list (list (concat (downcase header) "1"))
+                         (list (concat (downcase header) "2"))
+                         (list (concat (downcase header) "3")))))
+
+(vui-defcomponent vui-sticky--switch (mode stream)
+  "Text on top of what MODE asks for.
+MODE is `table' (a sticky table), `both' (two sticky tables), `second'
+\(text in place of the first table, then the second) or `text' (no
+table).  With STREAM, a `vui-stream' handle, the content comes after
+that stream instead."
+  :render (let ((content
+                 (pcase mode
+                   ('table (list (vui-sticky--table "H")))
+                   ('both (list (vui-sticky--table "H")
+                                (vui-sticky--table "K")))
+                   ('second (list (vui-text "gone")
+                                  (vui-sticky--table "K")))
+                   (_ (list (vui-text "plain"))))))
+            (apply #'vui-vstack
+                   (if stream (vui-stream stream) (vui-text "top"))
+                   content)))
+
+(vui-defcomponent vui-sticky--card (header table)
+  "A sticky table titled HEADER when TABLE, else a line of text.
+It renders again only when its props change."
+  :memo t
+  :render (if table
+              (vui-sticky--table header)
+            (vui-text (concat "no " header))))
+
+(vui-defcomponent vui-sticky--cards (tables)
+  "A card titled H and one titled K.  TABLES are the titles that show a table."
+  :render (vui-vstack
+           (vui-component 'vui-sticky--card :key "H" :header "H"
+                          :table (and (member "H" tables) t))
+           (vui-component 'vui-sticky--card :key "K" :header "K"
+                          :table (and (member "K" tables) t))))
+
+(defmacro vui-sticky--with-switch (inst props &rest body)
+  "Mount `vui-sticky--switch' with PROPS, run BODY in its buffer, clean up.
+INST is bound to the root instance.  Its buffer gets a header line of
+its own, \"mine\", for a sticky table to replace."
+  (declare (indent 2))
+  `(let* ((vui-render-delay nil)
+          (,inst (vui-mount (vui-component 'vui-sticky--switch ,@props)
+                            "*sticky-switch*")))
+     (unwind-protect
+         (with-current-buffer "*sticky-switch*"
+           (setq header-line-format "mine")
+           ,@body)
+       (kill-buffer "*sticky-switch*"))))
+
+(defun vui-sticky--mode (inst mode)
+  "Re-render INST, a `vui-sticky--switch' root, with MODE."
+  (vui-update inst (list :mode mode
+                         :stream (plist-get (vui-instance-props inst)
+                                            :stream))))
+
+(describe "the sticky header line across a re-render"
+  ;; A sticky table replaces the header line of its buffer.  When a
+  ;; re-render leaves no sticky table, the header line it replaced comes
+  ;; back, as on unmount.  With `vui-incremental-render' on, the list of
+  ;; components is patched instead of rebuilt.  The other roots here are
+  ;; rebuilt with the flag on too (a table is not text, so they cannot be
+  ;; patched), an inline root always writes its region again, and the
+  ;; content after a live stream is patched with the flag off as well.
+  (dolist (flag '(nil t))
+    (describe (format "with `vui-incremental-render' %s" flag)
+      (it "puts back the header line when the table gives way to text"
+        (let ((vui-incremental-render flag))
+          (vui-sticky--with-switch inst (:mode 'text)
+            (vui-sticky--mode inst 'table)
+            (expect header-line-format :not :to-equal "mine")
+            (vui-sticky--mode inst 'text)
+            (expect (buffer-string) :to-equal "top\nplain")
+            (expect header-line-format :to-equal "mine")
+            (expect vui--table-saved-header-line :to-be nil)
+            (expect vui--table-sticky-registry :to-be nil))))
+
+      (it "keeps the header line pinned when the table renders again"
+        (let ((vui-incremental-render flag))
+          (vui-sticky--with-switch inst (:mode 'text)
+            (vui-sticky--mode inst 'table)
+            (vui-sticky--mode inst 'table)
+            (expect header-line-format :not :to-equal "mine")
+            (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
+                    :to-equal "H "))))
+
+      (it "keeps the header line while another sticky table is shown"
+        (let ((vui-incremental-render flag))
+          (vui-sticky--with-switch inst (:mode 'text)
+            (vui-sticky--mode inst 'both)
+            (vui-sticky--mode inst 'second)
+            (expect header-line-format :not :to-equal "mine")
+            (expect (vui-sticky--at (vui-sticky--pos-of "k2"))
+                    :to-equal "K ")
+            (vui-sticky--mode inst 'text)
+            (expect header-line-format :to-equal "mine"))))
+
+      (it "puts back the header line when the tables of a list of components go"
+        ;; With the flag on, the re-render writes again only the card
+        ;; whose props changed, and leaves the text of the other alone
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil))
+          (let ((inst (vui-mount (vui-component 'vui-sticky--cards :tables nil)
+                                 "*sticky-cards*")))
+            (unwind-protect
+                (with-current-buffer "*sticky-cards*"
+                  (vui-rerender inst)
+                  (setq header-line-format "mine")
+                  (vui-update inst '(:tables ("H" "K")))
+                  (expect header-line-format :not :to-equal "mine")
+                  (vui-update inst '(:tables ("K")))
+                  (expect (buffer-string) :to-match "\\`no H\n")
+                  (expect header-line-format :not :to-equal "mine")
+                  (expect (vui-sticky--at (vui-sticky--pos-of "k2"))
+                          :to-equal "K ")
+                  (vui-update inst '(:tables nil))
+                  (expect (buffer-string) :to-equal "no H\nno K")
+                  (expect header-line-format :to-equal "mine"))
+              (kill-buffer "*sticky-cards*")))))
+
+      (it "puts back the header line when the table after a stream goes"
+        ;; The re-render keeps the region of the live stream and renders
+        ;; again only what comes after it
+        (let ((vui-incremental-render flag)
+              (stream (vui-make-stream)))
+          (vui-sticky--with-switch inst (:mode 'text :stream stream)
+            (vui-stream-append stream (vui-text "m0"))
+            (vui-stream-append stream (vui-text "m1"))
+            (vui-sticky--mode inst 'table)
+            (expect header-line-format :not :to-equal "mine")
+            (vui-sticky--mode inst 'text)
+            (expect (buffer-string) :to-equal "m0\nm1\nplain")
+            (expect header-line-format :to-equal "mine"))))
+
+      (it "puts back the header line when a stream row drops its table"
+        ;; A component row renders again on its own, not with the root
+        (let ((vui-incremental-render flag)
+              (stream (vui-make-stream)))
+          (vui-sticky--with-switch inst (:mode 'text :stream stream)
+            (vui-stream-append stream (vui-text "m0"))
+            (vui-stream-append stream (vui-component 'vui-sticky--card
+                                                     :header "R" :table t))
+            (expect header-line-format :not :to-equal "mine")
+            (vui-update (car (vui-stream-handle-items-rev stream))
+                        '(:header "R" :table nil))
+            (expect (buffer-string) :to-equal "m0\nno R\nplain")
+            (expect header-line-format :to-equal "mine"))))
+
+      (it "puts back the header line when an inline table gives way to text"
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil))
+          (with-temp-buffer
+            (setq header-line-format "mine")
+            (insert "host\n")
+            (let ((inst (vui-mount-inline
+                         (vui-component 'vui-sticky--switch :mode 'table))))
+              (expect header-line-format :not :to-equal "mine")
+              (vui-sticky--mode inst 'text)
+              (expect header-line-format :to-equal "mine")
+              (vui-unmount inst)))))
+
+      (it "leaves no sticky header line behind when a mode added to it"
+        ;; A mode that adds its own part in front of the header line
+        ;; while the table is shown (which-func does) takes it out
+        ;; later; the sticky part must not be left behind then, with
+        ;; nothing to put back
+        (let ((vui-incremental-render flag))
+          (vui-sticky--with-switch inst (:mode 'text)
+            (vui-sticky--mode inst 'table)
+            (add-to-list 'header-line-format "crumb")
+            (vui-sticky--mode inst 'text)
+            (setq header-line-format (delete "crumb" header-line-format))
+            (expect header-line-format :to-equal "mine")
+            (expect vui--table-saved-header-line :to-be nil))))))
+
+  (it "puts back the header line before it restores the window start"
+    ;; Text one line taller than the window body under the sticky header
+    ;; line fits once that header line is gone, so the window shows it
+    ;; from the top.  Restored after the window, it would not.
+    (let ((vui-render-delay nil))
+      (vui-defcomponent vui-sticky--tall (lines)
+        :render (if lines
+                    (apply #'vui-vstack
+                           (mapcar (lambda (i) (vui-text (format "t%d" i)))
+                                   (number-sequence 1 lines)))
+                  (vui-table :sticky-header t
+                             :columns '((:header "H"))
+                             :rows (mapcar (lambda (i) (list (format "r%d" i)))
+                                           (number-sequence 1 60)))))
+      (let ((inst (vui-mount (vui-component 'vui-sticky--tall)
+                             "*sticky-tall*")))
+        (unwind-protect
+            (save-window-excursion
+              (let ((win (selected-window)))
+                (set-window-buffer win "*sticky-tall*")
+                (with-current-buffer "*sticky-tall*"
+                  (let ((height (window-body-height win)))
+                    (set-window-start win (save-excursion
+                                            (goto-char (point-min))
+                                            (forward-line 3)
+                                            (point)))
+                    (goto-char (window-start win))
+                    (forward-line 1)
+                    (vui-update inst (list :lines (1+ height)))
+                    (expect header-line-format :to-be nil)
+                    (expect (window-start win) :to-equal (point-min))))))
+          (kill-buffer "*sticky-tall*"))))))
+
 (provide 'vui-table-sticky-test)
 ;;; vui-table-sticky-test.el ends here

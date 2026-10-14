@@ -380,8 +380,8 @@ normally - windows showing it pin nothing - and a buffer can hold
 several sticky tables; the pinned header hands over as you scroll
 from one into the next. The copy is read from the buffer at
 redisplay time, so it always matches the current column widths,
-borders, and faces. Unmounting restores the previous
-=header-line-format=.
+borders, and faces. Unmounting, or a re-render that leaves no sticky
+table, restores the previous =header-line-format=.
 
 Sticky headers must be plain strings: the pinned copy is outside the
 buffer, so buttons there would be unreachable by vui navigation. A
