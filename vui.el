@@ -8028,15 +8028,24 @@ container separator, which we drop if the suffix renders to nothing
                               :value value
                               :secret (when secret-p ?*)
                               :value-face user-face  ; Always use user face for field content
-                              :notify (lambda (widget &rest _)
-                                        ;; The edit may have been at
-                                        ;; the edge of a region
-                                        (vui--field-sync-boundaries
-                                         widget captured-root)
-                                        (when wrapped-change
-                                          (let ((vui--current-instance captured-instance)
-                                                (vui--root-instance captured-root))
-                                            (funcall wrapped-change (widget-value widget)))))
+                              :notify (lambda (widget &optional _child event)
+                                        ;; `widget-before-change' notifies
+                                        ;; too, before the text changes:
+                                        ;; on-change would see the old
+                                        ;; value, and a remount there (or
+                                        ;; a re-render, when not deferred)
+                                        ;; would run before the edit
+                                        ;; lands.  Only the notification
+                                        ;; after it counts.
+                                        (unless (eq (car-safe event) 'before-change)
+                                          ;; The edit may have been at
+                                          ;; the edge of a region
+                                          (vui--field-sync-boundaries
+                                           widget captured-root)
+                                          (when wrapped-change
+                                            (let ((vui--current-instance captured-instance)
+                                                  (vui--root-instance captured-root))
+                                              (funcall wrapped-change (widget-value widget))))))
                               :action (lambda (widget &optional _event)
                                         (when wrapped-submit
                                           (let ((vui--current-instance captured-instance)

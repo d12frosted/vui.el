@@ -28,6 +28,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-field= no longer calls =:on-change= with its value from before
+  an edit. =widget-before-change= notifies the field too, before the
+  text changes, so =:on-change= also ran with the old value. A remount
+  from =:on-change= (or a re-render, with =vui-render-delay= set to nil)
+  then ran before the edit landed; after a remount, the new tree's
+  field got the edit and called its own =:on-change= in turn.
+
 - A =vui-mount= from inside the tree it replaces sticks: from a button,
   checkbox or select handler, a field's =:on-submit= or =:on-change=,
   a =vui-with-async-context= / =vui-async-callback= callback, an effect

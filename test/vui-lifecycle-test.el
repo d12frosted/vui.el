@@ -227,6 +227,7 @@
       ('checkbox (vui-checkbox :checked nil :on-change remount))
       ('select (vui-select :value "a" :options '("a" "b") :on-change remount))
       ('submit (vui-field :value "x" :on-submit remount))
+      ('change (vui-field :value "x" :on-change remount))
       ('unmount (vui-button "unmount"
                   :on-click (lambda () (vui-unmount "*test-handler-remount*"))))
       (_ (vui-button "remount" :on-click remount)))))
@@ -238,6 +239,8 @@
       ('async-context (funcall vui-test--handler-callback))
       ('async-callback (funcall vui-test--handler-callback 'data))
       ('submit (widget-apply (car widget-field-list) :action))
+      ('change (goto-char (widget-field-start (car widget-field-list)))
+               (insert "y"))
       (_ (cl-letf (((symbol-function 'completing-read)
                     (lambda (&rest _) "b")))
            (button-activate (button-at (point-min))))))))
@@ -250,12 +253,17 @@
     (when (get-buffer "*test-handler-remount*")
       (kill-buffer "*test-handler-remount*")))
 
-  (dolist (kind '(button checkbox select submit async-context async-callback))
+  (dolist (kind '(button checkbox select submit change
+                  async-context async-callback))
     (it (format "keeps the tree mounted by the %s handler" kind)
       (let ((vui-render-delay nil))
         (vui-test--handler-mount "A" kind)
         (vui-test--handler-trigger kind)
         (expect vui-test--handler-live :to-equal '("A+"))
+        (when (eq kind 'change)
+          ;; The edit stays with the tree whose handler saw it
+          (with-current-buffer "*test-handler-remount*"
+            (expect (widget-value (car widget-field-list)) :to-equal "x")))
         ;; The buffer holds the live tree, not the one it replaced
         (let ((root (vui-get-instance "*test-handler-remount*")))
           (expect (vui-instance-buffer root) :to-be-truthy)

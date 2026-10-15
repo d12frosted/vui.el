@@ -561,7 +561,22 @@
         (let ((widget (car widget-field-list)))
           (widget-value-set widget "changed")
           (widget-apply widget :notify widget))
-        (expect new-value :to-equal "changed")))))
+        (expect new-value :to-equal "changed"))))
+
+  (it "calls on-change once for an insert or a delete, with the new value"
+    (with-temp-buffer
+      (let ((values nil))
+        (vui-render (vui-field :value "ab"
+                               :on-change (lambda (v) (push v values))))
+        (let ((widget (car widget-field-list)))
+          ;; `widget-before-change' notifies too, before the text changes
+          (goto-char (widget-field-start widget))
+          (insert "x")
+          (expect values :to-equal '("xab"))
+          (setq values nil)
+          (goto-char (widget-field-start widget))
+          (delete-char 1)
+          (expect values :to-equal '("ab")))))))
 
 (describe "vui-get-instance"
   (it "returns the root instance mounted in a buffer"
