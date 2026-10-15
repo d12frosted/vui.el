@@ -41,6 +41,7 @@
 ;;; Forward Declarations
 
 (defvar vui--root-instance)
+(defvar vui--mounted-root)
 (defvar vui--inline-instances)
 
 ;;; Custom Variables
@@ -361,7 +362,7 @@ buffer's mounted instances: the `vui-mount' root followed by any
 inline instances."
   (if instance
       (list instance)
-    (delq nil (cons vui--root-instance
+    (delq nil (cons vui--mounted-root
                     (copy-sequence vui--inline-instances)))))
 
 (defun vui--inspect-instance-location (instance)
@@ -438,7 +439,7 @@ buffer: the `vui-mount' root and any instances mounted via
 
 (defun vui-get-instance-by-id (id &optional instance)
   "Find instance with ID starting from INSTANCE or root."
-  (let* ((inst (or instance vui--root-instance))
+  (let* ((inst (or instance (vui--buffer-root)))
          (found nil))
     (when inst
       (if (= (vui-instance-id inst) id)
@@ -451,7 +452,7 @@ buffer: the `vui-mount' root and any instances mounted via
 (defun vui-get-component-instances (component-type &optional instance)
   "Find all instances of COMPONENT-TYPE starting from INSTANCE or root.
 Returns a list of instances."
-  (let* ((inst (or instance vui--root-instance))
+  (let* ((inst (or instance (vui--buffer-root)))
          (result nil))
     (when inst
       (when (eq (vui-component-def-name (vui-instance-def inst)) component-type)
@@ -477,7 +478,7 @@ Triggers a re-render of the mounted component with current state."
   (interactive)
   (if (widget-field-at (point))
       (self-insert-command 1)
-    (when vui--root-instance
+    (when vui--mounted-root
       (vui--schedule-render))))
 
 (defun vui--tabable-positions ()
@@ -1798,13 +1799,15 @@ state of all boundaries in the current tree is cleared.
 Must be called with the relevant tree in scope: from a component
 callback (e.g. a button's on-click handler) or with the VUI buffer
 current."
-  (let ((table (vui--error-boundary-table)))
-    (if id
-        (remhash id table)
-      (clrhash table)))
-  ;; Trigger re-render if we have a root instance
-  (when-let* ((root (vui--get-root-instance)))
-    (vui--rerender-instance root)))
+  ;; With another buffer current, a callback means that buffer's tree
+  (let ((vui--root-instance (vui--buffer-root)))
+    (let ((table (vui--error-boundary-table)))
+      (if id
+          (remhash id table)
+        (clrhash table)))
+    ;; Trigger re-render if we have a root instance
+    (when-let* ((root (vui--get-root-instance)))
+      (vui--rerender-instance root))))
 
 (defun vui-list (items render-fn &rest args)
   "Render a list of ITEMS using RENDER-FN.
@@ -1909,11 +1912,20 @@ child vnodes and may appear anywhere in the plist."
 ;;; State Management
 
 (defvar vui--root-instance nil
-  "The root component instance for the current buffer.")
+  "The root instance the running code acts in.
+Bound around a render and around event handlers and async callbacks,
+so a state update reaches the tree it came from (an inline instance
+included).  Never set buffer-locally: the tree `vui-mount' put in a
+buffer lives in `vui--mounted-root', where no binding can shadow it.
+A `vui-mount' inside a handler would otherwise write into the
+handler's binding and be undone when the handler returns.")
+
+(defvar-local vui--mounted-root nil
+  "The root instance `vui-mount' mounted in this buffer.")
 
 (defvar-local vui--inline-instances nil
   "Inline instances mounted in this buffer via `vui-mount-inline'.
-Unlike `vui--root-instance', a buffer can host any number of inline
+Unlike `vui--mounted-root', a buffer can host any number of inline
 instances, each owning a region delimited by its markers.
 
 The list is in buffer order, the lowest region first (see
@@ -2063,7 +2075,7 @@ component context before executing BODY."
         (root (make-symbol "root")))
     `(let ((,buf (current-buffer))
            (,instance vui--current-instance)
-           (,root vui--root-instance))
+           (,root (or vui--root-instance vui--mounted-root)))
       (lambda ()
         (when (and (buffer-live-p ,buf)
                    (or (null ,root) (vui-instance-buffer ,root)))
@@ -2102,7 +2114,7 @@ buffer has been killed or its component tree has been unmounted."
         (root (make-symbol "root")))
     `(let ((,buf (current-buffer))
            (,instance vui--current-instance)
-           (,root vui--root-instance))
+           (,root (or vui--root-instance vui--mounted-root)))
       (lambda ,args
         (when (and (buffer-live-p ,buf)
                    (or (null ,root) (vui-instance-buffer ,root)))
@@ -2121,10 +2133,26 @@ buffer has been killed or its component tree has been unmounted."
 
 (defun vui--get-root-instance ()
   "Get the root instance from current context.
-Checks `vui--root-instance' (buffer-local) first, then tries to find
-it via `vui--current-instance' (works even in different buffer contexts)."
+Checks the bound `vui--root-instance' first, then the tree mounted in
+the current buffer, then tries to find it via `vui--current-instance'
+\(works even in different buffer contexts)."
   (or vui--root-instance
+      vui--mounted-root
       (vui--find-root vui--current-instance)))
+
+(defun vui--buffer-root ()
+  "Get the root instance of the tree in the current buffer.
+Unlike `vui--get-root-instance', which finds the tree the running
+code belongs to, this is for calls made with a buffer current: the
+bound `vui--root-instance' counts only when it is alive and lives in
+this buffer (an inline instance included).  So a handler that makes
+another buffer current reaches that buffer's tree, and a handler that
+remounted its own buffer reaches the new tree, not its unmounted one."
+  (if (and vui--root-instance
+           (eq (vui-instance-buffer vui--root-instance) (current-buffer)))
+      vui--root-instance
+    (or vui--mounted-root
+        (vui--get-root-instance))))
 
 (defun vui--schedule-render ()
   "Schedule a re-render of the root instance.
@@ -2198,9 +2226,9 @@ Example:
   "Force immediate re-render of the current root, bypassing its pending timer.
 Use when you need the UI to update synchronously.  Pending renders
 scheduled for other roots (other buffers) are not affected."
-  (when vui--root-instance
-    (vui--cancel-render-timer vui--root-instance)
-    (vui--rerender-instance vui--root-instance)))
+  (when-let* ((root (vui--buffer-root)))
+    (vui--cancel-render-timer root)
+    (vui--rerender-instance root)))
 
 ;;; Effects System
 
@@ -3383,7 +3411,7 @@ measure, it re-renders unconditionally."
                  (= width vui--resize-last-width))
       (when width
         (setq vui--resize-last-width width))
-      (dolist (instance (delq nil (cons vui--root-instance
+      (dolist (instance (delq nil (cons vui--mounted-root
                                         (copy-sequence vui--inline-instances))))
         (if vui-render-delay
             (vui--schedule-deferred-render-for instance)
@@ -8185,9 +8213,9 @@ one from a timer, an async callback, or a window resize."
         (vui-mode))
       ;; Tear down a previously mounted tree, as `vui-mount' does when
       ;; it takes over a buffer.
-      (when vui--root-instance
-        (vui--unmount-root vui--root-instance)
-        (kill-local-variable 'vui--root-instance))
+      (when vui--mounted-root
+        (vui--unmount-root vui--mounted-root)
+        (kill-local-variable 'vui--mounted-root))
       (when vui--inline-instances
         (dolist (inline-instance vui--inline-instances)
           (vui--unmount-root inline-instance))
@@ -8247,8 +8275,8 @@ Returns the root instance."
         ;; cleanups run and its stale async callbacks detach.  Without
         ;; this, the old tree stays live and a timer created by it can
         ;; re-render the old UI over the new mount.
-        (when vui--root-instance
-          (vui--unmount-root vui--root-instance))
+        (when vui--mounted-root
+          (vui--unmount-root vui--mounted-root))
         ;; A full mount owns the whole buffer: tear down inline
         ;; instances too, since erasing destroys their regions
         (when vui--inline-instances
@@ -8272,7 +8300,7 @@ Returns the root instance."
         ;; this one; the new tree installs its own if it has one
         (vui--table-restore-header-line)
         ;; Store root instance for state updates
-        (setq-local vui--root-instance instance)
+        (setq vui--mounted-root instance)
         ;; Release component resources when the buffer is killed
         (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
         ;; Reflow window-width-dependent layouts on resize (see
@@ -8413,16 +8441,16 @@ into a nested component, use `vui-with-async-context' instead.  See
 the External Updates guide."
   (when-let* ((buf (get-buffer (or buffer (current-buffer)))))
     (when (buffer-live-p buf)
-      (buffer-local-value 'vui--root-instance buf))))
+      (buffer-local-value 'vui--mounted-root buf))))
 
 (defun vui--teardown-on-kill ()
   "Run the unmount lifecycle for this buffer's mounted instances.
 Installed buffer-locally on `kill-buffer-hook' by `vui-mount' and
 `vui-mount-inline' so components release their resources (timers,
 processes, subscriptions) when the buffer is killed."
-  (when vui--root-instance
-    (vui--unmount-root vui--root-instance)
-    (kill-local-variable 'vui--root-instance))
+  (when vui--mounted-root
+    (vui--unmount-root vui--mounted-root)
+    (kill-local-variable 'vui--mounted-root))
   (when vui--inline-instances
     (dolist (instance vui--inline-instances)
       (vui--unmount-root instance))
@@ -8493,7 +8521,7 @@ Returns the unmounted instance, or nil if nothing was mounted."
         (vui--unmount-root instance)
         (when (buffer-live-p buf)
           (with-current-buffer buf
-            (kill-local-variable 'vui--root-instance)
+            (kill-local-variable 'vui--mounted-root)
             ;; Inhibit modification hooks while erasing: a `vui-field' in
             ;; the buffer installs an after-change hook that runs
             ;; `widget-after-change' against the now half-removed field and

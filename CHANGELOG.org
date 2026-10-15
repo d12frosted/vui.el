@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-mount= from inside the tree it replaces sticks: from a button,
+  checkbox or select handler, a field's =:on-submit= or =:on-change=,
+  a =vui-with-async-context= / =vui-async-callback= callback, an effect
+  or =:on-mount=. The
+  buffer used to go back to the old, already unmounted tree when the
+  handler returned, so the next mount tore down that dead tree and the
+  new one leaked: its effects stayed installed, their cleanups never
+  ran, and a leaked resize hook or timer could render stale props over
+  the buffer (#173).
+
 - A sticky =vui-table= with no border keeps pinning its own header when
   the text right before it is written again: a component before it in
   a =vui-fragment= that renders again on its own (with

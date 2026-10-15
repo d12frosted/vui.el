@@ -317,16 +317,16 @@ Re-define a component and it takes effect on next render:
 ** REPL Inspection
 
 #+begin_src elisp
-;; Get root instance
-vui--root-instance
+;; Get the root instance of the current buffer
+(vui-get-instance)
 
 ;; Check its state
-(vui-instance-state vui--root-instance)
+(vui-instance-state (vui-get-instance))
 
 ;; Manually modify state (for testing)
-(setf (vui-instance-state vui--root-instance)
-      (plist-put (vui-instance-state vui--root-instance)
-                 :count 100))
+(let ((root (vui-get-instance)))
+  (setf (vui-instance-state root)
+        (plist-put (vui-instance-state root) :count 100)))
 (vui-flush-sync)
 #+end_src
 

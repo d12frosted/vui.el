@@ -200,6 +200,165 @@
                     :to-equal "NEW"))
         (kill-buffer "*test-remount-stale*")))))
 
+(defvar vui-test--handler-live nil
+  "Labels of the `handler-remount-page' trees whose effect is installed.")
+
+(defvar vui-test--handler-callback nil
+  "The async callback the last `handler-remount-page' render created.")
+
+(defun vui-test--handler-mount (label kind)
+  "Mount a `handler-remount-page' labelled LABEL whose KIND remounts."
+  (vui-mount (vui-component 'handler-remount-page :label label :kind kind)
+             "*test-handler-remount*"))
+
+(vui-defcomponent handler-remount-page (label kind)
+  :render
+  (let ((remount (lambda (&rest _)
+                   (vui-test--handler-mount (concat label "+") kind))))
+    (vui-use-effect ()
+      (push label vui-test--handler-live)
+      (setq vui-test--handler-callback
+            (pcase kind
+              ('async-context (vui-with-async-context (funcall remount)))
+              ('async-callback (vui-async-callback (_data) (funcall remount)))))
+      (lambda ()
+        (setq vui-test--handler-live (delete label vui-test--handler-live))))
+    (pcase kind
+      ('checkbox (vui-checkbox :checked nil :on-change remount))
+      ('select (vui-select :value "a" :options '("a" "b") :on-change remount))
+      ('submit (vui-field :value "x" :on-submit remount))
+      ('unmount (vui-button "unmount"
+                  :on-click (lambda () (vui-unmount "*test-handler-remount*"))))
+      (_ (vui-button "remount" :on-click remount)))))
+
+(defun vui-test--handler-trigger (kind)
+  "Fire the KIND handler of the page mounted in the test buffer."
+  (with-current-buffer "*test-handler-remount*"
+    (pcase kind
+      ('async-context (funcall vui-test--handler-callback))
+      ('async-callback (funcall vui-test--handler-callback 'data))
+      ('submit (widget-apply (car widget-field-list) :action))
+      (_ (cl-letf (((symbol-function 'completing-read)
+                    (lambda (&rest _) "b")))
+           (button-activate (button-at (point-min))))))))
+
+(describe "remounting from inside the mounted tree"
+  (before-each
+    (setq vui-test--handler-live nil
+          vui-test--handler-callback nil))
+  (after-each
+    (when (get-buffer "*test-handler-remount*")
+      (kill-buffer "*test-handler-remount*")))
+
+  (dolist (kind '(button checkbox select submit async-context async-callback))
+    (it (format "keeps the tree mounted by the %s handler" kind)
+      (let ((vui-render-delay nil))
+        (vui-test--handler-mount "A" kind)
+        (vui-test--handler-trigger kind)
+        (expect vui-test--handler-live :to-equal '("A+"))
+        ;; The buffer holds the live tree, not the one it replaced
+        (let ((root (vui-get-instance "*test-handler-remount*")))
+          (expect (vui-instance-buffer root) :to-be-truthy)
+          (expect (vui-instance-props root) :to-equal (list :label "A+" :kind kind)))
+        ;; So the next mount tears the live tree down
+        (vui-test--handler-mount "B" kind)
+        (expect vui-test--handler-live :to-equal '("B")))))
+
+  (it "gives later callbacks the tree a handler mounted"
+    (let ((vui-render-delay nil))
+      (vui-test--handler-mount "A" 'button)
+      (vui-test--handler-trigger 'button)
+      (with-current-buffer "*test-handler-remount*"
+        ;; Only the binding of a handler or a render may set the context
+        (expect (local-variable-p 'vui--root-instance) :to-be nil)
+        (let* ((ran nil)
+               (callback (vui-with-async-context (setq ran t))))
+          (funcall callback)
+          (expect ran :to-be t)))))
+
+  (it "stays unmounted after a handler unmounts it"
+    (let ((vui-render-delay nil))
+      (vui-test--handler-mount "A" 'unmount)
+      (vui-test--handler-trigger 'unmount)
+      (expect vui-test--handler-live :to-be nil)
+      (expect (vui-get-instance "*test-handler-remount*") :to-be nil))))
+
+(defvar vui-test--buffer-root-renders nil
+  "Alist of (NAME . RENDER-COUNT) for `buffer-root-page' trees.")
+
+(defvar vui-test--buffer-root-action nil
+  "What the button of a `buffer-root-page' runs, and its result.")
+
+(vui-defcomponent buffer-root-page (name)
+  :render
+  (progn
+    (setf (alist-get name vui-test--buffer-root-renders nil nil #'equal)
+          (1+ (alist-get name vui-test--buffer-root-renders 0 nil #'equal)))
+    (vui-button name
+      :on-click (lambda ()
+                  (setq vui-test--buffer-root-action
+                        (funcall vui-test--buffer-root-action))))))
+
+(vui-defcomponent buffer-root-other ()
+  :render (vui-text "other"))
+
+(defun vui-test--buffer-root-click (action)
+  "Click the button in *test-root-x* with ACTION as its handler.
+Return what ACTION returned."
+  (setq vui-test--buffer-root-action action)
+  (with-current-buffer "*test-root-x*"
+    (button-activate (button-at (point-min))))
+  vui-test--buffer-root-action)
+
+(defun vui-test--buffer-root-renders (name)
+  "How many times the `buffer-root-page' NAME rendered."
+  (alist-get name vui-test--buffer-root-renders 0 nil #'equal))
+
+(describe "the current buffer's tree from inside a handler"
+  (before-each
+    (setq vui-test--buffer-root-renders nil)
+    (vui-mount (vui-component 'buffer-root-page :name "X") "*test-root-x*")
+    (vui-mount (vui-component 'buffer-root-page :name "Y") "*test-root-y*"))
+  (after-each
+    (kill-buffer "*test-root-x*")
+    (kill-buffer "*test-root-y*"))
+
+  (it "is the tree of the buffer made current for vui-flush-sync"
+    (let ((vui-render-delay nil))
+      (vui-test--buffer-root-click
+       (lambda () (with-current-buffer "*test-root-y*" (vui-flush-sync))))
+      (expect (vui-test--buffer-root-renders "X") :to-equal 1)
+      (expect (vui-test--buffer-root-renders "Y") :to-equal 2)))
+
+  (it "is the tree of the buffer made current for vui-reset-error-boundary"
+    (let ((vui-render-delay nil))
+      (vui-test--buffer-root-click
+       (lambda () (with-current-buffer "*test-root-y*"
+                    (vui-reset-error-boundary))))
+      (expect (vui-test--buffer-root-renders "X") :to-equal 1)
+      (expect (vui-test--buffer-root-renders "Y") :to-equal 2)))
+
+  (it "is the tree of the buffer made current for instance lookups"
+    (expect (vui-test--buffer-root-click
+             (lambda ()
+               (with-current-buffer "*test-root-y*"
+                 (mapcar (lambda (instance)
+                           (plist-get (vui-instance-props instance) :name))
+                         (vui-get-component-instances 'buffer-root-page)))))
+            :to-equal '("Y")))
+
+  (it "is the new tree after the handler remounts its own buffer"
+    (let ((vui-render-delay nil))
+      (expect (vui-test--buffer-root-click
+               (lambda ()
+                 (vui-mount (vui-component 'buffer-root-other) "*test-root-x*")
+                 (prog1 (length (vui-get-component-instances
+                                 'buffer-root-other))
+                   (vui-flush-sync))))
+              :to-equal 1)
+      ;; The flush reached the new tree, so the old one did not render
+      (expect (vui-test--buffer-root-renders "X") :to-equal 1))))
+
 (describe "buffer kill teardown"
   (it "runs lifecycle cleanups when the buffer is killed"
     (let ((cleanups nil))
@@ -400,7 +559,7 @@
           (with-current-buffer "*test-resize-stale-root*"
             (vui-render (vui-text "PLAIN"))
             (expect unmounted :to-be t)
-            (expect vui--root-instance :to-be nil)
+            (expect vui--mounted-root :to-be nil)
             ;; The resize hook is inert without a root: the plain
             ;; render must survive a window size change.
             (vui--on-window-size-change nil)

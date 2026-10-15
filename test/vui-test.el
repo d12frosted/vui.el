@@ -653,6 +653,19 @@
               (expect (key-binding (kbd "g")) :to-equal 'vui-refresh))
           (kill-buffer "*test-g*"))))
 
+    (it "re-renders the mounted tree"
+      (let ((vui-render-delay nil)
+            (renders 0))
+        (vui-defcomponent g-refresh-test ()
+          :render (progn (setq renders (1+ renders))
+                         (vui-text "test")))
+        (vui-mount (vui-component 'g-refresh-test) "*test-g-refresh*")
+        (unwind-protect
+            (with-current-buffer "*test-g-refresh*"
+              (vui-refresh)
+              (expect renders :to-equal 2))
+          (kill-buffer "*test-g-refresh*"))))
+
     (it "self-inserts when inside widget field"
       (vui-defcomponent g-field-test ()
         :render (vui-field :value "" :key 'field))
