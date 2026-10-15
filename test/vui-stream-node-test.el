@@ -202,6 +202,25 @@
             (vui-stream-update-last s (vui-text "Q"))    ; replace A
             (expect (vui-snode--buffer)
                     :to-equal (vui-snode--oracle '("header" "Q") "n0")))
+        (vui-snode--kill))))
+
+  ;; A static last item is rewritten from last-start, which the remove
+  ;; moved to A.  While A is a live node, update-last goes through the
+  ;; node instead and never reads last-start.
+  (it "remove of the last node, then update-last on the new last made static"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a b)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "A")))
+            (setq b (vui-stream-open s (vui-text "B")))
+            (vui-stream-remove b)                        ; header A (A last)
+            (vui-stream-finalize a)                      ; A is static now
+            (vui-stream-update-last s (vui-text "Q"))    ; replace A
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "Q") "n0")))
         (vui-snode--kill)))))
 
 (describe "vui-stream nodes: model stays in sync for re-emit"
