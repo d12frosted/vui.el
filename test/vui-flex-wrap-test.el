@@ -187,6 +187,218 @@
                         :to-be t)))
           (kill-buffer "*wrap-identity*"))))))
 
+;; Every widget records its place in the tree as `:vui-path', and a
+;; re-render finds the widget under point again by that path.  A child
+;; of the flex is one step of it, its child index as in a non-wrapping
+;; flex, whichever way its row is rendered: in place, or composed from
+;; the lines of the measure pass.
+
+(defun vui-flex-wrap-test--paths ()
+  "Return (LABEL PATH) for every widget of the current buffer, in order."
+  (mapcar (lambda (widget)
+            (list (vui--elt-get widget :vui-tag)
+                  (vui--elt-get widget :vui-path)))
+          (vui--collect-widgets)))
+
+(defun vui-flex-wrap-test--goto-nth (text n)
+  "Move point to the start of the Nth occurrence of TEXT in the buffer."
+  (goto-char (point-min))
+  (search-forward text nil nil n)
+  (goto-char (match-beginning 0)))
+
+;; Two panels side by side.  Each one is two lines tall, so the row is
+;; composed, and both have the same button in the same place.
+(vui-defcomponent vui-flex-wrap-test-panels ()
+  :render (vui-vstack
+           (vui-text "header")
+           (vui-flex :wrap t :width 60
+             (vui-vstack (vui-button "copy") (vui-button "copy"))
+             (vui-vstack (vui-button "copy") (vui-button "send")))))
+
+;; A row of three children.  The last one is one line tall or two,
+;; which makes the row render in place or composed.
+(vui-defcomponent vui-flex-wrap-test-switch (tall)
+  :render (vui-vstack
+           (vui-text "header")
+           (vui-flex :wrap t :width 60
+             (vui-button "copy")
+             (vui-button "copy")
+             (vui-vstack (vui-text "a") (when tall (vui-text "b"))))))
+
+;; The first child renders nothing until SHOW is set.
+(vui-defcomponent vui-flex-wrap-test-empty (show)
+  :render (vui-flex :wrap t :width 60
+            (vui-text (if show "x" ""))
+            (vui-button "copy")
+            (vui-button "copy")))
+
+(describe "vui-flex :wrap render paths"
+  (it "makes every child of a composed row a step in the path"
+    (with-temp-buffer
+      (vui-render (vui-flex :wrap t :width 60
+                    (vui-vstack (vui-button "copy") (vui-button "copy"))
+                    (vui-vstack (vui-button "copy") (vui-button "send"))))
+      ;; In buffer order: the first line of both children, then the
+      ;; second.
+      (expect (vui-flex-wrap-test--paths)
+              :to-equal '(("copy" (0 0)) ("copy" (1 0))
+                          ("copy" (0 1)) ("send" (1 1))))))
+
+  (it "numbers the children of every row by their child index"
+    (with-temp-buffer
+      ;; The first row renders in place, the second one is composed.
+      (vui-render (vui-flex :wrap t :width 7
+                    (vui-button "a")
+                    (vui-button "b")
+                    (vui-vstack (vui-button "c") (vui-text "x"))
+                    (vui-button "d")))
+      (expect (buffer-substring-no-properties (point-min) (point-max))
+              :to-equal "[a] [b]\n[c] [d]\nx      ")
+      (expect (vui-flex-wrap-test--paths)
+              :to-equal '(("a" (0)) ("b" (1)) ("c" (2 0)) ("d" (3))))))
+
+  (it "counts a child that renders nothing, in a row rendered in place"
+    (with-temp-buffer
+      (vui-render (vui-flex :wrap t :width 60
+                    (vui-text "")
+                    (vui-button "a")
+                    (vui-button "b")))
+      (expect (buffer-substring-no-properties (point-min) (point-max))
+              :to-equal "[a] [b]")
+      (expect (vui-flex-wrap-test--paths)
+              :to-equal '(("a" (1)) ("b" (2))))))
+
+  (it "counts a child that renders nothing, in a composed row"
+    (with-temp-buffer
+      (vui-render (vui-flex :wrap t :width 60
+                    (vui-text "")
+                    (vui-vstack (vui-button "a") (vui-text "x"))
+                    (vui-button "b")))
+      (expect (buffer-substring-no-properties (point-min) (point-max))
+              :to-equal "[a] [b]\nx      ")
+      (expect (vui-flex-wrap-test--paths)
+              :to-equal '(("a" (1 0)) ("b" (2))))))
+
+  (it "gives its children the paths of a non-wrapping flex"
+    (let ((paths
+           (lambda (wrap)
+             (with-temp-buffer
+               (vui-render
+                (vui-flex :wrap wrap :width 60
+                  (vui-text "")
+                  (vui-button "a")
+                  (vui-flex-item :grow 1 (vui-button "b"))
+                  (vui-flex-item :grow 1 (lambda (_w) (vui-button "c")))))
+               (vui-flex-wrap-test--paths)))))
+      (expect (funcall paths nil)
+              :to-equal '(("a" (1)) ("b" (2)) ("c" (3))))
+      (expect (funcall paths t) :to-equal (funcall paths nil))))
+
+  (it "gives a widget one path, composed or in place"
+    (dolist (tall '(nil t))
+      (with-temp-buffer
+        (vui-render (vui-flex :wrap t :width 60
+                      (vui-button "copy")
+                      (vui-button "copy")
+                      (vui-vstack (vui-text "a") (when tall (vui-text "b")))))
+        ;; Two lines of text: the row was composed
+        (expect (count-lines (point-min) (point-max))
+                :to-equal (if tall 2 1))
+        (expect (vui-flex-wrap-test--paths)
+                :to-equal '(("copy" (0)) ("copy" (1)))))))
+
+  (it "numbers function children the same way"
+    ;; A function child is measured after the widths are allocated.
+    (dolist (tall '(nil t))
+      (with-temp-buffer
+        (let ((child (lambda (label)
+                       (vui-flex-item :grow 1
+                         (lambda (_w)
+                           (if tall
+                               (vui-vstack (vui-button "copy")
+                                           (vui-button label))
+                             (vui-button label)))))))
+          (vui-render (vui-flex :wrap t :width 60
+                        (vui-text "")
+                        (funcall child "copy")
+                        (funcall child "send")))
+          (expect (vui-flex-wrap-test--paths)
+                  :to-equal (if tall
+                                '(("copy" (1 0)) ("copy" (2 0))
+                                  ("copy" (1 1)) ("send" (2 1)))
+                              '(("copy" (1)) ("send" (2)))))))))
+
+  (it "keeps the items of a stream apart from the widgets of other children"
+    (let ((stream (vui-make-stream)))
+      (vui-stream-append stream (vui-button "copy"))
+      (vui-stream-append stream (vui-button "copy"))
+      (with-temp-buffer
+        (vui-render (vui-flex :wrap t :width 60
+                      (vui-vstack (vui-button "copy") (vui-button "copy"))
+                      (vui-stream stream)))
+        ;; An item adds its id as a step after the path of its stream,
+        ;; and the stream is child 1.
+        (expect (vui-flex-wrap-test--paths)
+                :to-equal '(("copy" (0 0)) ("copy" (1 0))
+                            ("copy" (0 1)) ("copy" (1 1)))))))
+
+  (it "keeps point on a button of the second child across a re-render"
+    (let* ((vui-render-delay nil)
+           (root (vui-mount (vui-component 'vui-flex-wrap-test-panels)
+                            "*wrap-paths*")))
+      (unwind-protect
+          (with-current-buffer "*wrap-paths*"
+            ;; The second [copy] of the buffer is the first button of
+            ;; the second child.
+            (vui-flex-wrap-test--goto-nth "[copy]" 2)
+            (expect (current-column) :to-equal 7)
+            (let ((pos (point))
+                  (probe (copy-marker (point))))
+              (vui-rerender root)
+              ;; The text under point was rewritten: a marker in it was
+              ;; thrown to the top.
+              (expect (marker-position probe) :to-equal (point-min))
+              (expect (point) :to-equal pos)
+              (set-marker probe nil)))
+        (kill-buffer "*wrap-paths*"))))
+
+  (it "keeps point on its button when the row switches between the two ways"
+    (let* ((vui-render-delay nil)
+           (root (vui-mount (vui-component 'vui-flex-wrap-test-switch)
+                            "*wrap-paths*")))
+      (unwind-protect
+          (with-current-buffer "*wrap-paths*"
+            (vui-flex-wrap-test--goto-nth "[copy]" 2)
+            (let ((pos (point)))
+              (expect (vui-flex-wrap-test--paths)
+                      :to-equal '(("copy" (1 0)) ("copy" (1 1))))
+              ;; In place to composed
+              (vui-update root '(:tall t))
+              (expect (count-lines (point-min) (point-max)) :to-equal 3)
+              (expect (vui-flex-wrap-test--paths)
+                      :to-equal '(("copy" (1 0)) ("copy" (1 1))))
+              (expect (point) :to-equal pos)
+              ;; And back
+              (vui-update root '(:tall nil))
+              (expect (count-lines (point-min) (point-max)) :to-equal 2)
+              (expect (point) :to-equal pos)))
+        (kill-buffer "*wrap-paths*"))))
+
+  (it "keeps point on its button when a child before it starts to render"
+    (let* ((vui-render-delay nil)
+           (root (vui-mount (vui-component 'vui-flex-wrap-test-empty)
+                            "*wrap-paths*")))
+      (unwind-protect
+          (with-current-buffer "*wrap-paths*"
+            (vui-flex-wrap-test--goto-nth "[copy]" 2)
+            (expect (current-column) :to-equal 7)
+            (vui-update root '(:show t))
+            (expect (buffer-substring-no-properties (point-min) (point-max))
+                    :to-equal "x [copy] [copy]")
+            ;; Still on the second button
+            (expect (current-column) :to-equal 9))
+        (kill-buffer "*wrap-paths*")))))
+
 (provide 'vui-flex-wrap-test)
 
 ;;; vui-flex-wrap-test.el ends here

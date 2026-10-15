@@ -4613,6 +4613,19 @@ including live-state measurement of mounted components when
             ('char (apply #'max (mapcar #'string-width lines)))
             ('pixel (vui--string-pixel-width text))))))
 
+(defun vui--measure-cell-block (vnode index)
+  "Measure VNODE as cell INDEX of a `vui-grid' or a wrapping `vui-flex'.
+Like `vui--measure-block', with INDEX as the cell's step in the render
+path (`vui--render-path').  A row with a multi-line cell is composed
+from the lines measured here, so their widgets keep the `:vui-path'
+this render gives them.  It has to be the path of the cell rendered in
+place, where INDEX is bound around the cell as well: without the step
+the widgets of all cells of a composed row share one path prefix, and
+the paths of a row change when it switches between the two ways of
+rendering."
+  (let ((vui--render-path (cons index vui--render-path)))
+    (vui--measure-block vnode)))
+
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
 For strings, returns as-is. For vnodes, renders to temp buffer."
@@ -5266,12 +5279,20 @@ renderers need (:child, :block with the measured lines, :function for
 a width-receiving function child).  Static children are measured once
 here; the measured lines are reused when a row is composed.  Runs
 under a reconciliation cursor so mounted components measure at their
-current state."
+current state.
+
+Every spec also carries :index, the child's index in CHILDREN.  It is
+the child's step in the render path, as in a non-wrapping flex, and
+every render of the child runs under it: the measure here, the measure
+of a function child, and the render in place (see
+`vui--measure-cell-block')."
   (let ((vui--measure-reconcile
          (and vui--current-instance
-              (cons vui--current-instance vui--child-index))))
+              (cons vui--current-instance vui--child-index)))
+        (index -1))
     (mapcar
      (lambda (child)
+       (cl-incf index)
        (if (vui-vnode-flex-item-p child)
            (let* ((inner (vui-vnode-flex-item-child child))
                   (grow (or (vui-vnode-flex-item-grow child) 1))
@@ -5281,18 +5302,18 @@ current state."
                  ;; Width-receiving function: it renders at whatever
                  ;; width the row assigns, so its floor doubles as the
                  ;; width it occupies during partitioning.
-                 (list :child inner :function t
+                 (list :child inner :index index :function t
                        :natural (or min 0) :min (or min 0) :grow grow)
                ;; A static block renders at one width and cannot
                ;; re-render narrower, so it is rigid: packing its row
                ;; at a smaller floor would only overflow the row.
                ;; :min-width can still raise the width it occupies.
-               (let ((block (vui--measure-block inner)))
-                 (list :child inner :block (car block)
+               (let ((block (vui--measure-cell-block inner index)))
+                 (list :child inner :index index :block (car block)
                        :natural (cdr block) :min min :rigid t
                        :grow grow))))
-         (let ((block (vui--measure-block child)))
-           (list :child child :block (car block)
+         (let ((block (vui--measure-cell-block child index)))
+           (list :child child :index index :block (car block)
                  :natural (cdr block) :rigid t :grow 0))))
      children)))
 
@@ -5314,12 +5335,13 @@ Returns a list of rows, each a list of (SPEC . WIDTH) in source order."
       (push (nreverse current) rows))
     (nreverse rows)))
 
-(defun vui--flex-render-inline-row (row spacing index)
+(defun vui--flex-render-inline-row (row spacing)
   "Render ROW of (SPEC . WIDTH) cells in place, separated by SPACING.
-INDEX is the first cell's child index, for render paths.  The same
-identity-preserving render as a non-wrapped flex: children render into
-the real buffer and pad out to their assigned width (a grower's share,
-or a :min-width above the content)."
+The same identity-preserving render as a non-wrapped flex: children
+render into the real buffer and pad out to their assigned width (a
+grower's share, or a :min-width above the content).  Each cell renders
+under its child index (the spec's :index) as its step in the render
+path, the step its measure ran under."
   (let ((prev-rendered-p nil))
     (dolist (cell row)
       (let* ((spec (car cell))
@@ -5327,7 +5349,8 @@ or a :min-width above the content)."
              (child (plist-get spec :child))
              (sep-start (point))
              (content-start nil)
-             (vui--render-path (cons index vui--render-path)))
+             (vui--render-path (cons (plist-get spec :index)
+                                     vui--render-path)))
         (when prev-rendered-p
           (insert (vui--pad spacing)))
         (setq content-start (point))
@@ -5345,17 +5368,17 @@ or a :min-width above the content)."
         (if (> (point) content-start)
             (setq prev-rendered-p t)
           ;; Child rendered nothing - remove the separator we added
-          (delete-region sep-start (point))))
-      (cl-incf index))))
+          (delete-region sep-start (point)))))))
 
 (defun vui--flex-render-composed-row (row spacing indent)
   "Insert ROW of (SPEC . WIDTH) cells composed side by side as text.
 Every cell reuses its measured lines (static cells from the specs
-pass, function cells from the post-allocation measure).  Lines after
-the first are indented by INDENT (mode units).  Composition goes
-through `vui-layout-compose' with mode-aware measurement and padding,
-so a block wider than its assignment widens its column instead of
-breaking alignment."
+pass, function cells from the post-allocation measure).  Both ran
+under the cell's :index, so the widgets in these lines have the paths
+a render in place gives them.  Lines after the first are indented by
+INDENT (mode units).  Composition goes through `vui-layout-compose'
+with mode-aware measurement and padding, so a block wider than its
+assignment widens its column instead of breaking alignment."
   (let* ((blocks (mapcar (lambda (cell) (plist-get (car cell) :block)) row))
          (widths (mapcar #'cdr row))
          (lines (vui-layout-compose blocks widths spacing
@@ -5386,7 +5409,9 @@ new line, indented by the flex's :indent."
          ;; A child that renders nothing is dropped, like the
          ;; non-wrapped flex removing its separator: it must not eat a
          ;; gap or a column.  (Growers and function children stay -
-         ;; they occupy their assigned width even when empty.)
+         ;; they occupy their assigned width even when empty.)  The
+         ;; children after it keep their child index (:index) as their
+         ;; step in the render path, also like the non-wrapped flex.
          (specs (cl-remove-if
                  (lambda (spec)
                    (and (not (plist-get spec :function))
@@ -5395,8 +5420,7 @@ new line, indented by the flex's :indent."
                  (vui--flex-wrap-specs children)))
          (placements (vui-layout-solve specs total spacing))
          (rows (vui--flex-wrap-rows specs placements))
-         (first-row t)
-         (index 0))
+         (first-row t))
     ;; Function children can only render at their assigned width, so
     ;; their blocks exist only now that allocation has run.  Measuring
     ;; them here (not under the reconciliation cursor - allocation
@@ -5410,7 +5434,8 @@ new line, indented by the flex's :indent."
                      (not (plist-get spec :block)))
             (let* ((vnode (funcall (plist-get spec :child)
                                    (vui--width-to-chars (cdr cell))))
-                   (block (vui--measure-block vnode)))
+                   (block (vui--measure-cell-block
+                           vnode (plist-get spec :index))))
               ;; Keep the vnode: the inline branch renders it for real
               ;; instead of calling the function a second time.
               (plist-put spec :vnode vnode)
@@ -5426,8 +5451,7 @@ new line, indented by the flex's :indent."
                      (cdr (plist-get (car cell) :block)))
                    row)
           (vui--flex-render-composed-row row spacing indent)
-        (vui--flex-render-inline-row row spacing index))
-      (cl-incf index (length row)))
+        (vui--flex-render-inline-row row spacing)))
     (vui--apply-region-props flex-start (point)
                              (vui-vnode-flex-face vnode)
                              (vui-vnode-flex-keymap vnode))))
@@ -5457,12 +5481,17 @@ in place, rows containing a multi-line cell composed as text."
          ;; mounted components measure at current state.  Unlike flex,
          ;; the tracks are known before anything renders, so function
          ;; cells measure too - at their track width - and multi-line
-         ;; function output composes like any other block.
+         ;; function output composes like any other block.  Every cell
+         ;; is measured under its child index (:index) as its step in
+         ;; the render path, the step it renders in place under (see
+         ;; `vui--measure-cell-block').
          (cells (let ((vui--measure-reconcile
                        (and vui--current-instance
                             (cons vui--current-instance vui--child-index)))
-                     (col 0))
+                     (col 0)
+                     (index -1))
                   (mapcar (lambda (child)
+                            (cl-incf index)
                             (let* ((track (nth col tracks))
                                    ;; A function cell is called once;
                                    ;; the vnode it returned renders
@@ -5471,9 +5500,11 @@ in place, rows containing a multi-line cell composed as text."
                                               (funcall child
                                                        (vui--width-to-chars track))
                                             child))
-                                   (block (vui--measure-block vnode)))
+                                   (block (vui--measure-cell-block
+                                           vnode index)))
                               (setq col (% (1+ col) count))
                               (list :child child
+                                    :index index
                                     :function (and (functionp child) t)
                                     :vnode (and (functionp child) vnode)
                                     :block (car block)
@@ -5482,8 +5513,7 @@ in place, rows containing a multi-line cell composed as text."
          ;; Effective column widths: content wider than its track
          ;; widens the whole column, for every row.
          (widths (copy-sequence tracks))
-         (first-row t)
-         (index 0))
+         (first-row t))
     (let ((col 0))
       (dolist (cell cells)
         (let ((natural (plist-get cell :natural)))
@@ -5517,15 +5547,15 @@ in place, rows containing a multi-line cell composed as text."
         ;; landing for real so a field or button it returns works).
         (let ((col 0))
           (dolist (cell row)
-            (let ((vui--render-path (cons (+ index col) vui--render-path)))
+            (let ((vui--render-path (cons (plist-get cell :index)
+                                          vui--render-path)))
               (when (> col 0)
                 (insert (vui--pad spacing)))
               (vui--render-vnode (or (plist-get cell :vnode)
                                      (plist-get cell :child)))
               (insert (vui--pad (max 0 (- (nth col widths)
                                           (plist-get cell :natural))))))
-            (cl-incf col))))
-      (cl-incf index (length row)))
+            (cl-incf col)))))
     (vui--apply-region-props grid-start (point)
                              (vui-vnode-grid-face vnode)
                              (vui-vnode-grid-keymap vnode))))

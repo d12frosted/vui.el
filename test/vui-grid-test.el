@@ -155,6 +155,148 @@
                         :to-be t)))
           (kill-buffer "*grid-identity*"))))))
 
+;; Every widget records its place in the tree as `:vui-path', and a
+;; re-render finds the widget under point again by that path.  A cell is
+;; one step of it, the cell's child index, whichever way its row is
+;; rendered: in place, or composed from the lines of the measure pass.
+
+(defun vui-grid-test--paths ()
+  "Return (LABEL PATH) for every widget of the current buffer, in order."
+  (mapcar (lambda (widget)
+            (list (vui--elt-get widget :vui-tag)
+                  (vui--elt-get widget :vui-path)))
+          (vui--collect-widgets)))
+
+(defun vui-grid-test--goto-nth (text n)
+  "Move point to the start of the Nth occurrence of TEXT in the buffer."
+  (goto-char (point-min))
+  (search-forward text nil nil n)
+  (goto-char (match-beginning 0)))
+
+;; Two panels side by side.  Each one is two lines tall, so the row is
+;; composed, and both have the same button in the same place.
+(vui-defcomponent vui-grid-test-panels ()
+  :render (vui-vstack
+           (vui-text "header")
+           (vui-grid :columns 2 :width 60
+             (vui-vstack (vui-button "copy") (vui-button "copy"))
+             (vui-vstack (vui-button "copy") (vui-button "send")))))
+
+;; A row of three cells.  The last one is one line tall or two, which
+;; makes the row render in place or composed.
+(vui-defcomponent vui-grid-test-switch (tall)
+  :render (vui-vstack
+           (vui-text "header")
+           (vui-grid :columns 3 :width 60
+             (vui-button "copy")
+             (vui-button "copy")
+             (vui-vstack (vui-text "a") (when tall (vui-text "b"))))))
+
+(describe "vui-grid render paths"
+  (it "makes every cell of a composed row a step in the path"
+    (with-temp-buffer
+      (vui-render (vui-grid :columns 2 :width 60
+                    (vui-vstack (vui-button "copy") (vui-button "copy"))
+                    (vui-vstack (vui-button "copy") (vui-button "send"))))
+      ;; In buffer order: the first line of both cells, then the second.
+      (expect (vui-grid-test--paths)
+              :to-equal '(("copy" (0 0)) ("copy" (1 0))
+                          ("copy" (0 1)) ("send" (1 1))))))
+
+  (it "numbers the cells of every row by their child index"
+    (with-temp-buffer
+      ;; The first row renders in place, the second one is composed.
+      (vui-render (vui-grid :columns 2 :width 60
+                    (vui-button "a")
+                    (vui-button "b")
+                    (vui-vstack (vui-button "c") (vui-text "x"))
+                    (vui-button "d")))
+      (expect (vui-grid-test--paths)
+              :to-equal '(("a" (0)) ("b" (1)) ("c" (2 0)) ("d" (3))))))
+
+  (it "gives a widget one path, composed or in place"
+    (dolist (tall '(nil t))
+      (with-temp-buffer
+        (vui-render (vui-grid :columns 3 :width 60
+                      (vui-button "copy")
+                      (vui-button "copy")
+                      (vui-vstack (vui-text "a") (when tall (vui-text "b")))))
+        ;; Two lines of text: the row was composed
+        (expect (count-lines (point-min) (point-max))
+                :to-equal (if tall 2 1))
+        (expect (vui-grid-test--paths)
+                :to-equal '(("copy" (0)) ("copy" (1)))))))
+
+  (it "numbers function cells the same way"
+    (with-temp-buffer
+      (vui-render (vui-grid :columns 2 :width 60
+                    (lambda (_w) (vui-button "copy"))
+                    (lambda (_w) (vui-button "copy"))
+                    (lambda (_w)
+                      (vui-vstack (vui-button "copy") (vui-button "copy")))
+                    (lambda (_w)
+                      (vui-vstack (vui-button "copy") (vui-button "send")))))
+      (expect (vui-grid-test--paths)
+              :to-equal '(("copy" (0)) ("copy" (1))
+                          ("copy" (2 0)) ("copy" (3 0))
+                          ("copy" (2 1)) ("send" (3 1))))))
+
+  (it "keeps the items of a stream apart from the widgets of other cells"
+    (let ((stream (vui-make-stream)))
+      (vui-stream-append stream (vui-button "copy"))
+      (vui-stream-append stream (vui-button "copy"))
+      (with-temp-buffer
+        (vui-render (vui-grid :columns 2 :width 60
+                      (vui-vstack (vui-button "copy") (vui-button "copy"))
+                      (vui-stream stream)))
+        ;; An item adds its id as a step after the path of its stream,
+        ;; and the stream is cell 1.
+        (expect (vui-grid-test--paths)
+                :to-equal '(("copy" (0 0)) ("copy" (1 0))
+                            ("copy" (0 1)) ("copy" (1 1)))))))
+
+  (it "keeps point on a button of the second cell across a re-render"
+    (let* ((vui-render-delay nil)
+           (root (vui-mount (vui-component 'vui-grid-test-panels)
+                            "*grid-paths*")))
+      (unwind-protect
+          (with-current-buffer "*grid-paths*"
+            ;; The second [copy] of the buffer is the first button of
+            ;; the second cell.
+            (vui-grid-test--goto-nth "[copy]" 2)
+            (expect (current-column) :to-equal 31)
+            (let ((pos (point))
+                  (probe (copy-marker (point))))
+              (vui-rerender root)
+              ;; The text under point was rewritten: a marker in it was
+              ;; thrown to the top.
+              (expect (marker-position probe) :to-equal (point-min))
+              (expect (point) :to-equal pos)
+              (set-marker probe nil)))
+        (kill-buffer "*grid-paths*"))))
+
+  (it "keeps point on its button when the row switches between the two ways"
+    (let* ((vui-render-delay nil)
+           (root (vui-mount (vui-component 'vui-grid-test-switch)
+                            "*grid-paths*")))
+      (unwind-protect
+          (with-current-buffer "*grid-paths*"
+            (vui-grid-test--goto-nth "[copy]" 2)
+            (let ((pos (point)))
+              (expect (vui-grid-test--paths)
+                      :to-equal '(("copy" (1 0)) ("copy" (1 1))))
+              ;; In place to composed
+              (vui-update root '(:tall t))
+              (expect (count-lines (point-min) (point-max)) :to-equal 3)
+              (expect (vui-grid-test--paths)
+                      :to-equal '(("copy" (1 0)) ("copy" (1 1))))
+              (expect (point) :to-equal pos)
+              ;; And back
+              (vui-update root '(:tall nil))
+              (expect (count-lines (point-min) (point-max)) :to-equal 2)
+              (expect (point) :to-equal pos)))
+        (kill-buffer "*grid-paths*")))))
+
 (provide 'vui-grid-test)
 
 ;;; vui-grid-test.el ends here

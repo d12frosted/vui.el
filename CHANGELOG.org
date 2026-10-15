@@ -138,6 +138,27 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   skip its update is rendered again when that index changed, because
   what it left in the buffer has the old paths.
 
+- The cells of a =vui-grid= and the children of a wrapping =vui-flex=
+  have a place of their own in the tree in every row. A row with a
+  multi-line cell is composed as text from the lines its cells were
+  measured with, and the measure rendered a cell without its index. So
+  widgets at the same place in two cells had one path: with the same
+  button in two panels side by side (a =[copy]= with no =:key=, say), a
+  re-render moved point from the second panel to the first. A
+  =vui-stream= in such a cell could share paths with the widgets of the
+  other cells. And the paths of a row changed when the row switched
+  between composed and rendered in place (a cell gets a second line,
+  the window changes width), so point could move to the same button of
+  another cell in that render. Each cell is now measured under its
+  index, the step it is rendered in place under, and a widget has one
+  path in both ways of rendering. This holds for function cells too. In
+  a wrapping =vui-flex= the step is the index of the child, as in a
+  non-wrapping one: a child that renders nothing is dropped from its row
+  and still counted. A row rendered in place counted only the children
+  it kept. So when an empty child started to render something, the
+  children after it changed their paths, and point could move from a
+  button to the same button of the child before it.
+
 - A re-render that rewrites a =vui-stream= no longer moves the cursor to
   the first item. A render that cannot patch around a stream (content
   before the stream, for example) rewrites its text, and point is put
@@ -157,11 +178,7 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   without an =:id= is told apart by the same path, so one inside a
   stream item no longer shares its caught error with the boundaries of
   the other items: one failed item turned the other items into their
-  fallback too, at the latest after two rebuilds of the stream. Not
-  covered: the cells of a =vui-grid= row or a wrapping =vui-flex= row
-  that is composed as text (a row with a multi-line cell) are not steps
-  in the path, so a stream in such a cell can share paths with the
-  widgets of the other cells.
+  fallback too, at the latest after two rebuilds of the stream.
 
 - Widgets below a live =vui-stream= have the same place in the tree
   whether the render patched around the stream or rewrote the whole
