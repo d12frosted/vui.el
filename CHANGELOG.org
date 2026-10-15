@@ -28,6 +28,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-stream-update-last= after =vui-stream-remove= took the last item
+  now changes the buffer, not only the stream's item list. When the
+  item left at the end was static (appended, or a finalized node),
+  nothing marked where it starts any more, and the call replaced the
+  item in the item list but wrote nothing: the buffer showed the old
+  text until something wrote the stream again, even for a plain
+  extension (the next token of a message). Now the next call makes the
+  root render again and write the whole stream from its items, which
+  marks where the last item starts, and the calls after it write in
+  place again. A call from a lifecycle hook, while a render is still in
+  progress, is written by the render that follows it.
+
 - A =vui-field= no longer calls =:on-change= with its value from before
   an edit. =widget-before-change= notifies the field too, before the
   text changes, so =:on-change= also ran with the old value. A remount

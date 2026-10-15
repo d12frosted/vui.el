@@ -223,6 +223,213 @@
                     :to-equal (vui-snode--oracle '("header" "Q") "n0")))
         (vui-snode--kill)))))
 
+;; `vui-stream-remove' of the last node leaves the item before it as the
+;; last one.  When that item is static, nothing marks where it starts,
+;; so the next update-last writes the stream again from its items.  Here
+;; the stream is the first child of the root, so an ordinary render of
+;; the root would not write it again.
+
+(defun vui-snode--probe-first ()
+  "Put a property on the first character of the test buffer."
+  (with-current-buffer "*vui-snode*"
+    (let ((inhibit-read-only t))
+      (put-text-property (point-min) (1+ (point-min)) 'vui-snode-probe t))))
+
+(defun vui-snode--probe-kept-p ()
+  "Non-nil when the property of `vui-snode--probe-first' is still there."
+  (with-current-buffer "*vui-snode*"
+    (get-text-property (point-min) 'vui-snode-probe)))
+
+(defvar vui-snode-hook--fn nil
+  "Called with N from the `:on-update' of `vui-snode-hooked-box'.")
+
+(defvar vui-snode-hook--calls 0
+  "Number of calls of `vui-snode-hook--fn'.")
+
+(vui-defcomponent vui-snode-hooked-box (n)
+  "A box below the stream that runs `vui-snode-hook--fn' when it updates."
+  :on-update (when vui-snode-hook--fn
+               (setq vui-snode-hook--calls (1+ vui-snode-hook--calls))
+               (funcall vui-snode-hook--fn n))
+  :render (vui-text (format "box %s" n)))
+
+(vui-defcomponent vui-snode-hooked (stream n)
+  :render (vui-vstack (vui-stream stream)
+                      (vui-component 'vui-snode-hooked-box :n n)))
+
+(defvar vui-snode-unmounting--log nil
+  "Lifecycle events of `vui-snode-unmounting-box', newest first.")
+
+(vui-defcomponent vui-snode-unmounting-box (stream)
+  "A box below STREAM that calls update-last on it when it unmounts."
+  :on-unmount (progn
+                (push 'unmount vui-snode-unmounting--log)
+                (vui-stream-update-last stream (vui-text "done")))
+  :render (progn
+            (vui-use-effect ()
+              (push 'effect vui-snode-unmounting--log)
+              (lambda () (push 'cleanup vui-snode-unmounting--log)))
+            (vui-text "box")))
+
+(vui-defcomponent vui-snode-unmounting (stream)
+  :render (vui-vstack (vui-stream stream)
+                      (vui-component 'vui-snode-unmounting-box :stream stream)))
+
+(describe "vui-stream nodes: update-last after the last node was removed"
+  (dolist (flag '(nil t))
+    (it (format "replaces the static item before it (flag %s)"
+                (if flag "on" "off"))
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil)
+            (s (vui-make-stream)))
+        (vui-snode--mount s "n0")
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-append s (vui-text "b"))
+              (vui-stream-remove (vui-stream-open s (vui-text "N")))
+              (vui-stream-update-last s (vui-text "B"))
+              (expect (vui-snode--buffer)
+                      :to-equal (vui-snode--oracle '("a" "B") "n0"))
+              ;; The stream knows where the last item starts again, so
+              ;; the next replace is written in place
+              (vui-snode--probe-first)
+              (vui-stream-update-last s (vui-text "C"))
+              (expect (vui-snode--buffer)
+                      :to-equal (vui-snode--oracle '("a" "C") "n0"))
+              (expect (vui-snode--probe-kept-p) :to-be t)
+              (vui-stream-append s (vui-text "c"))
+              (expect (vui-snode--buffer)
+                      :to-equal (vui-snode--oracle '("a" "C" "c") "n0")))
+          (vui-snode--kill)))))
+
+  (it "extends the static item before it"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (progn
+            (vui-stream-append s (vui-text "a"))
+            (vui-stream-append s (vui-text "msg"))
+            (vui-stream-remove (vui-stream-open s (vui-text "N")))
+            (vui-stream-update-last s (vui-text "msg more"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("a" "msg more") "n0"))
+            ;; The next extension only writes its own text
+            (vui-snode--probe-first)
+            (vui-stream-update-last s (vui-text "msg more text"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("a" "msg more text") "n0"))
+            (expect (vui-snode--probe-kept-p) :to-be t))
+        (vui-snode--kill))))
+
+  ;; A call from a lifecycle hook runs while the render that called the
+  ;; hook is still in progress, so the stream is written again by the
+  ;; render after it.
+  (it "replaces it from a lifecycle hook, and the renders settle"
+    (let* ((vui-render-delay nil)
+           (s (vui-make-stream))
+           (root (vui-mount (vui-component 'vui-snode-hooked :stream s :n 0)
+                            "*vui-snode*")))
+      (unwind-protect
+          (progn
+            (vui-stream-append s (vui-text "a"))
+            (vui-stream-append s (vui-text "status 0"))
+            (vui-stream-remove (vui-stream-open s (vui-text "N")))
+            (setq vui-snode-hook--calls 0
+                  vui-snode-hook--fn
+                  (lambda (n)
+                    (vui-stream-update-last
+                     s (vui-text (format "status %d" n)))))
+            (vui-update root (list :stream s :n 1))
+            (expect (vui-snode--buffer) :to-equal "a\nstatus 1\nbox 1")
+            (expect (<= vui-snode-hook--calls 2) :to-be t))
+        (setq vui-snode-hook--fn nil)
+        (vui-snode--kill))))
+
+  (it "extends it after a replace from a lifecycle hook"
+    (let* ((vui-render-delay nil)
+           (s (vui-make-stream))
+           (root (vui-mount (vui-component 'vui-snode-hooked :stream s :n 0)
+                            "*vui-snode*")))
+      (unwind-protect
+          (progn
+            (vui-stream-append s (vui-text "a"))
+            (vui-stream-append s (vui-text "b"))
+            (vui-stream-remove (vui-stream-open s (vui-text "N")))
+            (setq vui-snode-hook--fn
+                  (lambda (_) (vui-stream-update-last s (vui-text "B"))))
+            (vui-update root (list :stream s :n 1))
+            (expect (vui-snode--buffer) :to-equal "a\nB\nbox 1")
+            (setq vui-snode-hook--fn
+                  (lambda (_) (vui-stream-update-last s (vui-text "B more"))))
+            (vui-update root (list :stream s :n 2))
+            (expect (vui-snode--buffer) :to-equal "a\nB more\nbox 2"))
+        (setq vui-snode-hook--fn nil)
+        (vui-snode--kill))))
+
+  (it "writes the stream again once, then lets the root patch around it"
+    (let* ((vui-render-delay nil)
+           (s (vui-make-stream))
+           (root (vui-snode--mount s "n0")))
+      (unwind-protect
+          (progn
+            (vui-stream-append s (vui-text "a"))
+            (vui-stream-append s (vui-text "b"))
+            (vui-stream-remove (vui-stream-open s (vui-text "N")))
+            (vui-stream-update-last s (vui-text "B"))
+            ;; A later render of the root leaves the stream alone again
+            (vui-snode--probe-first)
+            (vui-update root (list :stream s :note "n1"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("a" "B") "n1"))
+            (expect (vui-snode--probe-kept-p) :to-be t))
+        (vui-snode--kill))))
+
+  ;; The hooks of a tree that is being unmounted run with the tree still
+  ;; in the buffer, but it must not render again: its effects would run
+  ;; after their cleanups, with no unmount left to clean them up.
+  (dolist (how '(unmount remount))
+    (it (format "does not render the tree again from its on-unmount (%s)" how)
+      (let ((vui-render-delay nil)
+            (s (vui-make-stream)))
+        (vui-mount (vui-component 'vui-snode-unmounting :stream s) "*vui-snode*")
+        (unwind-protect
+            (progn
+              (vui-stream-append s (vui-text "a"))
+              (vui-stream-append s (vui-text "b"))
+              (vui-stream-remove (vui-stream-open s (vui-text "N")))
+              (setq vui-snode-unmounting--log nil)
+              (if (eq how 'unmount)
+                  (vui-unmount "*vui-snode*")
+                (vui-mount (vui-component 'vui-snode-row :label "x")
+                           "*vui-snode*"))
+              (expect (reverse vui-snode-unmounting--log)
+                      :to-equal '(cleanup unmount)))
+          (setq vui-snode-unmounting--log nil)
+          (vui-snode--kill)))))
+
+  (it "keeps rows and open nodes working when it writes the stream again"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (row mid)
+            (vui-stream-append s (vui-text "a"))
+            (setq row (vui-stream-open
+                       s (vui-component 'vui-snode-row :label "r")))
+            (setq mid (vui-stream-open s (vui-text "M")))
+            (vui-stream-append s (vui-text "b"))
+            (vui-stream-remove (vui-stream-open s (vui-text "N")))
+            (vui-stream-update-last s (vui-text "B"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("a" "[r]" "M" "B") "n0"))
+            (vui-stream-update mid (vui-text "M2"))
+            (vui-stream-update row (vui-component 'vui-snode-row :label "r2"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("a" "[r2]" "M2" "B") "n0")))
+        (vui-snode--kill)))))
+
 (describe "vui-stream nodes: model stays in sync for re-emit"
   ;; The stream-tail patch is always on, so an in-place re-render leaves the
   ;; live region untouched and would exercise nothing.  Re-mounting the handle

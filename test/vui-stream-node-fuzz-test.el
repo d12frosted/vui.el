@@ -154,15 +154,9 @@
 ;;
 ;; While the stream is out of the buffer, an edit through a content node
 ;; writes nothing and is dropped (`vui-stream-before' and
-;; `vui-stream-after' return nil).  A plain append, a newly opened node
-;; and new props of a row are kept, and show when the stream is back.
-;;
-;; `vui-stream-update-last' on a static last item rewrites the text from
-;; where the last item starts.  `vui-stream-remove' of the last item
-;; moves that place to the item before it when that item is a live
-;; content node, and forgets it otherwise.  Only an append or a rebuild
-;; of the stream sets it again, so the model allows that case only when
-;; the place is known.
+;; `vui-stream-after' return nil).  A plain append, a newly opened node,
+;; a new last item from `vui-stream-update-last' and new props of a row
+;; are kept, and show when the stream is back.
 
 (vui-defcomponent vui-snfz-row (label)
   "A row with state: a click counts up."
@@ -221,9 +215,6 @@
                  (live '())         ; alist id -> content node
                  (rows '())         ; alist id -> (node label n)
                  (next 0)
-                 ;; Whether the stream knows where a static last item
-                 ;; starts (see the commentary above)
-                 (ul-ok t)
                  (trace '())
                  (root nil)
                  (show (lambda ()
@@ -242,28 +233,25 @@
                          (row (and rows (nth (random (length rows)) rows)))
                          (ops (if away
                                   (append '(append open back back)
+                                          (when lines '(update-last))
                                           (when live '(append-to update finalize
                                                        before after remove))
                                           (when rows '(update-row)))
                                 (append '(append open relabel reshape leave)
-                                        (when lines '(row))
-                                        (when (or (assq last-id live)
-                                                  (assq last-id rows)
-                                                  (and lines ul-ok))
-                                          '(update-last))
+                                        (when lines '(row update-last flash))
                                         (when live '(append-to update finalize
                                                      before after remove))
                                         (when rows '(click update-row)))))
                          (op (nth (random (length ops)) ops))
                          (txt (format "x%d_%d" step (random 100))))
                     ;; The id the op is about: the new item of append,
-                    ;; open and row, the row of click and update-row, the
-                    ;; last item of update-last, the node of a node op,
-                    ;; and nil for the rest (`leave' puts in where the
-                    ;; root went)
+                    ;; open, row and flash, the row of click and
+                    ;; update-row, the last item of update-last, the node
+                    ;; of a node op, and nil for the rest (`leave' puts in
+                    ;; where the root went)
                     (push (list op
                                 (pcase op
-                                  ((or 'append 'open 'row) next)
+                                  ((or 'append 'open 'row 'flash) next)
                                   ((or 'click 'update-row) (car row))
                                   ('update-last last-id)
                                   ((or 'append-to 'update 'finalize
@@ -276,31 +264,25 @@
                           ('append
                            (vui-stream-append s (vui-text txt))
                            (setq lines (append lines (list (cons next txt)))
-                                 next (1+ next)
-                                 ul-ok t))
+                                 next (1+ next)))
                           ('open
                            (let ((n (vui-stream-open s (vui-text txt))))
                              (setq lines (append lines (list (cons next txt))))
                              (push (cons next n) live)
-                             (setq next (1+ next)
-                                   ul-ok t)))
+                             (setq next (1+ next))))
                           ('relabel
                            (setq label (format "l%d" step))
-                           (funcall show)
-                           ;; With a header the render rebuilds the stream
-                           (when (eq mode 'head) (setq ul-ok t)))
+                           (funcall show))
                           ('reshape
                            (setq mode (if (eq mode 'tail) 'head 'tail))
-                           (funcall show)
-                           (setq ul-ok t))
+                           (funcall show))
                           ('leave
                            (setq away (if (zerop (random 2)) 'other 'none))
                            (setf (nth 1 (car trace)) away)
                            (funcall show))
                           ('back
                            (setq away nil)
-                           (funcall show)
-                           (setq ul-ok t))
+                           (funcall show))
                           ('row
                            (let ((r (list (vui-stream-open
                                            s (vui-component 'vui-snfz-row
@@ -310,8 +292,7 @@
                              (setq lines (append lines
                                                  (list (cons next
                                                              (vui-snfz--row-text r))))
-                                   next (1+ next)
-                                   ul-ok t)))
+                                   next (1+ next))))
                           ('click
                            (let ((r (cdr row)))
                              (with-current-buffer "*vui-snfz*"
@@ -333,8 +314,18 @@
                                   s (vui-component 'vui-snfz-row :label txt))
                                  (setf (nth 1 r) txt)
                                  (setcdr (car (last lines)) (vui-snfz--row-text r)))
-                             (vui-stream-update-last s (vui-text txt))
-                             (setcdr (car (last lines)) txt)))
+                             ;; Half the time the new text extends the old
+                             ;; one, as the next token of a message does
+                             (let ((new (if (zerop (random 2))
+                                            txt
+                                          (concat (cdr (car (last lines))) txt))))
+                               (vui-stream-update-last s (vui-text new))
+                               (setcdr (car (last lines)) new))))
+                          ;; An item that comes and goes at the end (a
+                          ;; "thinking" line, say): its id is used up
+                          ('flash
+                           (vui-stream-remove (vui-stream-open s (vui-text txt)))
+                           (setq next (1+ next)))
                           ('append-to
                            (vui-stream-append-to pnode (vui-text txt))
                            (unless away
@@ -367,10 +358,7 @@
                            (vui-stream-remove pnode)
                            (unless away
                              (setq lines (assq-delete-all pid lines))
-                             (setq live (assq-delete-all pid live))
-                             (when (eq pid last-id)
-                               (setq ul-ok (and (assq (car (car (last lines))) live)
-                                                t))))))
+                             (setq live (assq-delete-all pid live)))))
                       ;; An operation that signals is a failure too, with
                       ;; the same report
                       (error

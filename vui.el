@@ -1923,6 +1923,13 @@ handler's binding and be undone when the handler returns.")
 (defvar-local vui--mounted-root nil
   "The root instance `vui-mount' mounted in this buffer.")
 
+(defvar-local vui--stream-rebuild-pending nil
+  "Non-nil when a stream in this buffer has to be written again.
+Set by `vui--stream-request-rebuild'.  The next commit of the root reads
+it (see `vui--commit-root'), so a request made while a render is in
+progress, from a lifecycle hook say, is not lost when that render
+commits after it.")
+
 (defvar-local vui--inline-instances nil
   "Inline instances mounted in this buffer via `vui-mount-inline'.
 Unlike `vui--mounted-root', a buffer can host any number of inline
@@ -4309,13 +4316,19 @@ becomes a no-op for it, and async callbacks created via
   (dolist (child (vui-instance-children instance))
     (vui--detach-instance child)))
 
+(defvar vui--unmounting nil
+  "The root instance whose teardown `vui--unmount-root' is running, or nil.
+Its hooks run while the tree is still in the buffer, but the tree must
+not render again then (see `vui--stream-request-rebuild').")
+
 (defun vui--unmount-root (instance)
   "Run full lifecycle teardown for root INSTANCE and detach it.
 Calls on-unmount hooks, effect cleanups, on-mount cleanup functions,
 and async process cleanup for the whole tree, cancels any pending
 deferred render, and clears buffer references so stale re-render
 requests for this tree become no-ops."
-  (vui--call-unmount-recursive instance)
+  (let ((vui--unmounting instance))
+    (vui--call-unmount-recursive instance))
   ;; Cancel after cleanups: an on-unmount hook calling `vui-set-state'
   ;; would otherwise leave a fresh timer behind.
   (vui--cancel-render-timer instance)
@@ -6187,9 +6200,17 @@ an eligible flat content container; otherwise erases and rebuilds.
 Maintains the instance's render record either way.  A nil VTREE empties
 the buffer.  Used as the commit function of the root
 `vui--render-instance' call.  Return `unchanged' when the buffer
-already matches VTREE and nothing was rendered."
+already matches VTREE and nothing was rendered.
+
+A stream that asked to be written again (see
+`vui--stream-rebuild-pending') makes this commit do without the record,
+so it writes the whole tree."
   (let* ((instance vui--current-instance)
-         (record (vui-instance-render-record instance)))
+         (record (unless vui--stream-rebuild-pending
+                   (vui-instance-render-record instance))))
+    (when vui--stream-rebuild-pending
+      (setq vui--stream-rebuild-pending nil)
+      (setf (vui-instance-render-record instance) nil))
     (cond
      ;; Nothing to show: remove what the last commit wrote, the way the
      ;; wholesale rebuild below does.  Drop the record as well, so the
@@ -6659,6 +6680,24 @@ its rows would stay mounted in the buffer otherwise."
       (when-let* ((root (vui-get-instance buf)))
         (vui-rerender root)))))
 
+(defun vui--stream-request-rebuild (handle)
+  "Re-render the root of HANDLE's buffer so that it writes the stream again.
+A render of the root leaves the text of a live stream alone when it can
+\(see `vui--stream-tail-eligible').  With `vui--stream-rebuild-pending'
+set, its next commit writes the whole tree again, and the stream from
+its items (see `vui--stream-render').
+
+Nothing happens while the root is being unmounted (a hook of its tree
+made the call): the tree would render after its effects were cleaned
+up, and run them again with nothing left to clean them up."
+  (let ((buf (vui-stream-handle-buffer handle)))
+    (when (and buf (buffer-live-p buf)
+               (not (and vui--unmounting
+                         (eq vui--unmounting (vui-get-instance buf)))))
+      (with-current-buffer buf
+        (setq vui--stream-rebuild-pending t))
+      (vui--stream-request-rerender handle))))
+
 (defun vui--stream-region-empty-p (handle)
   "Non-nil when HANDLE's region is live and zero-width."
   (let ((s (vui-stream-handle-region-start handle))
@@ -6850,7 +6889,15 @@ only means a full re-render, never a wrong answer."
 This is the in-progress message in a streaming agent UI: as tokens
 arrive, update the last item with the message-so-far.  The cost depends
 on that one item, not on the number of items above it, so the transcript
-can be arbitrarily long.  A no-op when the stream is empty or not live.
+can be arbitrarily long.  A no-op when the stream is empty.  While the
+stream is not in its buffer (it was never rendered, or its root shows
+another tree for now), the new last item shows when the stream is
+rendered.
+
+After `vui-stream-remove' took the last item, nothing marks where a
+static last item starts.  The next call then makes the root of the
+buffer render again and write the whole stream from its items, once;
+the calls after it write in place again.
 
 For a content last item VNODE must be a content vnode (text/fragment).
 For a component ROW, pass a `vui-component' of the same type: the row's
@@ -6916,8 +6963,18 @@ keeping its state."
                 (ls (vui-stream-handle-last-start handle))
                 (end (vui-stream-handle-region-end handle)))
             (setcar (vui-stream-handle-items-rev handle) vnode)
-            (when (and buf (buffer-live-p buf)
-                       ls (marker-position ls) end (marker-position end))
+            (cond
+             ((not (and buf (buffer-live-p buf) end (marker-position end)))
+              nil)
+             ;; Nothing marks where the last item starts: it is static,
+             ;; and `vui-stream-remove' took the item after it.  Write the
+             ;; stream again from its items, which marks the place for the
+             ;; next call.  An extension goes that way too: when an earlier
+             ;; call is still waiting for that rebuild, the buffer does not
+             ;; hold the item it would extend.
+             ((not (and ls (marker-position ls)))
+              (vui--stream-request-rebuild handle))
+             (t
               (let ((was-empty (vui--stream-region-empty-p handle)))
                 (with-current-buffer buf
                   (let ((inhibit-read-only t)
@@ -6949,7 +7006,7 @@ keeping its state."
                     ;; never takes a table out.
                     (unless suffix
                       (vui--table-restore-header-line))))
-                (vui--stream-relay-empty-transition handle was-empty)))))))))
+                (vui--stream-relay-empty-transition handle was-empty))))))))))
   handle)
 
 ;; --- Random-access nodes: address a region by ref, not just "the last" ---
@@ -7399,8 +7456,9 @@ if NODE is not live."
       ;; If NODE was the last item, the handle's last-start now dangles in the
       ;; deleted span - re-point it at the new last item so a later content
       ;; `vui-stream-update-last' rewrites the right region.  When that item is
-      ;; static (no live marker), clear last-start so update-last safely
-      ;; no-ops until the next append rather than corrupting it.
+      ;; static (no live marker), nothing marks where it starts: clear
+      ;; last-start, and the next update-last writes the stream again from
+      ;; its items.
       (when (eq cell head)
         (let* ((next (cdr cell))
                (n (and next (cl-find next (vui-stream-handle-nodes handle)
