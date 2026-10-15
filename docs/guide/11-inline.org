@@ -55,6 +55,15 @@ mount position. Everything else works like a regular mount:
 POSITION defaults to point and must not fall strictly inside another
 inline instance's region.
 
+Regions can touch. A region mounted at the start of another one goes
+above it, and one mounted at its end goes below it. A component that
+renders nothing has an empty region, and that region keeps its place:
+mount another component at the same position and it goes above, as it
+would above a region with text. When the empty one renders something
+later, its text shows up where the region was, between the same
+neighbours. Text that anything else inserts at the position of an empty
+region stays after it.
+
 * Dismissing
 
 Pass the instance to =vui-unmount=:

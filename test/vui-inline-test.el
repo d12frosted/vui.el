@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'buttercup)
+(require 'cl-lib)
 (require 'vui)
 (require 'vui-test-helpers)
 
@@ -70,6 +71,44 @@ Each character is followed by the render INSTANCE schedules for it."
 (vui-defcomponent inline-edge (tall)
   "One row, or three when TALL."
   :render (vui-text (if tall "[a]\n[b]\n[c]\n" "[a]\n")))
+
+(vui-defcomponent inline-box (text)
+  "TEXT, and nothing at all when TEXT is empty."
+  :render (vui-text (or text "")))
+
+(vui-defcomponent inline-fragile-child (fail)
+  "A row, or an error when FAIL."
+  :render (if fail (error "Boom") (vui-text "[ok]\n")))
+
+(vui-defcomponent inline-fragile (fail)
+  "A row, then a child whose render signals when FAIL."
+  :render (vui-fragment
+           (vui-text "[row]\n")
+           (vui-component 'inline-fragile-child :fail fail)))
+
+(defun vui-inline-test--box (text position)
+  "Mount an `inline-box' showing TEXT at POSITION."
+  (vui-mount-inline (vui-component 'inline-box :text text) position))
+
+(defun vui-inline-test--host-insert (position text)
+  "Insert TEXT at POSITION as a program that owns the host buffer does.
+The widgets of a mounted component make plain edits outside of their
+fields signal."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char position)
+      (insert text))))
+
+(defun vui-inline-test--host-replace (start end text)
+  "Replace the text from START to END with TEXT, as the host does."
+  (let ((inhibit-read-only t))
+    (delete-region start end))
+  (vui-inline-test--host-insert start text))
+
+(defun vui-inline-test--bounds (instance)
+  "Return (START . END), where the region markers of INSTANCE are."
+  (cons (marker-position (vui-instance-region-start instance))
+        (marker-position (vui-instance-region-end instance))))
 
 (describe "vui-mount-inline"
   (it "renders at point without taking over the buffer"
@@ -150,7 +189,34 @@ Each character is followed by the render INSTANCE schedules for it."
         (expect (vui-inline-instance-at 8) :to-be instance)
         ;; Outside the region
         (expect (vui-inline-instance-at 2) :to-be nil)
-        (expect (vui-inline-instance-at (point-max)) :to-be nil)))))
+        (expect (vui-inline-instance-at (point-max)) :to-be nil))))
+
+  (it "finds an empty instance at its position"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "" 6)))
+        (expect (vui-inline-instance-at 6) :to-be instance)
+        ;; Text written there is the host's, the region is still at 6
+        (vui-inline-test--host-insert 6 "host")
+        (expect (vui-inline-instance-at 6) :to-be instance)
+        (expect (vui-inline-instance-at 8) :to-be nil))))
+
+  (it "finds the instance that starts at a position two regions share"
+    ;; Whatever the order they were mounted in
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((b (vui-inline-test--box "[B]" 6))
+             (a (vui-inline-test--box "[A]" 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[A][B]TAIL")
+        (expect (vui-inline-instance-at 8) :to-be a)
+        (expect (vui-inline-instance-at 9) :to-be b)))
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((a (vui-inline-test--box "[A]" 6))
+             (b (vui-inline-test--box "[B]" 9)))
+        (expect (buffer-string) :to-equal "HEAD\n[A][B]TAIL")
+        (expect (vui-inline-instance-at 8) :to-be a)
+        (expect (vui-inline-instance-at 9) :to-be b)))))
 
 (describe "inline re-rendering"
   (it "re-renders only its region on state updates"
@@ -527,6 +593,206 @@ Each character is followed by the render INSTANCE schedules for it."
         (expect (length widget-field-list) :to-equal 1)
         (expect (vui-field-value 'inline-f1) :to-equal "x")))))
 
+(describe "empty inline regions"
+  ;; A region that renders nothing has no text of its own to hold its
+  ;; place: its two markers are at one position.  Whatever is written
+  ;; there, the region stays one region, in the place it had.
+  (it "stays before text inserted at its position"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "" 6)))
+        (vui-inline-test--host-insert 6 "host\n")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 6))
+        (vui-update instance '(:text "[B]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[B]\nhost\nTAIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 10)))))
+
+  (it "is below a region mounted at its position"
+    ;; As a region with text is: what is mounted where it starts goes
+    ;; above it.
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((b (vui-inline-test--box "" 6))
+             (a (vui-inline-test--box "[A]\n" 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\nTAIL")
+        (expect (vui-inline-test--bounds a) :to-equal '(6 . 10))
+        (expect (vui-inline-test--bounds b) :to-equal '(10 . 10))
+        (vui-update a '(:text "[A]\n[A2]\n"))
+        (expect (vui-inline-test--bounds b) :to-equal '(15 . 15))
+        (vui-update b '(:text "[B]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[A2]\n[B]\nTAIL"))))
+
+  (it "keeps its place below a region that re-renders"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((a (vui-inline-test--box "[A]\n" 6))
+             (b (vui-inline-test--box "" 10)))
+        (vui-update a '(:text "[A]\n[A2]\n"))
+        (expect (vui-inline-test--bounds b) :to-equal '(15 . 15))
+        (vui-update a '(:text "[A3]\n"))
+        (expect (vui-inline-test--bounds b) :to-equal '(11 . 11))
+        (vui-update b '(:text "[B]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[A3]\n[B]\nTAIL"))))
+
+  (it "keeps its place above a region that re-renders"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((a (vui-inline-test--box "[A]\n" 6))
+             (b (vui-inline-test--box "" 6)))
+        (vui-update a '(:text "[A]\n[A2]\n"))
+        (expect (vui-inline-test--bounds b) :to-equal '(6 . 6))
+        (vui-update b '(:text "[B]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[B]\n[A]\n[A2]\nTAIL"))))
+
+  (it "keeps its place between two regions that re-render"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((c (vui-inline-test--box "[C]\n" 6))
+             (m (vui-inline-test--box "[M]\n" 6))
+             (a (vui-inline-test--box "[A]\n" 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[M]\n[C]\nTAIL")
+        (vui-update m '(:text ""))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[C]\nTAIL")
+        (vui-update a '(:text "[A]\n[A2]\n"))
+        (vui-update c '(:text "[C2]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[A2]\n[C2]\nTAIL")
+        (expect (vui-inline-test--bounds m) :to-equal '(15 . 15))
+        (vui-update m '(:text "[M2]\n"))
+        (expect (buffer-string)
+                :to-equal "HEAD\n[A]\n[A2]\n[M2]\n[C2]\nTAIL"))))
+
+  (it "keeps the order of empty regions at one position"
+    ;; Whichever of them gets its text first
+    (dolist (order '((a b c) (c b a) (b a c) (b c a)))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL")
+        (let* ((c (vui-inline-test--box "" 6))
+               (b (vui-inline-test--box "" 6))
+               (a (vui-inline-test--box "" 6)))
+          (dolist (name order)
+            (pcase name
+              ('a (vui-update a '(:text "[A]\n")))
+              ('b (vui-update b '(:text "[B]\n")))
+              ('c (vui-update c '(:text "[C]\n")))))
+          (expect (buffer-string) :to-equal "HEAD\n[A]\n[B]\n[C]\nTAIL")))))
+
+  (it "keeps the order of regions that became empty at one position"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      ;; Mounted top to bottom this time
+      (let* ((a (vui-inline-test--box "[A]\n" 6))
+             (b (vui-inline-test--box "[B]\n" 10)))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[B]\nTAIL")
+        (vui-update a '(:text ""))
+        (vui-update b '(:text ""))
+        (expect (buffer-string) :to-equal "HEAD\nTAIL")
+        (vui-update a '(:text "[A]\n"))
+        (vui-update b '(:text "[B]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\n[B]\nTAIL"))))
+
+  (it "leaves text written where its own text was deleted to the host"
+    ;; The host deleted the region's text, the region is empty now
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "[B]\n" 6)))
+        (vui-inline-test--host-replace 6 10 "host\n")
+        (vui-update instance '(:text "[B2]\n"))
+        (expect (buffer-string) :to-equal "HEAD\n[B2]\nhost\nTAIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 11)))))
+
+  (it "is around what a failed render wrote"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-fragile :fail nil) 6)))
+        (expect (buffer-string) :to-equal "HEAD\n[row]\n[ok]\nTAIL")
+        (expect (vui-update instance '(:fail t)) :to-throw 'error)
+        ;; The old text is gone, the region holds the part that was
+        ;; written before the error
+        (expect (buffer-string) :to-equal "HEAD\n[row]\nTAIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 12))
+        (vui-update instance '(:fail nil))
+        (expect (buffer-string) :to-equal "HEAD\n[row]\n[ok]\nTAIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 17))))))
+
+(defun vui-inline-test--model-failure (regions)
+  "Return what differs between the buffer and REGIONS, or nil.
+REGIONS is a list of (INSTANCE . TEXT), top to bottom.  The buffer is
+to hold the texts in that order between \"HEAD\\n\" and \"TAIL\", each
+of them between the region markers of its instance."
+  (let ((pos 6)
+        (failure nil))
+    (unless (equal (buffer-string)
+                   (concat "HEAD\n" (mapconcat #'cdr regions "") "TAIL"))
+      (setq failure (list :buffer (buffer-string))))
+    (dolist (region regions)
+      (let ((end (+ pos (length (cdr region)))))
+        (unless (or failure
+                    (equal (vui-inline-test--bounds (car region))
+                           (cons pos end)))
+          (setq failure (list :text (cdr region)
+                              :bounds (vui-inline-test--bounds (car region))
+                              :expected (cons pos end))))
+        (setq pos end)))
+    failure))
+
+(describe "inline regions next to each other"
+  ;; Seeded runs of random mounts, updates and unmounts on a stack of
+  ;; regions, half of which render nothing, against a model: a list of
+  ;; the regions with their text, top to bottom.
+  (it "keep their order and their bounds, whatever they render"
+    (let ((failure nil))
+      (cl-block done
+        (dotimes (seed 60)
+          (random (format "vui-inline-regions-%d" seed))
+          (with-temp-buffer
+            (insert "HEAD\nTAIL")
+            (let ((regions nil)
+                  (trace nil)
+                  (count 0))
+              (dotimes (_ 40)
+                (let ((op (random 10))
+                      (text (pcase (random 4)
+                              ((or 0 1) "")
+                              (2 (format "[%d]\n" (cl-incf count)))
+                              (_ (format "<%d>" (cl-incf count))))))
+                  (cond
+                   ;; Mount where region INDEX starts, or after them all.
+                   ;; The empty regions right before it are at that
+                   ;; position too: the new region goes above them.
+                   ((or (null regions)
+                        (and (< op 3) (< (length regions) 7)))
+                    (let* ((index (random (1+ (length regions))))
+                           (position
+                            (+ 6 (apply #'+ (mapcar (lambda (region)
+                                                      (length (cdr region)))
+                                                    (seq-take regions index)))))
+                           (instance (vui-inline-test--box text position)))
+                      (push (list 'mount index text) trace)
+                      (while (and (> index 0)
+                                  (equal (cdr (nth (1- index) regions)) ""))
+                        (setq index (1- index)))
+                      (setq regions (append (seq-take regions index)
+                                            (list (cons instance text))
+                                            (nthcdr index regions)))))
+                   ((< op 4)
+                    (let ((region (nth (random (length regions)) regions)))
+                      (push (list 'unmount (cdr region)) trace)
+                      (vui-unmount (car region))
+                      (setq regions (delq region regions))))
+                   (t
+                    (let ((region (nth (random (length regions)) regions)))
+                      (push (list 'update (cdr region) text) trace)
+                      (vui-update (car region) (list :text text))
+                      (setcdr region text)))))
+                (when-let* ((difference
+                             (vui-inline-test--model-failure regions)))
+                  (setq failure (append (list :seed seed
+                                              :trace (reverse trace))
+                                        difference))
+                  (cl-return-from done)))))))
+      (expect failure :to-be nil))))
+
 (describe "inline unmounting"
   (it "vui-unmount removes the region and runs full teardown"
     (with-temp-buffer
@@ -550,6 +816,45 @@ Each character is followed by the render INSTANCE schedules for it."
           (expect (vui-inline-instance-at 6) :to-be nil)
           ;; Unmounting again is a no-op
           (expect (vui-unmount instance) :to-be nil)))))
+
+  (it "leaves text written where the region's own text was deleted"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "[B]\n" 6)))
+        (vui-inline-test--host-replace 6 10 "host\n")
+        (vui-unmount instance)
+        (expect (buffer-string) :to-equal "HEAD\nhost\nTAIL"))))
+
+  (it "removes all of the region from a hook of its own render"
+    ;; The render is half done then: the new text is in the buffer and
+    ;; so is the old one
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance nil))
+        (vui-defcomponent inline-dismiss-self (dismiss)
+          :on-update (when dismiss (vui-unmount instance))
+          :render (vui-text (if dismiss "[bye]\n" "[form]\n")))
+        (setq instance (vui-mount-inline
+                        (vui-component 'inline-dismiss-self :dismiss nil) 6))
+        (expect (buffer-string) :to-equal "HEAD\n[form]\nTAIL")
+        (vui-update instance '(:dismiss t))
+        (expect (buffer-string) :to-equal "HEAD\nTAIL")
+        (expect (vui-inline-instance-at 6) :to-be nil))))
+
+  (it "removes an empty region from a hook of the render above it"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-defcomponent inline-dismiss-other (text victim)
+        :on-update (when victim (vui-unmount victim))
+        :render (vui-text (or text "")))
+      (let* ((b (vui-mount-inline
+                 (vui-component 'inline-dismiss-other :text "") 6))
+             (a (vui-mount-inline
+                 (vui-component 'inline-dismiss-other :text "") 6)))
+        (vui-update a (list :text "[A]\n" :victim b))
+        (expect (buffer-string) :to-equal "HEAD\n[A]\nTAIL")
+        (expect (vui-inline-test--bounds a) :to-equal '(6 . 10))
+        (expect (vui-inline-instance-at 10) :to-be a))))
 
   (it "makes stale async callbacks no-ops after unmount"
     (with-temp-buffer

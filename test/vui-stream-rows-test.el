@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'buttercup)
+(require 'cl-lib)
 (require 'vui)
 (require 'cl-lib)
 
@@ -522,6 +523,247 @@ MODE `boxed' mounts `vui-sr-gap-boxed' instead."
                 (vui-sr-gap--bump "r1")
                 (expect (vui-sr-gap--text) :to-equal "box 2"))
             (vui-sr--kill vui-sr-gap--buffer)))))))
+
+;; A row that shows its text, and renders nothing at all without one (a
+;; tool card that waits for its result).
+(vui-defcomponent vui-sr-quiet (text)
+  :render (vui-text (or text "")))
+
+(vui-defcomponent vui-sr-status (stream)
+  :render (vui-vstack (vui-stream stream) (vui-text "status")))
+
+(defmacro vui-sr--with-status-stream (spec &rest body)
+  "Run BODY in the buffer of a live stream with a status line below it.
+SPEC is (STREAM ROOT [SEPARATOR]): two symbols, bound to the stream
+handle and to the root instance, and the separator of the stream's items
+\(default a newline)."
+  (declare (indent 1))
+  (pcase-let ((`(,stream ,root ,separator) spec))
+    `(let* ((vui-render-delay nil)
+            (,stream (vui-make-stream ,separator))
+            (,root (vui-mount (vui-component 'vui-sr-status :stream ,stream)
+                              "*vui-sr-q*")))
+       (ignore ,root)
+       (unwind-protect
+           (with-current-buffer "*vui-sr-q*" ,@body)
+         (vui-sr--kill "*vui-sr-q*")))))
+
+(defun vui-sr--append-quiet (stream text)
+  "Append a `vui-sr-quiet' row showing TEXT to STREAM and return the row."
+  (vui-stream-append stream (vui-component 'vui-sr-quiet :text text))
+  (car (vui-stream-handle-items-rev stream)))
+
+(defun vui-sr--row-bounds (row)
+  "Return (START . END), where the region markers of ROW are."
+  (cons (marker-position (vui-instance-region-start row))
+        (marker-position (vui-instance-region-end row))))
+
+(describe "vui-stream rows: a row that renders nothing"
+  (it "keeps its place when an item is appended after it"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((row (vui-sr--append-quiet stream "")))
+        (expect (vui-sr--row-bounds row) :to-equal '(7 . 7))
+        (vui-stream-append stream (vui-text "world"))
+        (expect (buffer-string) :to-equal "hello\n\nworld\nstatus")
+        (expect (vui-sr--row-bounds row) :to-equal '(7 . 7))
+        (vui-update row '(:text "TOOL RESULT"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
+
+  (it "keeps its place when a row is appended after it"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let* ((first (vui-sr--append-quiet stream ""))
+             (second (vui-sr--append-quiet stream "second")))
+        (expect (buffer-string) :to-equal "hello\n\nsecond\nstatus")
+        (vui-update first '(:text "first"))
+        (expect (buffer-string) :to-equal "hello\nfirst\nsecond\nstatus")
+        (vui-update second '(:text "second, longer"))
+        (expect (buffer-string)
+                :to-equal "hello\nfirst\nsecond, longer\nstatus"))))
+
+  (it "keeps its place when the content below the stream is re-rendered"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((row (vui-sr--append-quiet stream "")))
+        (vui-rerender root)
+        (expect (buffer-string) :to-equal "hello\n\nstatus")
+        (expect (vui-sr--row-bounds row) :to-equal '(7 . 7))
+        (vui-update row '(:text "TOOL RESULT"))
+        (expect (buffer-string) :to-equal "hello\nTOOL RESULT\nstatus")
+        ;; The stream still ends where its last row ends
+        (vui-stream-append stream (vui-text "world"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
+
+  (it "keeps its place when it loses its text again"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((row (vui-sr--append-quiet stream "running")))
+        (vui-update row '(:text ""))
+        (vui-rerender root)
+        (vui-stream-append stream (vui-text "world"))
+        (vui-update row '(:text "TOOL RESULT"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
+
+  (it "is updated through its node"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((node (vui-stream-open stream
+                                   (vui-component 'vui-sr-quiet :text ""))))
+        (vui-stream-append stream (vui-text "world"))
+        (vui-stream-update node (vui-component 'vui-sr-quiet
+                                               :text "TOOL RESULT"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
+
+  (it "is the last item again once the node after it is removed"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((row (vui-sr--append-quiet stream ""))
+            (node (vui-stream-open stream (vui-text "thinking"))))
+        (vui-stream-remove node)
+        (expect (buffer-string) :to-equal "hello\n\nstatus")
+        (vui-update row '(:text "TOOL RESULT"))
+        (expect (buffer-string) :to-equal "hello\nTOOL RESULT\nstatus")
+        (vui-rerender root)
+        (expect (buffer-string) :to-equal "hello\nTOOL RESULT\nstatus")
+        (vui-stream-append stream (vui-text "world"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
+
+  (it "holds the stream's place when it is the only item left"
+    ;; The stream has an item, it is not an empty stream: nothing is laid
+    ;; out again from the items, which cannot bring a row back
+    (vui-sr--with-status-stream (stream root)
+      (let* ((note (vui-stream-open stream (vui-text "note")))
+             (row (vui-sr--append-quiet stream "")))
+        (vui-stream-remove note)
+        (vui-rerender root)
+        (vui-stream-append stream (vui-text "world"))
+        (vui-update row '(:text "TOOL RESULT"))
+        (expect (buffer-string) :to-equal "TOOL RESULT\nworld\nstatus")
+        (vui-rerender root)
+        (expect (buffer-string) :to-equal "TOOL RESULT\nworld\nstatus"))))
+
+  (it "keeps its place among rows that no separator sets apart"
+    ;; Whichever of them gets its text first
+    (dolist (order '((first second) (second first)))
+      (vui-sr--with-status-stream (stream root "")
+        (vui-stream-append stream (vui-text "hello "))
+        (let ((first (vui-sr--append-quiet stream ""))
+              (second (vui-sr--append-quiet stream "")))
+          (dolist (name order)
+            (pcase name
+              ('first (vui-update first '(:text "first ")))
+              ('second (vui-update second '(:text "second ")))))
+          (expect (buffer-string) :to-equal "hello first second \nstatus")
+          (vui-stream-append stream (vui-text "world"))
+          (expect (buffer-string)
+                  :to-equal "hello first second world\nstatus"))))))
+
+(describe "vui-stream rows: the node after a row is removed"
+  (it "leaves the stream ending where the row ends"
+    (vui-sr--with-status-stream (stream root)
+      (vui-stream-append stream (vui-text "hello"))
+      (let ((row (vui-sr--append-quiet stream "running"))
+            (node (vui-stream-open stream (vui-text "thinking"))))
+        (vui-stream-remove node)
+        (vui-update row '(:text "TOOL RESULT"))
+        (vui-rerender root)
+        (expect (buffer-string) :to-equal "hello\nTOOL RESULT\nstatus")
+        (vui-stream-append stream (vui-text "world"))
+        (expect (buffer-string)
+                :to-equal "hello\nTOOL RESULT\nworld\nstatus")))))
+
+(defun vui-sr--insert-next-to (lines id new after)
+  "Return LINES with NEW before the entry of ID, or after it when AFTER."
+  (let ((result nil))
+    (dolist (line lines)
+      (cond
+       ((not (eq (car line) id)) (push line result))
+       (after (push line result) (push new result))
+       (t (push new result) (push line result))))
+    (nreverse result)))
+
+(describe "vui-stream rows: random edits around rows that render nothing"
+  ;; Seeded runs of random operations on a stream of plain items, rows
+  ;; and content nodes, against a model: the list of the items' texts.
+  ;; Half of the rows render nothing, and a row changes its text at any
+  ;; time, so empty rows get an item appended after them, a node
+  ;; inserted or removed next to them, and the content below the stream
+  ;; re-rendered.  The buffer has to hold the texts, in order, after
+  ;; every operation.
+  (it "keeps every item in its place"
+    (let ((failure nil))
+      (cl-block done
+        (dotimes (seed 40)
+          (random (format "vui-stream-rows-%d" seed))
+          (vui-sr--with-status-stream (stream root)
+            (vui-stream-append stream (vui-text "hello"))
+            (let ((lines (list (cons -1 "hello"))) ; (ID . TEXT), in order
+                  (rows nil)                       ; (ID . ROW)
+                  (nodes nil)                      ; (ID . NODE), content
+                  (next 0)
+                  (trace nil))
+              (dotimes (step 40)
+                (let* ((ops (append '(append open row row rerender)
+                                    (when rows '(update-row update-row))
+                                    (when nodes '(update before after remove))))
+                       (op (nth (random (length ops)) ops))
+                       (text (format "x%d" step))
+                       (row-text (if (zerop (random 2)) "" text))
+                       (row (and rows (nth (random (length rows)) rows)))
+                       (node (and nodes (nth (random (length nodes)) nodes)))
+                       (new (cons next text)))
+                  (push (list op (car (if (eq op 'update-row) row node))
+                              row-text)
+                        trace)
+                  (pcase op
+                    ('append
+                     (vui-stream-append stream (vui-text text))
+                     (setq lines (append lines (list new))))
+                    ('open
+                     (push (cons next (vui-stream-open stream (vui-text text)))
+                           nodes)
+                     (setq lines (append lines (list new))))
+                    ('row
+                     (push (cons next (vui-sr--append-quiet stream row-text))
+                           rows)
+                     (setq lines (append lines (list (cons next row-text)))))
+                    ('rerender
+                     (vui-rerender root))
+                    ('update-row
+                     (vui-update (cdr row) (list :text row-text))
+                     (setcdr (assq (car row) lines) row-text))
+                    ('update
+                     (vui-stream-update (cdr node) (vui-text row-text))
+                     (setcdr (assq (car node) lines) row-text))
+                    ((or 'before 'after)
+                     (push (cons next
+                                 (funcall (if (eq op 'before)
+                                              #'vui-stream-before
+                                            #'vui-stream-after)
+                                          (cdr node) (vui-text text)))
+                           nodes)
+                     (setq lines (vui-sr--insert-next-to
+                                  lines (car node) new (eq op 'after))))
+                    ('remove
+                     (vui-stream-remove (cdr node))
+                     (setq lines (assq-delete-all (car node) lines)
+                           nodes (assq-delete-all (car node) nodes))))
+                  (setq next (1+ next))
+                  (let ((expected (concat (mapconcat #'cdr lines "\n")
+                                          "\nstatus")))
+                    (unless (equal (buffer-string) expected)
+                      (setq failure (list :seed seed
+                                          :trace (reverse trace)
+                                          :expected expected
+                                          :got (buffer-string)))
+                      (cl-return-from done)))))))))
+      (expect failure :to-be nil))))
 
 (provide 'vui-stream-rows-test)
 ;;; vui-stream-rows-test.el ends here

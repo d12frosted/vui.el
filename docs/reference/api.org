@@ -122,7 +122,13 @@ rewrite only the instance's region.
 The region is ephemeral UI, not document content: vui keeps its rewrites
 out of the undo history, and manual edits inside the region (outside of
 input fields) are overwritten by the next re-render. POSITION must not
-fall strictly inside another inline instance's region.
+fall strictly inside another inline instance's region. At the start of
+one, the new region goes above it; at the end of one, below it.
+
+A component that renders nothing has an empty region, which keeps its
+place among the other regions all the same: a region mounted at its
+position goes above it, as above one with text, and text inserted at
+its position by anything else stays after it.
 
 Pass the returned instance to =vui-unmount= to dismiss the UI (teardown
 also runs automatically when the buffer is killed), or drive it with
@@ -146,8 +152,11 @@ also runs automatically when the buffer is killed), or drive it with
 #+end_src
 
 Return the inline instance whose region contains POSITION (default:
-point) in the current buffer, or nil if there is none. Useful for
-commands like "dismiss the form at point":
+point) in the current buffer, or nil if there is none. The end of a
+region is a position in it, and an empty region is at its one position;
+where that makes POSITION a position of more than one region, the lowest
+of them is returned (the one that starts at POSITION, when one does).
+Useful for commands like "dismiss the form at point":
 
 #+begin_src elisp
 (when-let* ((form (vui-inline-instance-at)))

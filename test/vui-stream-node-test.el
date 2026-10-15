@@ -258,6 +258,45 @@
                     :to-equal (vui-snode--oracle '("X" "A") "n0")))
         (vui-snode--kill))))
 
+  (it "before a node that renders nothing leaves that node after it"
+    ;; The node has no text: its start and its end are one position, and
+    ;; both have to move past what is inserted there
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "")))
+            (vui-stream-before a (vui-text "X"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "X" "") "n0"))
+            (vui-stream-append-to a (vui-text "A"))
+            (expect (vui-snode--buffer)
+                    :to-equal (vui-snode--oracle '("header" "X" "A") "n0"))
+            ;; the stream ends after the node, not before X
+            (vui-stream-append s (vui-text "tail"))
+            (expect (vui-snode--buffer)
+                    :to-equal
+                    (vui-snode--oracle '("header" "X" "A" "tail") "n0")))
+        (vui-snode--kill))))
+
+  (it "before an empty node in the middle leaves the items below alone"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-snode--mount s "n0")
+      (unwind-protect
+          (let (a)
+            (vui-stream-append s (vui-text "header"))
+            (setq a (vui-stream-open s (vui-text "")))
+            (vui-stream-append s (vui-text "tail"))
+            (vui-stream-before a (vui-text "X"))
+            (vui-stream-update a (vui-text "A"))
+            (expect (vui-snode--buffer)
+                    :to-equal
+                    (vui-snode--oracle '("header" "X" "A" "tail") "n0")))
+        (vui-snode--kill))))
+
   (it "after inserts a live node below another, byte-identical"
     (let ((vui-render-delay nil)
           (s (vui-make-stream)))

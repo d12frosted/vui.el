@@ -222,6 +222,57 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   that, and the totals in the report count the same time once per level
   of nesting.
 
+- An inline region that renders nothing keeps its place, and its next
+  render no longer destroys the text of its neighbour. A
+  =vui-mount-inline= region with no text has both of its markers at one
+  position. The start marker advanced past text inserted there and the
+  end marker did not, so the first such insertion left the start after
+  the end: a second region mounted at the same position, a region next
+  to it that re-rendered, an item appended after a =vui-stream=
+  component row, a re-render of the content below the stream. The next
+  render of the empty region then deleted what was between its two
+  markers, which was not its text, and wrote its own somewhere else. A
+  tool card in a chat log that shows nothing until its result arrives
+  was enough: the result replaced the message after the card and landed
+  in the middle of the status line. Now both markers of an empty region
+  stay before text inserted at their position, so nothing takes them
+  apart, and the region is before whatever is written there. Among
+  regions the order is kept too. A region mounted at the position of
+  another one goes above it, with or without text; a row appended to a
+  stream goes below the rows before it; and regions that are empty at
+  one position stay in that order, whichever of them renders something
+  first. A re-render writes the new text in front of the old text and
+  deletes the old text after that, so what sits at the end of the
+  region (an empty region below, the end of the stream) is not dropped
+  at its start. A render that signals leaves the region around what it
+  wrote. A region whose markers did cross (its text was deleted from
+  outside, and text was written there) is an empty region, and neither
+  a re-render nor =vui-unmount= deletes that text.
+
+- =vui-inline-instance-at= finds an empty region at its position. Where
+  two regions meet it returns the one that starts there; it returned
+  the one mounted last.
+
+- A =vui-stream= ends at its last component row again after
+  =vui-stream-remove= took out the node below that row. The stream kept
+  a marker of its own for its end, which stayed behind when the row
+  grew: the next re-render of the content below the stream deleted the
+  row's new text, and the next appended item landed inside the row.
+
+- A stream whose only item left is a component row that renders nothing
+  is not taken for an empty stream. Appending to it, or re-rendering the
+  content below it, laid the whole tree out again from the items, which
+  cannot bring a row back.
+
+- =vui-stream-before= on a node that renders nothing moves that node's
+  end, and the stream's end when the node is the last item, past the
+  inserted item. They stayed before it, so the next edit of the node and
+  the next appended item went in above the new item. Not covered: the
+  node API of a stream with an empty separator. Items that touch share
+  their marker positions there, and =vui-stream-before=,
+  =vui-stream-after=, =vui-stream-update= and =vui-stream-remove= mix
+  them up. Plain items and component rows work with an empty separator.
+
 - A re-render no longer moves the cursor to the top of a live
   =vui-stream=. With the cursor on a button in the middle of a chat log,
   any re-render of the root (the status line under the stream changes,

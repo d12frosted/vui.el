@@ -367,13 +367,11 @@ inline instances."
 (defun vui--inspect-instance-location (instance)
   "Return a short location label for INSTANCE.
 Names the buffer, plus the managed region for inline instances."
-  (let ((start (vui-instance-region-start instance))
-        (end (vui-instance-region-end instance)))
+  (let ((bounds (vui--inline-bounds instance)))
     (format "Buffer: %s%s"
             (or (buffer-name (vui-instance-buffer instance)) "(no buffer)")
-            (if (and start (marker-position start))
-                (format " (inline at %d..%d)"
-                        (marker-position start) (marker-position end))
+            (if bounds
+                (format " (inline at %d..%d)" (car bounds) (cdr bounds))
               ""))))
 
 (defun vui-inspect (&optional instance)
@@ -1916,7 +1914,12 @@ child vnodes and may appear anywhere in the plist."
 (defvar-local vui--inline-instances nil
   "Inline instances mounted in this buffer via `vui-mount-inline'.
 Unlike `vui--root-instance', a buffer can host any number of inline
-instances, each owning a region delimited by its markers.")
+instances, each owning a region delimited by its markers.
+
+The list is in buffer order, the lowest region first (see
+`vui--inline-register').  Regions do not cross, so the order holds
+while the text around them changes.  It is what tells empty regions
+at one position apart: all their markers are at that position.")
 
 (defvar vui--batch-depth 0
   "Current nesting depth of `vui-batch' calls.")
@@ -2836,9 +2839,10 @@ anchor answers once."
 (defun vui--region-position-p (position start end)
   "Return non-nil when a rewrite of START to END has to save POSITION.
 That is every position from START to END.  END is one of them: it is
-after the region, on the text that follows, but a marker there ends up
-at START once the region's text is deleted.  Positions outside move
-with the text around them.
+after the region, on the text that follows, but it is also the end of
+an editable field that ends the region, and a point there is in that
+field (see `vui--save-position').  Positions outside move with the
+text around them.
 
 An empty region has no such position.  The render only inserts there,
 and a position at it stays before the new text, as it does for any
@@ -3080,18 +3084,16 @@ The host buffer outside the region is left untouched.  Region
 mutations are kept out of the undo history: the rendered UI is
 ephemeral chrome, not document content."
   (let ((buffer (vui-instance-buffer instance))
-        (start (vui-instance-region-start instance))
-        (end (vui-instance-region-end instance)))
-    (when (and buffer (buffer-live-p buffer)
-               start (marker-position start))
+        (bounds (vui--inline-bounds instance)))
+    (when (and buffer (buffer-live-p buffer) bounds)
       (with-current-buffer buffer
         (let* ((inhibit-read-only t)
                (inhibit-redisplay t)
                (inhibit-modification-hooks t)
                ;; Managed UI text is not part of the document's history
                (buffer-undo-list t)
-               (pos (marker-position start))
-               (end-pos (marker-position end))
+               (pos (car bounds))
+               (end-pos (cdr bounds))
                ;; Only track the cursor when it is inside the region;
                ;; positions outside adjust automatically
                (saved-point (when (vui--region-position-p
@@ -3106,20 +3108,13 @@ ephemeral chrome, not document content."
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
-              (progn
+              (let ((new-end-pos nil))
                 (save-excursion
                   (vui--remove-widget-overlays pos end-pos)
                   (vui--forget-region-fields pos end-pos)
                   (vui--park-streams pos end-pos instance)
-                  (delete-region pos end-pos)
-                  (goto-char pos)
-                  (vui--render-instance instance)
-                  ;; Reposition the markers around the fresh content:
-                  ;; START's insertion type made it advance past our
-                  ;; own insertions (so user edits stay outside), put
-                  ;; it back at the region's beginning
-                  (set-marker start pos)
-                  (set-marker end (point))
+                  (setq new-end-pos
+                        (vui--inline-replace-text instance pos end-pos))
                   ;; The header line of a sticky table that is gone, as
                   ;; in `vui--rerender-buffer'
                   (vui--table-restore-header-line)
@@ -3127,14 +3122,61 @@ ephemeral chrome, not document content."
                   (vui--setup-field-placeholders))
                 (when saved-point
                   (goto-char (vui--restored-position
-                              saved-point pos (marker-position end))))
-                (vui--restore-window-points window-points pos
-                                            (marker-position end))
+                              saved-point pos new-end-pos)))
+                (vui--restore-window-points window-points pos new-end-pos)
                 ;; Run effects after commit
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil))))
       ;; Run any re-renders requested during render/effects
       (vui--flush-queued-rerenders))))
+
+(defun vui--inline-replace-text (instance pos end-pos)
+  "Render inline INSTANCE at POS, in place of its text from POS to END-POS.
+Return the position the new text ends at.
+
+The new text is written in front of the old text, and the old text is
+deleted after that.  Nothing is inserted at the end of the old text
+this way, so every marker there is at the end of the new text
+afterwards, whatever its type: the end of the stream the region is a
+row of, an empty region that follows.  Deleting first would drop them
+at the region's start, among the markers that were there already, and
+the insertion that follows would treat them all alike.
+
+An empty region has no old text to keep the two sides apart.  The
+regions below it that are empty too, at the same position, are moved
+after the new text here (see `vui--inline-empties-below').
+
+While the render runs, the region is all of it: the new text and the
+old text after it.  A hook that unmounts INSTANCE from inside the
+render removes both.  The region is put around the new text when the
+render is over, also when it signals: it is then around what was
+written before the error."
+  (let ((start (vui-instance-region-start instance))
+        (end (vui-instance-region-end instance))
+        (below (and (= pos end-pos)
+                    (vui--inline-empties-below instance pos)))
+        ;; Advances with the text written at POS, so it is at the end
+        ;; of that text, where the old text starts
+        (new-end (copy-marker pos t))
+        (new-end-pos pos))
+    ;; START stays at POS.  END is after the old text, and advances
+    ;; with the new text when there is no old text to keep it ahead.
+    (set-marker start pos)
+    (set-marker-insertion-type start nil)
+    (set-marker-insertion-type end t)
+    (goto-char pos)
+    (unwind-protect
+        (vui--render-instance instance)
+      (setq new-end-pos (marker-position new-end))
+      (set-marker new-end nil)
+      ;; Not when a hook unmounted INSTANCE: its region is gone then
+      (when (vui--inline-bounds instance)
+        (delete-region new-end-pos (max new-end-pos (marker-position end)))
+        (vui--inline-set-bounds instance pos new-end-pos)
+        (dolist (other below)
+          (when (vui--inline-bounds other)
+            (vui--inline-set-bounds other new-end-pos new-end-pos)))))
+    new-end-pos))
 
 (defun vui--rerender-buffer (instance)
   "Re-render INSTANCE as the root of its whole buffer."
@@ -3763,6 +3805,88 @@ text properties."
 (defun vui--inline-p (instance)
   "Return non-nil if INSTANCE was mounted inline (owns a region)."
   (and (vui-instance-region-start instance) t))
+
+;; An inline region is the text between two markers.  A region that
+;; renders nothing has no text, and its markers are at one position.
+;; It still has a place: between the regions and the text it was mounted
+;; between.  Two things keep it there.
+;;
+;; The markers of an empty region both stay before text inserted at
+;; their position (see `vui--inline-set-bounds').  They cannot be taken
+;; apart, and the region is before whatever is written where it is: the
+;; next item of the stream it is a row of, or the text of the host.
+;;
+;; `vui--inline-instances' is in buffer order.  Markers at one position
+;; have no order of their own, so the list is what says which of the
+;; empty regions there is above which, and where the text of the one
+;; that renders something goes (see `vui--inline-empties-below').
+
+(defun vui--inline-bounds (instance)
+  "Return (START . END), the region inline INSTANCE manages, or nil.
+Nil when INSTANCE has no live region.  START is never after END.
+
+The start marker of a region with text advances past text inserted at
+it (see `vui--inline-set-bounds').  When that text is deleted from
+outside, the two markers meet with this type still set, and an
+insertion there moves the start marker past the end marker.  What is
+between them then was never the region's: the region is empty, and at
+its end marker, which no insertion moves."
+  (let ((start (vui-instance-region-start instance))
+        (end (vui-instance-region-end instance)))
+    (when (and start end (marker-position start) (marker-position end))
+      (let ((end-pos (marker-position end)))
+        (cons (min (marker-position start) end-pos) end-pos)))))
+
+(defun vui--inline-set-bounds (instance start end)
+  "Put the region markers of inline INSTANCE at START and END.
+The end marker stays before text inserted at it, always.  The start
+marker advances past such text while the region has text of its own,
+so that what is written at the region's first position stays outside.
+In an empty region it stays before the text too: with both markers at
+one position and of one type no insertion takes them apart, and the
+region is before whatever is written at its position."
+  (let ((start-marker (vui-instance-region-start instance))
+        (end-marker (vui-instance-region-end instance)))
+    (set-marker start-marker start (marker-buffer start-marker))
+    (set-marker end-marker end (marker-buffer end-marker))
+    (set-marker-insertion-type start-marker (< start end))
+    (set-marker-insertion-type end-marker nil)))
+
+(defun vui--inline-register (instance position after-empty)
+  "Add INSTANCE, to be mounted at POSITION, to `vui--inline-instances'.
+The list is in buffer order, the lowest region first.  INSTANCE goes
+above the regions that start at POSITION or after it, and below all
+others.  An empty region at POSITION is one that starts there, unless
+AFTER-EMPTY is non-nil: INSTANCE goes below those then."
+  (let ((prev nil)
+        (tail vui--inline-instances))
+    (while (and tail
+                (pcase (vui--inline-bounds (car tail))
+                  (`(,start . ,end)
+                   (or (> start position)
+                       (and (= start position)
+                            (or (< start end) (not after-empty)))))))
+      (setq prev tail
+            tail (cdr tail)))
+    (if prev
+        (setcdr prev (cons instance tail))
+      (push instance vui--inline-instances))))
+
+(defun vui--inline-empties-below (instance position)
+  "Return the empty regions at POSITION that are below inline INSTANCE.
+INSTANCE's own region is empty and at POSITION.  These are the regions
+the text of INSTANCE goes above: in `vui--inline-instances', which is
+in buffer order with the lowest region first, they are before
+INSTANCE."
+  (let ((tail vui--inline-instances)
+        (result nil))
+    (while (and tail (not (eq (car tail) instance)))
+      (pcase (vui--inline-bounds (car tail))
+        (`(,start . ,end)
+         (when (and (= start position) (= end position))
+           (push (car tail) result))))
+      (setq tail (cdr tail)))
+    result))
 
 (defun vui--forget-region-fields (start end)
   "Drop field-widget bookkeeping for fields between START and END.
@@ -6223,10 +6347,9 @@ ROW as their root (see `vui--run-pending-effects')."
           (vui--render-path path)
           (vui--context-stack nil))
       (vui--render-instance row))
-    ;; START advanced past the row's text: its insertion type keeps text
-    ;; typed at the start out of the region
-    (set-marker start pos)
-    (set-marker end (point))))
+    ;; Around what the row wrote, with the insertion types of a region
+    ;; with text or of an empty one (see `vui--inline-set-bounds')
+    (vui--inline-set-bounds row pos (point))))
 
 (defun vui--stream-measure-row (row)
   "Render what stream ROW renders when the stream is rebuilt, to measure it.
@@ -6408,6 +6531,21 @@ its rows would stay mounted in the buffer otherwise."
     (and s (marker-position s) e (marker-position e)
          (= (marker-position s) (marker-position e)))))
 
+(defun vui--stream-in-place-p (handle)
+  "Non-nil when HANDLE's live region is edited in place, not laid out again.
+That is a region with text in it.  The first item of an empty stream
+is laid out with the whole tree instead, which sets the separators
+around the stream.
+
+A stream that holds a component row is edited in place even when its
+region is empty, which it is when that row is the only item left and
+renders nothing.  The row is in the buffer, with a region of its own
+that holds the stream's place, and laying the items out again would
+not bring it back (see `vui--stream-render')."
+  (or (/= (marker-position (vui-stream-handle-region-start handle))
+          (marker-position (vui-stream-handle-region-end handle)))
+      (cl-some #'vui-instance-p (vui-stream-handle-items-rev handle))))
+
 (defun vui--stream-relay-empty-transition (handle was-empty &optional node)
   "Re-lay HANDLE's tree when an in-place edit crossed the empty boundary.
 WAS-EMPTY is whether the whole stream region was zero-width before the
@@ -6460,7 +6598,6 @@ first item pays, as a plain child component, not a row."
   "Append content VNODE (text/fragment) to HANDLE's stream."
   (let* ((prev-last (car (vui-stream-handle-items-rev handle)))
          (buf (vui-stream-handle-buffer handle))
-         (start (vui-stream-handle-region-start handle))
          (end (vui-stream-handle-region-end handle))
          (id (vui--stream-push handle vnode)))
     (cond
@@ -6469,7 +6606,7 @@ first item pays, as a plain child component, not a row."
       nil)
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
      ;; the whole tree once.  (Only the very first item pays this.)
-     ((= (marker-position start) (marker-position end))
+     ((not (vui--stream-in-place-p handle))
       (vui--stream-request-rerender handle))
      ;; Live and non-empty: O(1) imperative insert at the region end.
      (t
@@ -6480,6 +6617,10 @@ first item pays, as a plain child component, not a row."
               (buffer-undo-list t)
               (vui--render-path (vui--stream-item-path handle id)))
           (save-excursion
+            ;; A component row that ends here stays before the text: its
+            ;; END marker does not advance, and neither does its START
+            ;; marker when the row renders nothing (see
+            ;; `vui--inline-set-bounds').
             (goto-char (marker-position end))
             (insert (vui-stream-handle-separator handle))
             (vui--stream-set-last-start handle (point) buf)
@@ -6496,7 +6637,6 @@ first item pays, as a plain child component, not a row."
 (defun vui--stream-append-row (handle vnode)
   "Append component VNODE as a stateful inline row at HANDLE's tail."
   (let ((buf (vui-stream-handle-buffer handle))
-        (start (vui-stream-handle-region-start handle))
         (end (vui-stream-handle-region-end handle))
         (sep (vui-stream-handle-separator handle)))
     (cond
@@ -6504,7 +6644,7 @@ first item pays, as a plain child component, not a row."
      ;; Record the vnode and lay it out with a full render (it renders as a
      ;; plain child component, not a scoped row - the documented fallback).
      ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
-          (= (marker-position start) (marker-position end)))
+          (not (vui--stream-in-place-p handle)))
       (vui--stream-push handle vnode)
       (when (and buf (buffer-live-p buf))
         (vui--stream-request-rerender handle))
@@ -6520,9 +6660,11 @@ first item pays, as a plain child component, not a row."
             (let* ((row-start (point))
                    (id (vui--stream-new-id handle))
                    ;; The row renders on its own from here on, always
-                   ;; under its item's path
+                   ;; under its item's path.  It goes below the rows
+                   ;; before it, also the ones that render nothing and
+                   ;; that an empty separator leaves at this very position.
                    (row (vui--mount-inline
-                         vnode (point) (vui--stream-item-path handle id))))
+                         vnode (point) (vui--stream-item-path handle id) t)))
               (vui--stream-set-last-start handle row-start buf)
               ;; Share the row's region-end as the stream's end: when the
               ;; row re-renders on its own (grows/shrinks), its marker moves
@@ -6989,6 +7131,13 @@ screen.  A no-op returning nil if NODE is not live."
                   (insert sep)
                   ;; NODE's content now begins after the inserted separator.
                   (set-marker start (point))
+                  ;; A NODE with no text had its end at that same position,
+                  ;; and the end did not move for the insertion.  Take it
+                  ;; along, and the stream's end with it when NODE is last.
+                  (let ((end (vui--stream-node-end node)))
+                    (when (< (marker-position end) (point))
+                      (set-marker end (point))
+                      (vui--stream-sync-end handle (point))))
                   (when last-p
                     (vui--stream-set-last-start handle (point) buf))
                   (vui--stream-node-bind new x-start x-end buf))))))
@@ -7099,7 +7248,20 @@ if NODE is not live."
           (if (and ns (marker-position ns))
               (vui--stream-set-last-start handle (marker-position ns) buf)
             (when-let* ((ls (vui-stream-handle-last-start handle)))
-              (set-marker ls nil)))))
+              (set-marker ls nil))))
+        ;; A component row that is the last item now ends the stream, and
+        ;; the stream's end is the row's own END marker again, as it was
+        ;; when the row was appended (see `vui--stream-append-row').  The
+        ;; marker the stream had for NODE is at the same position, but it
+        ;; would stay there, before the text, when a row that renders
+        ;; nothing gets its text.
+        (let ((last (car (vui-stream-handle-items-rev handle)))
+              (own (vui-stream-handle-region-end handle)))
+          (when (and (vui-instance-p last) (vui--inline-bounds last)
+                     (not (eq own (vui-instance-region-end last))))
+            (setf (vui-stream-handle-region-end handle)
+                  (vui-instance-region-end last))
+            (set-marker own nil))))
       ;; Emptying the stream changes the surrounding layout (the container
       ;; drops the now-empty child and its separator), the mirror of the
       ;; empty -> non-empty transition - re-lay once so the buffer matches a
@@ -7159,9 +7321,10 @@ before it, so the vnodes after the stream keep their index.  Only plain
                        ;; stream region untouched; for an empty stream that
                        ;; means the first appended item (which re-renders via
                        ;; this path) would never be emitted.  Stay wholesale
-                       ;; until there is content; then patch.
-                       (/= (marker-position (vui-stream-handle-region-start h))
-                           (marker-position (vui-stream-handle-region-end h))))
+                       ;; until there is content; then patch.  A stream whose
+                       ;; only content is a row that renders nothing is not
+                       ;; such a stream: a wholesale render would lose the row.
+                       (vui--stream-in-place-p h))
               ;; A child's index is a step in the path of its widgets
               ;; (`:vui-path').  Rendered as children 0, 1, ... the
               ;; vnodes after the stream would get other paths than a
@@ -8018,7 +8181,13 @@ Manual edits inside the region (outside of input fields) are
 overwritten by the next re-render.
 
 POSITION must not fall strictly inside another inline instance's
-region.
+region.  At the start of one, the new region goes above it; at the
+end of one, below it.
+
+A component that renders nothing has an empty region.  It keeps its
+place among the other regions all the same: a region mounted at its
+position goes above it, as above one with text, and text inserted at
+its position by anything else stays after it.
 
 Returns the instance.  Pass it to `vui-unmount' to dismiss the UI
 and run the full teardown lifecycle (which also happens
@@ -8036,12 +8205,15 @@ Example - an ephemeral form that dismisses itself on submit:
                           (run-query params))))))"
   (vui--mount-inline component-vnode (or position (point))))
 
-(defun vui--mount-inline (component-vnode pos &optional base-path)
-  "Mount COMPONENT-VNODE inline at POS, as `vui-mount-inline' does.
-BASE-PATH is the render path the instance starts from, in the form of
-`vui--render-path'.  A row of a `vui-stream' passes the path of its
-item, so that its widgets do not share their `:vui-path' with those of
-the other rows."
+(defun vui--mount-inline (component-vnode pos &optional base-path after-empty)
+  "Mount COMPONENT-VNODE inline at POS and return the instance.
+See `vui-mount-inline'.  BASE-PATH is the render path the instance
+starts from, in the form of `vui--render-path'.  A row of a
+`vui-stream' passes the path of its item, so that its widgets do not
+share their `:vui-path' with those of the other rows.  With AFTER-EMPTY
+non-nil the new region goes below the empty regions at POS, not above
+them: a row appended to a stream comes after the rows that are there,
+whatever they render (see `vui--stream-append-row')."
   (when (cl-find-if (lambda (instance)
                       (let ((s (vui-instance-region-start instance))
                             (e (vui-instance-region-end instance)))
@@ -8050,22 +8222,15 @@ the other rows."
                              (< pos (marker-position e)))))
                     vui--inline-instances)
     (error "Position %d is inside an existing inline VUI instance" pos))
-  (let ((instance (vui--create-instance component-vnode nil))
-        (start (make-marker))
-        (end (make-marker)))
+  (let ((instance (vui--create-instance component-vnode nil)))
     (setf (vui-instance-buffer instance) (current-buffer))
     (setf (vui-instance-base-path instance) base-path)
-    (set-marker start pos)
-    (set-marker end pos)
-    ;; Text typed by the user at the boundaries stays outside the
-    ;; region: START advances past insertions at its position, END
-    ;; stays before them.  Render itself repositions both markers
-    ;; explicitly.
-    (set-marker-insertion-type start t)
-    (set-marker-insertion-type end nil)
-    (setf (vui-instance-region-start instance) start)
-    (setf (vui-instance-region-end instance) end)
-    (push instance vui--inline-instances)
+    ;; An empty region until the first render, which may be queued:
+    ;; both markers stay before text inserted at POS.  Every render
+    ;; puts them around what it wrote (see `vui--inline-set-bounds').
+    (setf (vui-instance-region-start instance) (copy-marker pos))
+    (setf (vui-instance-region-end instance) (copy-marker pos))
+    (vui--inline-register instance pos after-empty)
     ;; Release component resources when the buffer is killed
     (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
     ;; Reflow window-width-dependent layouts on resize (see
@@ -8078,14 +8243,17 @@ the other rows."
 (defun vui-inline-instance-at (&optional position)
   "Return the inline VUI instance whose region contains POSITION.
 POSITION defaults to point.  Returns nil when POSITION is not inside
-any region mounted via `vui-mount-inline' in the current buffer."
+any region mounted via `vui-mount-inline' in the current buffer.
+
+The end of a region is a position in it, and an empty region is at
+its one position.  When that makes POSITION a position of more than
+one region, the lowest of them is returned: the one that starts at
+POSITION, when one does."
   (let ((pos (or position (point))))
+    ;; `vui--inline-instances' has the lowest region first
     (cl-find-if (lambda (instance)
-                  (let ((s (vui-instance-region-start instance))
-                        (e (vui-instance-region-end instance)))
-                    (and s e (marker-position s)
-                         (>= pos (marker-position s))
-                         (<= pos (marker-position e)))))
+                  (pcase (vui--inline-bounds instance)
+                    (`(,start . ,end) (<= start pos end))))
                 vui--inline-instances)))
 
 (defun vui-get-instance (&optional buffer)
@@ -8135,13 +8303,13 @@ Returns INSTANCE, or nil if it was already unmounted."
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (setq vui--inline-instances (delq instance vui--inline-instances))
-          (when (and start (marker-position start))
+          (when-let* ((bounds (vui--inline-bounds instance)))
             (let ((inhibit-read-only t)
                   (inhibit-modification-hooks t)
                   ;; Managed UI text is not part of the undo history
                   (buffer-undo-list t)
-                  (pos (marker-position start))
-                  (end-pos (marker-position end)))
+                  (pos (car bounds))
+                  (end-pos (cdr bounds)))
               (vui--remove-widget-overlays pos end-pos)
               (vui--forget-region-fields pos end-pos)
               (vui--park-streams pos end-pos instance)
