@@ -829,23 +829,61 @@ A row is an inline instance, so its state change re-renders only its own
 region - this should be FLAT, independent of stream size, unlike walking
 or rebuilding the transcript."
   (vui-bench--header "Stream row re-render: toggle 1 row at stream size S (box below)")
-  (dolist (s '(200 500 1000 2000 4000))
-    (let* ((handle (vui-make-stream))
-           (buf "*vui-bench-stream-row*")
-           (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf)))
-      (dotimes (i s)
-        (vui-stream-append handle (vui-text (format "message %d content" i))))
-      (vui-stream-append handle (vui-component 'vui-bench-stream-row :id 9999))
-      (vui-bench--result-row
-       (format "%d row" s)
-       (vui-bench--measure
-        8 (lambda ()
-            (with-current-buffer buf
-              (goto-char (point-min))
-              (when (search-forward "row 9999" nil t)
-                (let ((w (widget-at (match-beginning 0))))
-                  (when w (widget-apply w :action))))))))
-      (vui-bench--agent-teardown inst buf))))
+  ;; The click must render at once, inside the timed call, not later
+  ;; from a timer
+  (let ((vui-render-delay nil))
+    (dolist (s '(200 500 1000 2000 4000))
+      (let* ((handle (vui-make-stream))
+             (buf "*vui-bench-stream-row*")
+             (inst (vui-mount (vui-component 'vui-bench-stream-app :stream handle) buf)))
+        (dotimes (i s)
+          (vui-stream-append handle (vui-text (format "message %d content" i))))
+        (vui-stream-append handle (vui-component 'vui-bench-stream-row :id 9999))
+        ;; The row's button starts its region.  Taking the button from
+        ;; there, not searching for it, keeps the S items above out of
+        ;; the timed click.
+        (let* ((row (car (vui-stream-handle-items-rev handle)))
+               (toggle (lambda ()
+                         (with-current-buffer buf
+                           (button-activate
+                            (button-at (marker-position
+                                        (vui-instance-region-start row))))))))
+          (vui-bench--stream-row-check buf toggle s)
+          (vui-bench--result-row
+           (format "%d row" s)
+           (vui-bench--measure 8 toggle)))
+        (vui-bench--agent-teardown inst buf)))))
+
+(defun vui-bench--stream-row-check (buf toggle s)
+  "Signal unless TOGGLE opens the row in BUF and then closes it again.
+Also signal when the clicks re-render more than the row: a property put
+on the first character of the buffer (the first item of the stream) and
+one put on the last (the box below the stream) must still be there.  S
+is the stream size, shown in the error.  Without this check, the
+benchmark could time a click that reaches nothing, or one that
+re-renders the items above the row or the box below it."
+  (let ((detail-p (lambda ()
+                    (with-current-buffer buf
+                      (save-excursion
+                        (goto-char (point-min))
+                        (search-forward "detail for row 9999" nil t))))))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (put-text-property (point-min) (1+ (point-min)) 'vui-bench-probe t)
+        (put-text-property (1- (point-max)) (point-max) 'vui-bench-probe t)))
+    (funcall toggle)
+    (vui-bench--assert (funcall detail-p)
+                       "a click on the row did not open it (S=%d)" s)
+    (funcall toggle)
+    (vui-bench--assert (not (funcall detail-p))
+                       "a second click on the row did not close it (S=%d)" s)
+    (with-current-buffer buf
+      (vui-bench--assert (get-text-property (point-min) 'vui-bench-probe)
+                         "a click on the row re-rendered the items above it (S=%d)"
+                         s)
+      (vui-bench--assert (get-text-property (1- (point-max)) 'vui-bench-probe)
+                         "a click on the row re-rendered the box below it (S=%d)"
+                         s))))
 
 (defun vui-bench-agent-run ()
   "Run the streaming-seam benchmarks (declarative baseline + vui-stream)."
