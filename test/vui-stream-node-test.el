@@ -469,5 +469,146 @@
                     :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
         (vui-snode--kill)))))
 
+;; --- A rebuild of the stream re-binds its nodes ---
+;;
+;; A render that rewrites the stream erases the text of its nodes, and
+;; the markers of a node end up together at the place of the erase.  The
+;; rebuild must bind every live node to the text it writes for it, so
+;; the node is edited in place afterwards.  While the stream is not in
+;; the buffer, a node has no place to write to.
+
+(defconst vui-snode-gap--buffer "*vui-snode-gap*")
+
+(defvar vui-snode-gap--stream nil
+  "The stream handle of the last render of `vui-snode-gap-root'.")
+
+(vui-defcomponent vui-snode-gap-root (mode)
+  :render
+  (let ((h (vui-use-stream)))
+    (setq vui-snode-gap--stream h)
+    (pcase mode
+      ('tail (vui-vstack (vui-stream h) (vui-text "footer")))
+      ('head (vui-vstack (vui-text "header") (vui-stream h) (vui-text "footer")))
+      ('other (vui-text "other"))
+      ('none nil))))
+
+(defun vui-snode-gap--mount (mode)
+  (vui-mount (vui-component 'vui-snode-gap-root :mode mode)
+             vui-snode-gap--buffer))
+
+(defun vui-snode-gap--text ()
+  (with-current-buffer vui-snode-gap--buffer
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun vui-snode-gap--kill ()
+  (when (get-buffer vui-snode-gap--buffer)
+    (kill-buffer vui-snode-gap--buffer)))
+
+(describe "vui-stream nodes: a rebuild of the stream re-binds them"
+  (dolist (gap '(other none))
+    (dolist (flag '(nil t))
+      (it (format "edits a node in place after the root rendered %s (flag %s)"
+                  (if (eq gap 'none) "nil" "another tree")
+                  (if flag "on" "off"))
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil)
+              (root (vui-snode-gap--mount 'tail)))
+          (unwind-protect
+              (let* ((s vui-snode-gap--stream)
+                     (n (progn (vui-stream-append s (vui-text "a"))
+                               (vui-stream-open s (vui-text "N1"))))
+                     (r (vui-stream-open
+                         s (vui-component 'vui-snode-row :label "r1"))))
+                (vui-stream-append s (vui-text "b"))
+                (vui-update root (list :mode gap))
+                (vui-update root '(:mode tail))
+                (expect (vui-snode-gap--text) :to-equal "a\nN1\n[r1]\nb\nfooter")
+                (vui-stream-update n (vui-text "N2"))
+                (expect (vui-snode-gap--text) :to-equal "a\nN2\n[r1]\nb\nfooter")
+                (vui-stream-append-to n (vui-text "+"))
+                (expect (vui-snode-gap--text) :to-equal "a\nN2+\n[r1]\nb\nfooter")
+                (let ((pre (vui-stream-before n (vui-text "pre"))))
+                  (vui-stream-after n (vui-text "post"))
+                  (expect (vui-snode-gap--text)
+                          :to-equal "a\npre\nN2+\npost\n[r1]\nb\nfooter")
+                  (vui-stream-remove pre))
+                (expect (vui-snode-gap--text)
+                        :to-equal "a\nN2+\npost\n[r1]\nb\nfooter")
+                ;; A component node is a row, re-seated by the rebuild
+                (vui-stream-update r (vui-component 'vui-snode-row :label "r2"))
+                (expect (vui-snode-gap--text)
+                        :to-equal "a\nN2+\npost\n[r2]\nb\nfooter"))
+            (vui-snode-gap--kill))))))
+
+  (dolist (gap '(other none))
+    (dolist (flag '(nil t))
+      (it (format "writes nothing for a node while the root renders %s (flag %s)"
+                  (if (eq gap 'none) "nil" "another tree")
+                  (if flag "on" "off"))
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil)
+              (root (vui-snode-gap--mount 'tail))
+              (shown (if (eq gap 'none) "" "other")))
+          (unwind-protect
+              (let* ((s vui-snode-gap--stream)
+                     (n (progn (vui-stream-append s (vui-text "a"))
+                               (vui-stream-open s (vui-text "N1")))))
+                (vui-stream-append s (vui-text "b"))
+                (vui-update root (list :mode gap))
+                (expect (vui-snode-gap--text) :to-equal shown)
+                (vui-stream-update n (vui-text "N2"))
+                (expect (vui-snode-gap--text) :to-equal shown)
+                (vui-stream-append-to n (vui-text "+"))
+                (expect (vui-snode-gap--text) :to-equal shown)
+                (expect (vui-stream-before n (vui-text "pre")) :to-be nil)
+                (expect (vui-stream-after n (vui-text "post")) :to-be nil)
+                (expect (vui-snode-gap--text) :to-equal shown)
+                (vui-stream-remove n)
+                (expect (vui-snode-gap--text) :to-equal shown)
+                ;; A node opened now gets its place when the stream is back
+                (let ((late (vui-stream-open s (vui-text "late"))))
+                  (expect (vui-snode-gap--text) :to-equal shown)
+                  (vui-update root '(:mode tail))
+                  (expect (vui-snode-gap--text)
+                          :to-equal "a\nN1\nb\nlate\nfooter")
+                  ;; Both nodes are live again
+                  (vui-stream-update n (vui-text "N3"))
+                  (vui-stream-update late (vui-text "LATE"))
+                  (expect (vui-snode-gap--text)
+                          :to-equal "a\nN3\nb\nLATE\nfooter")))
+            (vui-snode-gap--kill))))))
+
+  (dolist (flag '(nil t))
+    (it (format "edits a node in place when the stream is not the first child (flag %s)"
+                (if flag "on" "off"))
+      ;; Every render of the root rebuilds the stream here
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil)
+            (root (vui-snode-gap--mount 'head)))
+        (unwind-protect
+            (let* ((s vui-snode-gap--stream)
+                   (n (progn (vui-stream-append s (vui-text "a"))
+                             (vui-stream-open s (vui-text "N1"))))
+                   (m (progn (vui-stream-append s (vui-text "b"))
+                             (vui-stream-open s (vui-text "M1")))))
+              (vui-rerender root)
+              (expect (vui-snode-gap--text)
+                      :to-equal "header\na\nN1\nb\nM1\nfooter")
+              (vui-stream-update n (vui-text "N2"))
+              (expect (vui-snode-gap--text)
+                      :to-equal "header\na\nN2\nb\nM1\nfooter")
+              ;; The last node grows, and what is appended lands after it
+              (vui-stream-append-to m (vui-text "+"))
+              (vui-stream-update-last s (vui-text "M2+"))
+              (vui-stream-append s (vui-text "c"))
+              (expect (vui-snode-gap--text)
+                      :to-equal "header\na\nN2\nb\nM2+\nc\nfooter")
+              (vui-rerender root)
+              (vui-stream-update n (vui-text "N3"))
+              (vui-stream-update m (vui-text "M3"))
+              (expect (vui-snode-gap--text)
+                      :to-equal "header\na\nN3\nb\nM3\nc\nfooter"))
+          (vui-snode-gap--kill))))))
+
 (provide 'vui-stream-node-test)
 ;;; vui-stream-node-test.el ends here

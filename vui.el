@@ -2234,11 +2234,17 @@ Called from within a component's render function."
             vui--pending-effects))))
 
 (defun vui--run-pending-effects ()
-  "Run all pending effects after commit."
+  "Run all pending effects after commit.
+An effect runs with the root of its own instance's tree as
+`vui--root-instance', so a state change it makes re-renders that tree.
+That is the committed root but for a `vui-stream' row, which a rebuild
+of its stream renders inside the render of another root (see
+`vui--stream-reseat-row')."
   (let ((effects (nreverse vui--pending-effects)))
     (setq vui--pending-effects nil)
     (dolist (effect effects)
       (let* ((instance (nth 0 effect))
+             (vui--root-instance (vui--find-root instance))
              (effect-id (nth 1 effect))
              (deps (nth 2 effect))
              (effect-fn (nth 3 effect))
@@ -3096,6 +3102,7 @@ ephemeral chrome, not document content."
                 (save-excursion
                   (vui--remove-widget-overlays pos end-pos)
                   (vui--forget-region-fields pos end-pos)
+                  (vui--park-streams pos end-pos instance)
                   (delete-region pos end-pos)
                   (goto-char pos)
                   (vui--render-instance instance)
@@ -3985,6 +3992,15 @@ record of the contexts its subtree read."
   (vui--with-debug-indent
    (dolist (child (vui-instance-children instance))
      (vui--call-unmount-recursive child)))
+  ;; The rows of a stream it made with `vui-use-stream' go with it: they
+  ;; are inline instances of the buffer, not children
+  (when-let* ((refs (vui-instance-refs instance)))
+    (maphash (lambda (_id ref)
+               (let ((handle (car ref)))
+                 (when (and (vui-stream-handle-p handle)
+                            (eq (vui-stream-handle-owner handle) instance))
+                   (vui--stream-teardown handle))))
+             refs))
   ;; Clean up effects and async timers
   (vui--cleanup-instance-effects instance)
   (vui--cleanup-instance-asyncs instance)
@@ -5786,6 +5802,7 @@ where the steps of the last render come from."
               ;; `vui--forget-region-fields' are inclusive
               (vui--forget-region-fields p (1- end))
               (vui--remove-widget-overlays p end)
+              (vui--park-streams p end)
               (delete-region p end))
             (when (> i 0) (insert sep))
             (let ((s (point))
@@ -5809,6 +5826,7 @@ where the steps of the last render come from."
              (p (point)))
         (vui--forget-region-fields p (+ p seg-len))
         (vui--remove-widget-overlays p (+ p seg-len))
+        (vui--park-streams p (+ p seg-len))
         (delete-region p (+ p seg-len))
         (setq i (1+ i))))))
 
@@ -5842,6 +5860,7 @@ already matches VTREE and nothing was rendered."
      ((null vtree)
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
+      (vui--park-streams)
       (erase-buffer)
       (setf (vui-instance-render-record instance) nil))
      ;; Whole-tree identity unchanged: the same vtree object as last
@@ -5859,8 +5878,9 @@ already matches VTREE and nothing was rendered."
      ;; re-render only the content after it - O(content), not O(N items).
      ;; Always on: it only ever reproduces what a wholesale rebuild would
      ;; (byte-identical), and falls back below for any other shape, so it
-     ;; needs no opt-in - and stateful stream rows depend on it leaving the
-     ;; region intact regardless of the experimental flag.
+     ;; needs no opt-in.  The rows and nodes of the stream survive a
+     ;; rebuild as well (see `vui--stream-render'); here they are not
+     ;; touched at all, and no row renders again.
      ((and (eq (plist-get record :kind) 'stream-tail)
            (vui--stream-tail-eligible vtree))
       (let ((elig (vui--stream-tail-eligible vtree)))
@@ -5893,6 +5913,7 @@ already matches VTREE and nothing was rendered."
      ((and vui-incremental-render (vui--incremental-eligible-p vtree))
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
+      (vui--park-streams)
       (erase-buffer)
       (let ((segs (vui--patch-segments
                    (point-min) nil
@@ -5905,6 +5926,7 @@ already matches VTREE and nothing was rendered."
      ((and vui-incremental-render (vui--component-container-p vtree))
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
+      (vui--park-streams)
       (erase-buffer)
       (vui--render-vnode vtree)
       (setf (vui-instance-render-record instance)
@@ -5916,6 +5938,7 @@ already matches VTREE and nothing was rendered."
      (t
       (setq widget-field-list nil widget-field-new nil)
       (vui--remove-widget-overlays)
+      (vui--park-streams)
       (erase-buffer)
       (vui--render-vnode vtree)
       ;; If a stream just became live in this render, mark the record so
@@ -5952,7 +5975,12 @@ bound when the stream is first rendered, and are nil until then.
 IDS-REV runs parallel to ITEMS-REV and holds the id of each item, its
 step in the render path; NEXT-ID is the next free one.  PATH is the
 render path of the stream itself as of its last render.  See
-`vui--stream-item-path'."
+`vui--stream-item-path'.
+
+ROWS holds the component rows of the stream, newest first, so that
+what looks for them does not walk every item.  OWNER is the instance
+whose `vui-use-stream' made the handle, or nil for a handle from
+`vui-make-stream'.  When OWNER unmounts, so do the rows."
   buffer
   region-start
   region-end
@@ -5962,7 +5990,14 @@ render path of the stream itself as of its last render.  See
   (separator "\n")
   (ids-rev nil)
   (next-id 0)
-  (path nil))
+  (path nil)
+  (rows nil)
+  (owner nil))
+
+(defvar-local vui--streams nil
+  "The `vui-stream-handle's bound to a region of this buffer.
+A render that deletes the region of one of them parks it (see
+`vui--park-streams'), and a render of the stream binds it again.")
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -5975,10 +6010,13 @@ you manage the handle's lifetime yourself."
 Like the other hooks, call it unconditionally in render; the same handle
 is returned across re-renders.  Place it with `(vui-stream HANDLE)' and
 append to it with `(vui-stream-append HANDLE VNODE)'.  SEPARATOR (the
-string between items, default a newline) is used only on first creation."
+string between items, default a newline) is used only on first creation.
+The component rows of the stream unmount with the component."
   (let ((ref (vui--get-or-create-ref nil)))
     (or (car ref)
-        (setcar ref (vui-make-stream separator)))))
+        (setcar ref (vui--stream-handle-create
+                     :separator (or separator "\n")
+                     :owner vui--current-instance)))))
 
 (defun vui-stream (handle &rest props)
   "Create a stream vnode that anchors HANDLE's region in the render tree.
@@ -6059,38 +6097,218 @@ variable to the result around every render of the item, so its widgets
 get the path a rebuild of the stream gives them."
   (cons id (vui-stream-handle-path handle)))
 
+;; --- Rebuilding a stream: rows and nodes get their place again ---
+;;
+;; Most renders leave a live stream's text alone, but some write the
+;; stream again from its item list: the root showed another tree in
+;; between, its render was nil, the stream is not the first child of the
+;; root, or the component that owns the stream renders again.  The text
+;; the stream had is gone by then, and the markers that pointed into it
+;; (those of the stream, of each component row, of each live node) are
+;; together at the place of the delete.  So the rebuild puts each of them
+;; on the text it writes: a row is rendered again in a region of its own
+;; at its new place, and a node is bound to the text of its item.
+;;
+;; Between the delete and the rebuild the stream is not in the buffer, and
+;; a row or a node has no place to write to: the delete parks the stream
+;; (`vui--park-streams'), which leaves the markers pointing nowhere, so
+;; their edits do nothing to the buffer, the same as for a stream that is
+;; not rendered yet.  A row keeps its state and props, and shows them when
+;; the stream comes back.
+
+(defun vui--stream-row-p (row)
+  "Non-nil when stream item ROW is a component row that is still mounted.
+A row unmounted on its own (with `vui-unmount') has no text any more."
+  (and (vui-instance-p row)
+       (vui-instance-buffer row)
+       (vui-instance-region-start row)
+       t))
+
+(defun vui--stream-reseat-row (row path)
+  "Render stream ROW at point, in a region of its own, under PATH.
+The rebuild of the stream erased what ROW wrote, so ROW gets its region
+again at point and renders there the way it renders on its own (see
+`vui--rerender-inline'): as the root of its tree, starting at PATH, the
+path of its item, and with no context from the tree around the stream.
+It keeps its state, and its buttons re-render ROW, not the tree around
+it.  Its effects run after the commit of the render that got here, with
+ROW as their root (see `vui--run-pending-effects')."
+  (let ((start (vui-instance-region-start row))
+        (end (vui-instance-region-end row))
+        (pos (point)))
+    (set-marker start pos)
+    (set-marker end pos)
+    ;; The re-renders of the row start from this path too
+    (setf (vui-instance-base-path row) path)
+    (let ((vui--root-instance row)
+          (vui--render-path path)
+          (vui--context-stack nil))
+      (vui--render-instance row))
+    ;; START advanced past the row's text: its insertion type keeps text
+    ;; typed at the start out of the region
+    (set-marker start pos)
+    (set-marker end (point))))
+
+(defun vui--stream-measure-row (row)
+  "Render what stream ROW renders when the stream is rebuilt, to measure it.
+ROW is not touched: this renders the tree a render of ROW would commit,
+as a measure pass does for any mounted component (see
+`vui--measure-instance-vtree')."
+  (let* ((vui--context-stack nil)
+         (vnode (vui-vnode-component--create
+                 :type (vui-component-def-name (vui-instance-def row))
+                 :props (vui-instance-props row)))
+         (vtree (vui--measure-instance-vtree row vnode))
+         (vui--measure-live-parent row)
+         (vui--child-index 0))
+    (vui--render-vnode vtree)))
+
 (defun vui--stream-render (handle)
   "Render HANDLE's items at point and bind its region around them.
 Used by the `vui-vnode-stream' branch of `vui--render-vnode'.
 
+This rebuilds the stream from its item list, so what pointed into its
+old text is put on the new one: each component row renders again at
+its place (see `vui--stream-reseat-row'), and each live content node is
+bound to the text of its item.
+
 During a measure pass the items render for their width only: the
-handle keeps its real buffer and markers.  A measure renders into a
-throwaway temp buffer, and binding the live region there would leave
-the handle pointing at a killed buffer, silently dropping every
-subsequent streamed append."
-  (let ((sep (vui-stream-handle-separator handle))
-        (start (point))
-        (first t)
-        (last-start nil)
-        (path vui--render-path)
-        (ids (reverse (vui-stream-handle-ids-rev handle))))
+handle keeps its real buffer and markers, and a row is not touched.  A
+measure renders into a throwaway temp buffer, and binding the live
+region there would leave the handle pointing at a killed buffer,
+silently dropping every subsequent streamed append."
+  (let* ((sep (vui-stream-handle-separator handle))
+         (start (point))
+         (first t)
+         (last-start nil)
+         ;; The last item written, when it is a row
+         (last-row nil)
+         (path vui--render-path)
+         (ids (reverse (vui-stream-handle-ids-rev handle)))
+         (old-end (vui-stream-handle-region-end handle))
+         ;; Whether OLD-END is the end marker of a row
+         (shared nil)
+         ;; The live content nodes, each with the index of its item in
+         ;; render order: the cell of the item is a tail of ITEMS-REV.  A
+         ;; component that stands in for a row (see
+         ;; `vui--stream-append-row') is not content.
+         (nodes (unless vui--measuring-p
+                  (cl-loop for node in (vui-stream-handle-nodes handle)
+                           for cell = (vui--stream-node-cell node)
+                           unless (or (vui--stream-node-instance node)
+                                      (vui-vnode-component-p (car cell)))
+                           collect (cons (1- (length cell)) node))))
+         (index -1))
     (dolist (item (reverse (vui-stream-handle-items-rev handle)))
+      (setq index (1+ index))
       (let ((vui--render-path (cons (pop ids) path)))
-        ;; Component rows are inline instances that render and persist on
-        ;; their own; a full re-emit cannot reproduce them, and (because the
-        ;; stream-tail patch leaves the region intact) does not run once rows
-        ;; exist.  Skip them defensively here.
-        (unless (vui-instance-p item)
+        (cond
+         ;; Content, the common case first
+         ((not (vui-instance-p item))
           (unless first (insert sep))
-          (setq first nil)
-          (setq last-start (point))
-          (vui--render-vnode item))))
+          (setq first nil
+                last-start (point)
+                last-row nil)
+          (vui--render-vnode item)
+          (when nodes
+            (when-let* ((node (cdr (assq index nodes))))
+              (vui--stream-node-bind node last-start (point)
+                                     (current-buffer)))))
+         ;; A row unmounted on its own has no text any more
+         ((not (vui--stream-row-p item)))
+         (t
+          (unless first (insert sep))
+          (setq first nil
+                last-start (point)
+                last-row item)
+          (if vui--measuring-p
+              (vui--stream-measure-row item)
+            (when (eq (vui-instance-region-end item) old-end)
+              (setq shared t))
+            (vui--stream-reseat-row item vui--render-path))))))
     (unless vui--measuring-p
       ;; Edits to the live stream render their item under the same path
       (setf (vui-stream-handle-path handle) path)
+      ;; The end of the stream is the end marker of its last item when
+      ;; that is a row, so it follows the row when the row grows or
+      ;; shrinks on its own (see `vui--stream-append-row').  Otherwise
+      ;; the stream has a marker of its own.
+      (cond
+       (last-row
+        (let ((row-end (vui-instance-region-end last-row)))
+          (unless (eq old-end row-end)
+            (when (and old-end (not shared))
+              (set-marker old-end nil))
+            (setf (vui-stream-handle-region-end handle) row-end))))
+       (shared
+        (setf (vui-stream-handle-region-end handle) nil)))
       (vui--stream-bind-region handle (current-buffer) start (point))
       (when last-start
-        (vui--stream-set-last-start handle last-start (current-buffer))))))
+        (vui--stream-set-last-start handle last-start (current-buffer)))
+      (unless (memq handle vui--streams)
+        (push handle vui--streams)))))
+
+(defun vui--stream-park (handle)
+  "Leave the markers of HANDLE pointing nowhere: its text is gone.
+The markers of the stream, of its component rows and of its live nodes
+stay where they are in their structures, so the next render of the
+stream binds them again (see `vui--stream-render').  Until then the
+edits of the stream, a row or a node do nothing to the buffer, as for a
+stream that is not rendered yet."
+  (dolist (marker (list (vui-stream-handle-region-start handle)
+                        (vui-stream-handle-region-end handle)
+                        (vui-stream-handle-last-start handle)))
+    (when marker
+      (set-marker marker nil)))
+  (dolist (row (vui-stream-handle-rows handle))
+    (when (vui--stream-row-p row)
+      (set-marker (vui-instance-region-start row) nil)
+      (set-marker (vui-instance-region-end row) nil)))
+  (dolist (node (vui-stream-handle-nodes handle))
+    (when-let* ((s (vui--stream-node-start node)))
+      (set-marker s nil))
+    (when-let* ((e (vui--stream-node-end node)))
+      (set-marker e nil)))
+  (let ((buffer (vui-stream-handle-buffer handle)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq vui--streams (delq handle vui--streams))))))
+
+(defun vui--park-streams (&optional start end row)
+  "Park the streams of the current buffer whose text is about to go.
+Call it before deleting the text between START and END (the whole
+buffer when they are nil); see `vui--stream-park'.  A stream with no
+text right at START or END may belong to the text on either side, so it
+stays: it holds no row and no node, and its next append re-renders the
+tree.
+
+ROW is the inline instance whose region is deleted, if any.  When it is
+the only item of a stream, the stream has the same text as ROW, and it
+is not the stream that goes."
+  (dolist (handle (copy-sequence vui--streams))
+    (let ((s (vui-stream-handle-region-start handle))
+          (e (vui-stream-handle-region-end handle)))
+      (cond
+       ;; Rendered in another buffer since, or parked another way
+       ((not (and (eq (vui-stream-handle-buffer handle) (current-buffer))
+                  s (marker-position s) e (marker-position e)))
+        (setq vui--streams (delq handle vui--streams)))
+       ((null start)
+        (vui--stream-park handle))
+       ((and (<= start s) (<= e end)
+             (or (< s e) (< start s end))
+             (not (and row (= s start) (= e end)
+                       (memq row (vui-stream-handle-items-rev handle)))))
+        (vui--stream-park handle))))))
+
+(defun vui--stream-teardown (handle)
+  "Park HANDLE and unmount its component rows.
+For the stream of a component that unmounts: it does not come back, and
+its rows would stay mounted in the buffer otherwise."
+  (vui--stream-park handle)
+  (dolist (row (vui-stream-handle-rows handle))
+    (when (vui--stream-row-p row)
+      (vui--unmount-inline row))))
 
 (defun vui--stream-request-rerender (handle)
   "Re-render the root of HANDLE's buffer so the layout reflects new items."
@@ -6143,10 +6361,12 @@ content below the region shifts down with it.
 VNODE may be a content vnode (text/fragment) or a `vui-component'.  A
 component is mounted as a STATEFUL ROW: it gets its own region and
 re-renders only that region when its state changes (a collapsible tool
-card, say), independent of how many items are above it.  A component row
-requires the stream to be live and non-empty first (the empty -> non-empty
-transition does a full re-render, which cannot re-emit an inline row); a
-component appended to an empty stream falls back to a plain child render."
+card, say), independent of how many items are above it.  The row keeps
+its state when the stream is rebuilt (the root shows another tree in
+between, say): the rebuild renders it again at its new place.  A
+component row requires the stream to be live and non-empty first; a
+component appended to an empty stream goes into the full re-render the
+first item pays, as a plain child component, not a row."
   (if (vui-vnode-component-p vnode)
       (vui--stream-append-row handle vnode)
     (vui--stream-append-content handle vnode))
@@ -6226,6 +6446,7 @@ component appended to an empty stream falls back to a plain child render."
               (setf (vui-stream-handle-region-end handle)
                     (vui-instance-region-end row))
               (vui--stream-push handle row id)
+              (push row (vui-stream-handle-rows handle))
               row))))))))   ; return the inline instance (or nil on fallback)
 
 (defun vui--string-prefix-equal-including-properties-p (o n)
@@ -6387,7 +6608,8 @@ Returned by `vui-stream-open'; pass it to `vui-stream-append-to',
 
 HANDLE is the owning stream.  CELL is the cons in HANDLE's ITEMS-REV whose
 car is this node's current vnode - kept in sync so a wholesale re-render
-re-emits the streamed content.  START and END are markers bounding a
+re-emits the streamed content, and binds START and END to it again (see
+`vui--stream-render').  START and END are markers bounding a
 CONTENT node's region; both are nil once finalized (and nil throughout for
 a component node).  INSTANCE is the inline component for a COMPONENT node
 \(a stateful row), which owns its own region markers; nil for a content
@@ -6884,6 +7106,7 @@ container separator, which we drop if the suffix renders to nothing
          (from (marker-position (vui-stream-handle-region-end handle))))
     (vui--forget-region-fields from (point-max))
     (vui--remove-widget-overlays from (point-max))
+    (vui--park-streams from (point-max))
     (delete-region from (point-max))
     (goto-char from)
     (let ((p (point)))
@@ -7586,6 +7809,7 @@ one from a timer, an async callback, or a window resize."
       ;; keeps dead widgets from piling up across renders.
       (setq widget-field-list nil widget-field-new nil)
       (remove-overlays)
+      (vui--park-streams)
       (erase-buffer)
       ;; A previous render's sticky table header must not outlive it;
       ;; rendering a sticky table below installs a fresh one
@@ -7650,6 +7874,7 @@ Returns the root instance."
         ;; against a dead field and signal (number-or-marker-p nil).
         (setq widget-field-list nil widget-field-new nil)
         (remove-overlays)
+        (vui--park-streams)
         (erase-buffer)
         ;; The previous mount's sticky table header must not leak into
         ;; this one; the new tree installs its own if it has one
@@ -7828,6 +8053,7 @@ Returns INSTANCE, or nil if it was already unmounted."
                   (end-pos (marker-position end)))
               (vui--remove-widget-overlays pos end-pos)
               (vui--forget-region-fields pos end-pos)
+              (vui--park-streams pos end-pos instance)
               (delete-region pos end-pos)))
           ;; Put back the header line a sticky table header replaced
           (vui--table-restore-header-line)))
@@ -7879,6 +8105,7 @@ Returns the unmounted instance, or nil if nothing was mounted."
             (let ((inhibit-read-only t)
                   (inhibit-modification-hooks t))
               (remove-overlays)
+              (vui--park-streams)
               (erase-buffer))
             ;; Put back the header line a sticky table header replaced
             (vui--table-restore-header-line))))

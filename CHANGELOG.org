@@ -48,6 +48,27 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   with =vui-mount-inline=. While another sticky table is still in the
   buffer, the header line stays as it is.
 
+- Component rows and open nodes of a =vui-stream= survive a rebuild of
+  the stream. Most renders leave the text of a live stream alone, but
+  some write it again from its item list: the root shows another tree
+  and then the stream again, its render goes to nil and back, the
+  stream is not the first child of the root, or the component that owns
+  the stream renders again. That rebuild skipped the rows, so a row was
+  gone from the buffer while its instance stayed mounted, and its next
+  render (a state change, or a window resize, which renders every
+  inline instance) deleted text of the root and wrote the row there.
+  The markers of an open node stayed where the old text was, so
+  =vui-stream-update=, =vui-stream-append-to=, =vui-stream-before= and
+  =vui-stream-after= wrote at the wrong place. Now the rebuild renders
+  each row again at its new place, with its state, and binds each open
+  node to the text of its item. While the stream is not in the buffer
+  at all, the edits of a row or a node do nothing to the buffer; a row
+  shows its new state and props when the stream comes back. A
+  container that measures its content, like =vui-box=, counts the rows
+  in. And the rows of a stream made with =vui-use-stream= unmount with
+  the component that made it; they stayed mounted and kept rendering
+  into the buffer.
+
 - A root component whose render goes from a tree to nil now empties its
   buffer. The old text stayed in the buffer, with its fields and
   buttons, and so did the text of its child components, which were
