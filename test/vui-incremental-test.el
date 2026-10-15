@@ -630,6 +630,185 @@
                         :to-equal (list (point-max) (point-max)))))
           (kill-buffer "*inc-cl-mark*"))))))
 
+(describe "incremental component-list patching around a live stream"
+  ;; A `vui-stream' grows by edits that are not renders of the component
+  ;; that placed it, so the text of that component is no longer what its
+  ;; last render wrote.  The patcher must still find where it ends.
+
+  (it "finds the text of a child whose stream grew"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-chat (stream)
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-shell (stream tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-chat :key "chat" :stream stream)
+                 (vui-component 'inc-cs-box :key "box" :tick tick)))
+      (let ((inst (vui-mount (vui-component 'inc-cs-shell :stream s :tick 0)
+                             "*inc-cs*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs*"
+              ;; The first item re-renders the root, which records the list
+              (vui-stream-append s (vui-text "a"))
+              (vui-update inst (list :stream s :tick 1))
+              (expect (plist-get (vui-instance-render-record inst) :kind)
+                      :to-be 'components)
+              (expect (buffer-string) :to-equal "a\nbox 1")
+              (vui-stream-append s (vui-text "b"))
+              (vui-update inst (list :stream s :tick 2))
+              (expect (buffer-string) :to-equal "a\nb\nbox 2")
+              ;; The last item grows
+              (vui-stream-update-last s (vui-text "b and more"))
+              (vui-update inst (list :stream s :tick 3))
+              (expect (buffer-string) :to-equal "a\nb and more\nbox 3")
+              ;; The last item is replaced by a shorter one
+              (vui-stream-update-last s (vui-text "c"))
+              (vui-update inst (list :stream s :tick 4))
+              (expect (buffer-string) :to-equal "a\nc\nbox 4"))
+          (kill-buffer "*inc-cs*")))))
+
+  (it "finds the text of a child whose nested component placed the stream"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-log (stream)
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-panel (stream)
+        :render (vui-vstack (vui-text "log:")
+                            (vui-component 'inc-cs-log :stream stream)
+                            (vui-text "end of log")))
+      (vui-defcomponent inc-cs-panel-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-panel-shell (stream tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-panel :key "panel" :stream stream)
+                 (vui-component 'inc-cs-panel-box :key "box" :tick tick)))
+      (let ((inst (vui-mount (vui-component 'inc-cs-panel-shell
+                               :stream s :tick 0)
+                             "*inc-cs-panel*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs-panel*"
+              (vui-stream-append s (vui-text "a"))
+              (vui-update inst (list :stream s :tick 1))
+              (vui-stream-append s (vui-text "b"))
+              (vui-update inst (list :stream s :tick 2))
+              (expect (buffer-string)
+                      :to-equal "log:\na\nb\nend of log\nbox 2"))
+          (kill-buffer "*inc-cs-panel*")))))
+
+  (it "skips the text of a child that bails out while its stream grows"
+    ;; The child never renders again, so its text is the one in the
+    ;; buffer, and stream nodes keep their markers.
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-kept-chat (stream)
+        :should-update nil
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-kept-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-kept-shell (stream tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-kept-chat :key "chat" :stream stream)
+                 (vui-component 'inc-cs-kept-box :key "box" :tick tick)))
+      (let ((inst (vui-mount (vui-component 'inc-cs-kept-shell
+                               :stream s :tick 0)
+                             "*inc-cs-kept*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs-kept*"
+              (vui-stream-append s (vui-text "a"))
+              (vui-update inst (list :stream s :tick 1))
+              (expect (buffer-string) :to-equal "a\nbox 1")
+              (vui-stream-append s (vui-text "b"))
+              (vui-update inst (list :stream s :tick 2))
+              (expect (buffer-string) :to-equal "a\nb\nbox 2")
+              (vui-stream-update-last s (vui-text "b and more"))
+              (vui-update inst (list :stream s :tick 3))
+              (expect (buffer-string) :to-equal "a\nb and more\nbox 3")
+              (let ((node (vui-stream-open s (vui-text "c"))))
+                (vui-stream-append-to node (vui-text "d"))
+                (vui-update inst (list :stream s :tick 4))
+                (expect (buffer-string) :to-equal "a\nb and more\ncd\nbox 4")
+                ;; The node is still where its text is
+                (vui-stream-update node (vui-text "e"))
+                (vui-update inst (list :stream s :tick 5))
+                (expect (buffer-string) :to-equal "a\nb and more\ne\nbox 5")))
+          (kill-buffer "*inc-cs-kept*")))))
+
+  (it "skips the text of a child whose stream rows re-render on their own"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-row (label)
+        :state ((open nil))
+        :render (vui-text (if open (format "%s\n  details" label) label)))
+      (vui-defcomponent inc-cs-row-chat (stream)
+        :should-update nil
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-row-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-row-shell (stream tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-row-chat :key "chat" :stream stream)
+                 (vui-component 'inc-cs-row-box :key "box" :tick tick)))
+      (let ((inst (vui-mount (vui-component 'inc-cs-row-shell
+                               :stream s :tick 0)
+                             "*inc-cs-row*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs-row*"
+              (vui-stream-append s (vui-text "a"))
+              (vui-update inst (list :stream s :tick 1))
+              (vui-stream-append s (vui-component 'inc-cs-row :label "tool"))
+              (vui-update inst (list :stream s :tick 2))
+              (expect (buffer-string) :to-equal "a\ntool\nbox 2")
+              (let ((row (car (vui-stream-handle-items-rev s))))
+                (expect (vui-instance-p row) :to-be-truthy)
+                ;; The row opens, as from a handler of its own: only its
+                ;; region renders
+                (let ((vui--current-instance row)
+                      (vui--root-instance row))
+                  (vui-set-state :open t))
+                (expect (buffer-string) :to-equal "a\ntool\n  details\nbox 2")
+                (vui-update inst (list :stream s :tick 3))
+                (expect (buffer-string) :to-equal "a\ntool\n  details\nbox 3")
+                ;; The row gets new props
+                (vui-stream-update-last
+                 s (vui-component 'inc-cs-row :label "tool done"))
+                (vui-update inst (list :stream s :tick 4))
+                (expect (buffer-string)
+                        :to-equal "a\ntool done\n  details\nbox 4")))
+          (kill-buffer "*inc-cs-row*")))))
+
+  (it "removes the text of a child whose stream grew"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-gone-chat (stream)
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-gone-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-gone-shell (stream tick chat)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-gone-box :key "box" :tick tick)
+                 (when chat
+                   (vui-component 'inc-cs-gone-chat :key "chat"
+                     :stream stream))))
+      (let ((inst (vui-mount (vui-component 'inc-cs-gone-shell
+                               :stream s :tick 0 :chat t)
+                             "*inc-cs-gone*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs-gone*"
+              (vui-stream-append s (vui-text "a"))
+              (vui-update inst (list :stream s :tick 1 :chat t))
+              (vui-stream-append s (vui-text "b"))
+              (expect (buffer-string) :to-equal "box 1\na\nb")
+              (vui-update inst (list :stream s :tick 2 :chat nil))
+              (expect (buffer-string) :to-equal "box 2"))
+          (kill-buffer "*inc-cs-gone*"))))))
+
 (describe "incremental rendering falls back for ineligible trees"
   (it "renders an indented vstack correctly (wholesale fallback)"
     (let ((vui-incremental-render t)

@@ -69,6 +69,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the component that made it; they stayed mounted and kept rendering
   into the buffer.
 
+- With =vui-incremental-render= set, a root that renders a flat list of
+  components no longer deletes the wrong text after a =vui-stream= in
+  one of them grew. The patch finds the text of each component by the
+  length its last render wrote. A stream changes its text with no
+  render of the component that placed it: =vui-stream-append=,
+  =vui-stream-update-last=, the node functions, and its component rows,
+  which re-render on their own. So the next patch took too little text
+  for that component and too much for the one after it. A status line
+  below a chat log kept the end of its old text after the new one, items
+  of the log went away when the chat component did not render again,
+  and a component removed from the list left a part of its stream
+  behind. Now every component records the streams in its text with
+  their length at its render, and the patch adds what they grew by
+  since.
+
 - A root component whose render goes from a tree to nil now empties its
   buffer. The old text stayed in the buffer, with its fields and
   buttons, and so did the text of its child components, which were

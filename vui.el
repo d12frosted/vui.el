@@ -880,6 +880,7 @@ Maps boundary keys to caught errors.  Lazily initialized by
   render-record ; Incremental-render bookkeeping for the root (see vui--commit-root)
   consumed-contexts ; Alist (context . value) read by this instance and its subtree
   r-len        ; Rendered length in chars (component-list incremental patching)
+  r-streams    ; Streams in that text, each (HANDLE . LENGTH) (see vui--instance-text-length)
   base-path)   ; Render path an inline instance starts from (stream rows only)
 
 ;; Registry of component definitions
@@ -904,6 +905,13 @@ may bail out of re-rendering (its consumed context values are unchanged).")
 
 (defvar vui--new-children nil
   "Accumulator for child instances created during render.")
+
+(defvar vui--rendered-streams nil
+  "Accumulator for the `vui-stream-handle's the current instance renders.
+Bound per instance by `vui--render-instance'; each `vui--stream-render'
+call pushes its handle when `vui-incremental-render' is on.  Only the
+streams of the instance's own render: those of its children are in their
+`vui-instance-r-streams'.")
 
 (defvar vui--reconcile-lookup nil
   "O(1) lookup over the current parent's existing children during render.
@@ -3865,6 +3873,7 @@ record of the contexts its subtree read."
          (vui--child-index 0)
          (vui--new-children nil)
          (vui--consumed-contexts nil) ; Contexts read by this instance's own render
+         (vui--rendered-streams nil)  ; Streams placed by this instance's own render
          (vui--effect-index 0)    ; Reset effect counter for this component
          (vui--ref-index 0)       ; Reset ref counter for this component
          (vui--callback-index 0)  ; Reset callback counter for this component
@@ -3984,7 +3993,14 @@ record of the contexts its subtree read."
     ;; immutable - replace them (e.g. with functional updates) rather
     ;; than mutating them in place, or change detection cannot see it.
     (setf (vui-instance-prev-props instance) (copy-sequence props))
-    (setf (vui-instance-prev-state instance) (copy-sequence state))))
+    (setf (vui-instance-prev-state instance) (copy-sequence state))
+    ;; Record the streams in the text this render wrote and their length
+    ;; now: the caller measures that text right after this returns
+    ;; (`vui-instance-r-len').  Like the contexts record, only the
+    ;; component-list patcher reads it, so it is skipped with the flag off.
+    (when (and vui-incremental-render (not unchanged))
+      (setf (vui-instance-r-streams instance)
+            (vui--instance-streams instance vui--rendered-streams)))))
 
 (defun vui--call-unmount-recursive (instance)
   "Call on-unmount for INSTANCE and all its children recursively."
@@ -5717,6 +5733,35 @@ position among the components."
       (setq idx (1+ idx)))
     (nreverse steps)))
 
+(defun vui--instance-streams (instance own)
+  "Return the streams in the text of INSTANCE's render, with their length.
+OWN are the `vui-stream-handle's that INSTANCE's own render placed; the
+rest are in the text of its children, which already rendered.  Each
+element is (HANDLE . LENGTH), LENGTH being the length of the stream's
+text now.  A stream that is not live in the current buffer has no text
+here, and is left out.  The rows of a stream are not children of
+anything, so a stream inside a row is not counted again here: the row's
+text is in the stream that holds the row."
+  (let ((acc nil))
+    (dolist (handle own)
+      (when-let* ((len (vui--stream-length handle)))
+        (push (cons handle len) acc)))
+    (dolist (child (vui-instance-children instance) acc)
+      (dolist (stream (vui-instance-r-streams child))
+        (when-let* ((len (vui--stream-length (car stream))))
+          (push (cons (car stream) len) acc))))))
+
+(defun vui--instance-text-length (instance)
+  "Return the length of INSTANCE's text in the current buffer.
+That is the length its last render wrote (`vui-instance-r-len'), plus
+what the streams in that text grew by since then: a `vui-stream' takes
+appends and edits, and its component rows re-render, with no render of
+INSTANCE.  See `vui-instance-r-streams'."
+  (let ((len (or (vui-instance-r-len instance) 0)))
+    (dolist (stream (vui-instance-r-streams instance) len)
+      (when-let* ((now (vui--stream-length (car stream))))
+        (setq len (+ len (- now (cdr stream))))))))
+
 (defun vui--patch-component-list (instance vtree)
   "Patch INSTANCE's buffer (a list of component children) to match VTREE.
 Point starts at the list's beginning.  Walks the new component vnodes
@@ -5731,7 +5776,11 @@ A child renders under the step VTREE gives it in `vui--render-path' (see
 `vui--component-path-steps'), as in a wholesale render: widgets and
 error boundaries are found again by that path.  The buffer still holds
 the list as INSTANCE's render record describes it, and that record is
-where the steps of the last render come from."
+where the steps of the last render come from.
+
+The text of a child is found by its length (`vui--instance-text-length'):
+the length of its last render, and what a `vui-stream' in that text grew
+by since."
   (let* ((sep (vui--incremental-separator vtree))
          (sep-len (length sep))
          (old-children (vui-instance-children instance))
@@ -5756,7 +5805,7 @@ where the steps of the last render come from."
                             (equal key (vui-vnode-key
                                         (vui-instance-vnode old-at-i)))))
              (old-seg-len (+ (if (> i 0) sep-len 0)
-                             (if old-at-i (or (vui-instance-r-len old-at-i) 0) 0)))
+                             (if old-at-i (vui--instance-text-length old-at-i) 0)))
              (step (pop steps))
              (old-step (pop old-steps))
              (chosen (cond
@@ -5822,7 +5871,7 @@ where the steps of the last render come from."
     ;; not pushed to `vui--new-children', so the tail unmounts them
     (dolist (old (nthcdr i old-children))
       (let* ((seg-len (+ (if (> i 0) sep-len 0)
-                         (or (vui-instance-r-len old) 0)))
+                         (vui--instance-text-length old)))
              (p (point)))
         (vui--forget-region-fields p (+ p seg-len))
         (vui--remove-widget-overlays p (+ p seg-len))
@@ -6246,7 +6295,12 @@ silently dropping every subsequent streamed append."
       (when last-start
         (vui--stream-set-last-start handle last-start (current-buffer)))
       (unless (memq handle vui--streams)
-        (push handle vui--streams)))))
+        (push handle vui--streams))
+      ;; The component that placed the stream records it: the stream's
+      ;; text grows without a render of the component, and the
+      ;; component-list patcher has to know (see `vui--instance-streams')
+      (when (and vui-incremental-render vui--current-instance)
+        (push handle vui--rendered-streams)))))
 
 (defun vui--stream-park (handle)
   "Leave the markers of HANDLE pointing nowhere: its text is gone.
@@ -7043,6 +7097,13 @@ if NODE is not live."
        (let ((s (vui-stream-handle-region-start handle))
              (e (vui-stream-handle-region-end handle)))
          (and s (marker-position s) e (marker-position e)))))
+
+(defun vui--stream-length (handle)
+  "Return the length of HANDLE's text in the current buffer, or nil.
+Nil when the stream is not live here (see `vui--stream-live-p')."
+  (and (vui--stream-live-p handle)
+       (- (vui-stream-handle-region-end handle)
+          (vui-stream-handle-region-start handle))))
 
 (defun vui--stream-tail-eligible (vtree)
   "Return (HANDLE SUFFIX) when VTREE is a flat container whose first child
