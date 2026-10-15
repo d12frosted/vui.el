@@ -273,6 +273,38 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   =vui-stream-after=, =vui-stream-update= and =vui-stream-remove= mix
   them up. Plain items and component rows work with an empty separator.
 
+- An editable field no longer takes in text that a render puts right
+  next to it. The overlay of a field grows over text inserted at either
+  of its ends, which is how typing at the edge of a field works, and it
+  did the same for text vui inserted there without rendering the field
+  again: an item appended to a =vui-stream= after an item that ends
+  with a field (a row or a node next to it as well), the content after
+  a live stream when it re-renders, a component rendered next to one
+  that bailed out under =vui-incremental-render=, a =vui-mount-inline=
+  region next to a field of the host buffer. The field then reported
+  its neighbors' text as its value. The next render removes the
+  overlays of the text it replaces, so it removed the grown overlay
+  with them and left a field with no bounds in =widget-field-list=,
+  and =widget-field-find= signalled =wrong-type-argument=. Such a field
+  keeps its bounds now, on both sides: a field that starts right after
+  the inserted text took it in from the front, and a placeholder shown
+  over that field hid it. A host field that starts where an inline
+  region ends is also no longer dropped from =widget-field-list= when
+  the region is mounted or re-rendered.
+
+- A region that starts or ends with a field follows the edits made at
+  that edge of the field. One character typed past a full field that
+  ends a =vui-mount-inline= region landed outside the region, and the
+  next render doubled it ("abcde" became "abcdee"). A character deleted
+  from such a field left the padding of the field outside in the same
+  way, one stray space per render, and unmounting left that text
+  behind. A character typed at the start of a field that starts the
+  region was doubled too. In a =vui-stream= the same edits, in a field
+  that ends the last item, left the end of the stream in the middle of
+  the field, and the next appended item landed inside the field. The
+  markers of the region, of the stream and of its nodes now move with
+  the field.
+
 - A re-render no longer moves the cursor to the top of a live
   =vui-stream=. With the cursor on a button in the middle of a chat log,
   any re-render of the root (the status line under the stream changes,

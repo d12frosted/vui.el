@@ -113,7 +113,9 @@ Inline regions are ephemeral UI chrome, not document content:
   form changed size in between. Keep forms short-lived.
 - *Manual edits*: text you type inside the region (outside of input
   fields) is overwritten by the next re-render. Text typed at the
-  region's boundaries stays outside it.
+  region's boundaries stays outside it. A field that starts or ends the
+  region is the exception: what you type at that edge of the field goes
+  into the field, and the region grows with it.
 - *Saving*: if the host buffer visits a file, a mounted form's text
   would be saved like any other text. Dismiss forms before saving, or
   mount them in non-file buffers.

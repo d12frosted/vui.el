@@ -1921,6 +1921,13 @@ The list is in buffer order, the lowest region first (see
 while the text around them changes.  It is what tells empty regions
 at one position apart: all their markers are at that position.")
 
+(defvar-local vui--streams nil
+  "The `vui-stream-handle's bound to a region of this buffer.
+A render that deletes the region of one of them parks it (see
+`vui--park-streams'), and a render of the stream binds it again.  An
+edit of a field finds the markers of the streams around it here too
+\(see `vui--field-sync-boundaries').")
+
 (defvar vui--batch-depth 0
   "Current nesting depth of `vui-batch' calls.")
 
@@ -3043,6 +3050,62 @@ now is left alone."
                               start)
                             t))))))
 
+;; Fields next to text a render inserts
+;;
+;; The overlay of an editable field takes in text inserted at either of
+;; its ends: this is what makes typing at the edge of a field work.  It
+;; does the same for text a render inserts there, and that text is not
+;; typed into the field.  Not every render rewrites the whole buffer: an
+;; inline region is rendered into its host buffer, an item is appended
+;; to a live stream, a component is patched in next to one that bailed
+;; out.  A field at the edge of the text such a render keeps would grow
+;; over the new text and report it as its value.  The next render then
+;; removes the overlays of the text it replaces, the grown one with
+;; them, and leaves a field without bounds in `widget-field-list'.
+;;
+;; So every such insertion is wrapped in `vui--keeping-fields'.
+
+(defun vui--fields-touching (pos)
+  "Return the field overlays that end or start at POS.
+Each element is (OVERLAY LENGTH ENDS): the overlay, the number of
+characters it covers, and non-nil ENDS when POS is where it ends, nil
+when POS is only where it starts.  The overlay of a field's placeholder
+covers the field and counts as well."
+  (let ((found nil))
+    (dolist (ov (overlays-in (max (point-min) (1- pos))
+                             (min (point-max) (1+ pos))))
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov)))
+        (when (and (or (= end pos) (= start pos))
+                   (or (overlay-get ov 'field)
+                       (overlay-get ov 'vui-placeholder)))
+          (push (list ov (- end start) (= end pos)) found))))
+    found))
+
+(defun vui--restore-fields (fields)
+  "Give the overlays in FIELDS the text they covered before an insertion.
+FIELDS comes from `vui--fields-touching'.  The text of these fields did
+not change, so an overlay that ended at the insertion still starts where
+it did, and one that started there still ends where it did: its length
+tells the other end."
+  (pcase-dolist (`(,ov ,length ,ends) fields)
+    (when (overlay-buffer ov)
+      (if ends
+          (move-overlay ov (overlay-start ov) (+ (overlay-start ov) length))
+        (move-overlay ov (- (overlay-end ov) length) (overlay-end ov))))))
+
+(defmacro vui--keeping-fields (pos &rest body)
+  "Run BODY, which inserts text at POS, and keep it out of the fields there.
+The fields that end or start at POS cover the same text after BODY as
+before it.  Text that BODY replaces must be deleted, and its overlays
+removed, before this form: the fields found at POS are then the ones
+that stay.  Returns the value of BODY."
+  (declare (indent 1) (debug t))
+  (let ((fields (make-symbol "fields")))
+    `(let ((,fields (vui--fields-touching ,pos)))
+       (prog1 (progn ,@body)
+         (vui--restore-fields ,fields)))))
+
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.
 Only the top-level call drains the queue; renders started from here
@@ -3166,7 +3229,10 @@ written before the error."
     (set-marker-insertion-type end t)
     (goto-char pos)
     (unwind-protect
-        (vui--render-instance instance)
+        ;; A field of the host buffer that ends or starts here is not
+        ;; part of the region
+        (vui--keeping-fields pos
+          (vui--render-instance instance))
       (setq new-end-pos (marker-position new-end))
       (set-marker new-end nil)
       ;; Not when a hook unmounted INSTANCE: its region is gone then
@@ -3893,14 +3959,57 @@ INSTANCE."
 Field widgets whose text is about to be deleted would otherwise
 linger in `widget-field-list' with collapsed bounds, confusing
 `widget-before-change' and `vui-field-value'.  Entries whose field
-no longer exists are dropped as well."
+no longer exists are dropped as well.
+
+A field that starts at END is after the region and stays: it belongs
+to the text that follows, a field of the host buffer right after an
+inline region, or the first field of the next component."
   (let ((in-region-p
          (lambda (widget)
            (let ((field-start (widget-field-start widget)))
              (or (null field-start)
-                 (and (>= field-start start) (<= field-start end)))))))
+                 (and (>= field-start start) (< field-start end)))))))
     (setq widget-field-list (cl-remove-if in-region-p widget-field-list))
     (setq widget-field-new (cl-remove-if in-region-p widget-field-new))))
+
+(defun vui--marker-out-of-field (marker start end)
+  "Move MARKER out of the field from START to END when it is inside it.
+MARKER is a boundary: of an inline region, of a stream, of a stream
+node.  No boundary belongs inside a field, so one that is there was
+left behind by an edit at the edge of the field.  A marker that stays
+before text inserted at it was at the end of the field and goes to END.
+One that advances was at its start and goes to START.  MARKER may be
+nil or point nowhere."
+  (when (and marker
+             (eq (marker-buffer marker) (current-buffer))
+             (< start marker end))
+    (set-marker marker (if (marker-insertion-type marker) start end))))
+
+(defun vui--field-sync-boundaries (widget root)
+  "Move the boundaries an edit of WIDGET left inside its field.
+ROOT is the root instance WIDGET was rendered for.
+
+When a field is the last thing of a region, an edit at its end changes
+text right at the boundary of the region: a character typed there, or
+the padding `widget-after-change' appends after a deletion.  The field
+covers that text, but the marker that ends the region stays before it,
+as it does for any other insertion.  The text is then inside the field
+and outside the region.  The next render of the region leaves it
+behind, and an item appended to a stream lands in the middle of the
+field.  The same goes for a character typed at the start of a field
+that starts an inline region, whose start advances past it.
+
+The boundaries in question are the region of ROOT when it is an inline
+instance, and the markers of the streams of this buffer."
+  (let* ((overlay (widget-get widget :field-overlay))
+         (start (and (overlayp overlay) (overlay-start overlay)))
+         (end (and start (overlay-end overlay))))
+    (when (and start (< start end))
+      (when (and root (vui--inline-p root))
+        (vui--marker-out-of-field (vui-instance-region-start root) start end)
+        (vui--marker-out-of-field (vui-instance-region-end root) start end))
+      (dolist (handle vui--streams)
+        (vui--stream-markers-out-of-field handle start end)))))
 
 (defun vui--field-add-placeholder (widget)
   "Show WIDGET's placeholder while its field is empty.
@@ -6001,9 +6110,9 @@ by since."
                                     (overlays-in end (min (point-max)
                                                           (1+ end))))))
             (when (and old-at-i (> old-seg-len 0))
-              ;; a field at END is the next child's, and the bounds of
-              ;; `vui--forget-region-fields' are inclusive
-              (vui--forget-region-fields p (1- end))
+              ;; a field at END is the next child's, and stays (the end
+              ;; bound of `vui--forget-region-fields' is exclusive)
+              (vui--forget-region-fields p end)
               (vui--remove-widget-overlays p end)
               (vui--park-streams p end)
               (delete-region p end))
@@ -6197,11 +6306,6 @@ whose `vui-use-stream' made the handle, or nil for a handle from
   (rows nil)
   (owner nil))
 
-(defvar-local vui--streams nil
-  "The `vui-stream-handle's bound to a region of this buffer.
-A render that deletes the region of one of them parks it (see
-`vui--park-streams'), and a render of the stream binds it again.")
-
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
 Prefer `vui-use-stream' inside a component; use this directly only when
@@ -6233,6 +6337,9 @@ position too, so the separator the parent container inserts right after
 the stream does not get pulled into the region - `vui-stream-append'
 repositions END explicitly instead."
   (setf (vui-stream-handle-buffer handle) buffer)
+  (with-current-buffer buffer
+    (unless (memq handle vui--streams)
+      (push handle vui--streams)))
   (let ((s (or (vui-stream-handle-region-start handle) (make-marker)))
         (e (or (vui-stream-handle-region-end handle) (make-marker))))
     (set-marker s start buffer)
@@ -6622,9 +6729,12 @@ first item pays, as a plain child component, not a row."
             ;; marker when the row renders nothing (see
             ;; `vui--inline-set-bounds').
             (goto-char (marker-position end))
-            (insert (vui-stream-handle-separator handle))
-            (vui--stream-set-last-start handle (point) buf)
-            (vui--render-vnode vnode)
+            ;; The item before this one may end with a field, and the
+            ;; content after the stream may start with one
+            (vui--keeping-fields (point)
+              (insert (vui-stream-handle-separator handle))
+              (vui--stream-set-last-start handle (point) buf)
+              (vui--render-vnode vnode))
             ;; If the previous last item was a component row, END is that
             ;; row's own marker - do NOT move it (that would corrupt the
             ;; row's region); install a fresh marker.  Otherwise reuse the
@@ -6656,15 +6766,18 @@ first item pays, as a plain child component, not a row."
               (buffer-undo-list t))
           (save-excursion
             (goto-char (marker-position end))
-            (insert sep)
-            (let* ((row-start (point))
+            (let* ((row-start (+ (point) (length sep)))
                    (id (vui--stream-new-id handle))
                    ;; The row renders on its own from here on, always
                    ;; under its item's path.  It goes below the rows
                    ;; before it, also the ones that render nothing and
                    ;; that an empty separator leaves at this very position.
-                   (row (vui--mount-inline
-                         vnode (point) (vui--stream-item-path handle id) t)))
+                   ;; The separator goes next to the same fields as an
+                   ;; appended content item does.
+                   (row (vui--keeping-fields (point)
+                          (insert sep)
+                          (vui--mount-inline
+                           vnode (point) (vui--stream-item-path handle id) t))))
               (vui--stream-set-last-start handle row-start buf)
               ;; Share the row's region-end as the stream's end: when the
               ;; row re-renders on its own (grows/shrinks), its marker moves
@@ -6789,15 +6902,17 @@ keeping its state."
                       (if suffix
                           (progn
                             (goto-char (marker-position end))
-                            (vui--render-vnode
-                             (vui-vnode-text--create
-                              :content suffix
-                              :face (vui-vnode-text-face vnode)
-                              :properties (vui-vnode-text-properties vnode)))
+                            (vui--keeping-fields (point)
+                              (vui--render-vnode
+                               (vui-vnode-text--create
+                                :content suffix
+                                :face (vui-vnode-text-face vnode)
+                                :properties (vui-vnode-text-properties vnode))))
                             (set-marker end (point)))
                         (delete-region (marker-position ls) (marker-position end))
                         (goto-char (marker-position ls))
-                        (vui--render-vnode vnode)
+                        (vui--keeping-fields (point)
+                          (vui--render-vnode vnode))
                         (set-marker end (point))))
                     ;; The old item may have had the last sticky table:
                     ;; no render of the root follows to put back the
@@ -6923,6 +7038,17 @@ has already shifted on its own)."
     (when (and end (marker-position end) (>= pos (marker-position end)))
       (set-marker end pos))))
 
+(defun vui--stream-markers-out-of-field (handle start end)
+  "Move the markers of HANDLE out of the field from START to END.
+These are the bounds of the stream, the start of its last item and the
+bounds of its live nodes, see `vui--marker-out-of-field'."
+  (vui--marker-out-of-field (vui-stream-handle-region-start handle) start end)
+  (vui--marker-out-of-field (vui-stream-handle-region-end handle) start end)
+  (vui--marker-out-of-field (vui-stream-handle-last-start handle) start end)
+  (dolist (node (vui-stream-handle-nodes handle))
+    (vui--marker-out-of-field (vui--stream-node-start node) start end)
+    (vui--marker-out-of-field (vui--stream-node-end node) start end)))
+
 (defun vui-stream-open (handle vnode)
   "Append VNODE to HANDLE as a LIVE node and return that node.
 Unlike `vui-stream-append' (static text you can never touch again), the
@@ -7011,7 +7137,9 @@ finalized, and on a component node (append-to is content-only)."
                 (vui--render-path (vui--stream-delta-path node vnode)))
             (save-excursion
               (goto-char (marker-position end))
-              (vui--render-vnode vnode)
+              ;; The node may end with a field so far
+              (vui--keeping-fields (point)
+                (vui--render-vnode vnode))
               (set-marker end (point))
               (vui--stream-sync-end handle (point)))))
         (vui--stream-relay-empty-transition handle was-empty node)))
@@ -7063,7 +7191,8 @@ its own region, keeping its state - the out-of-order counterpart of
                 (save-excursion
                   (delete-region (marker-position start) (marker-position end))
                   (goto-char (marker-position start))
-                  (vui--render-vnode vnode)
+                  (vui--keeping-fields (point)
+                    (vui--render-vnode vnode))
                   (set-marker end (point))
                   (vui--stream-sync-end handle (point)))
                 ;; As in `vui-stream-update-last'
@@ -7126,21 +7255,23 @@ screen.  A no-op returning nil if NODE is not live."
             (save-excursion
               (goto-char (marker-position start))
               (let ((x-start (point)))
-                (vui--render-vnode vnode)
-                (let ((x-end (point)))
-                  (insert sep)
-                  ;; NODE's content now begins after the inserted separator.
-                  (set-marker start (point))
-                  ;; A NODE with no text had its end at that same position,
-                  ;; and the end did not move for the insertion.  Take it
-                  ;; along, and the stream's end with it when NODE is last.
-                  (let ((end (vui--stream-node-end node)))
-                    (when (< (marker-position end) (point))
-                      (set-marker end (point))
-                      (vui--stream-sync-end handle (point))))
-                  (when last-p
-                    (vui--stream-set-last-start handle (point) buf))
-                  (vui--stream-node-bind new x-start x-end buf))))))
+                ;; NODE may start with a field
+                (vui--keeping-fields x-start
+                  (vui--render-vnode vnode)
+                  (let ((x-end (point)))
+                    (insert sep)
+                    ;; NODE's content now begins after the inserted separator.
+                    (set-marker start (point))
+                    ;; A NODE with no text had its end at that same position,
+                    ;; and the end did not move for the insertion.  Take it
+                    ;; along, and the stream's end with it when NODE is last.
+                    (let ((end (vui--stream-node-end node)))
+                      (when (< (marker-position end) (point))
+                        (set-marker end (point))
+                        (vui--stream-sync-end handle (point))))
+                    (when last-p
+                      (vui--stream-set-last-start handle (point) buf))
+                    (vui--stream-node-bind new x-start x-end buf)))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
 
@@ -7181,16 +7312,18 @@ if NODE is not live."
                 (vui--render-path (vui--stream-item-path handle id)))
             (save-excursion
               (goto-char (marker-position end))
-              (insert sep)
-              (let ((x-start (point)))
-                (vui--render-vnode vnode)
-                (let ((x-end (point)))
-                  (vui--stream-node-bind new x-start x-end buf)
-                  (vui--stream-sync-end handle x-end)
-                  ;; If NODE was the last item, the new node is now last:
-                  ;; last-start (used by `vui-stream-update-last') follows it.
-                  (when (eq cell head)
-                    (vui--stream-set-last-start handle x-start buf)))))))
+              ;; NODE may end with a field
+              (vui--keeping-fields (point)
+                (insert sep)
+                (let ((x-start (point)))
+                  (vui--render-vnode vnode)
+                  (let ((x-end (point)))
+                    (vui--stream-node-bind new x-start x-end buf)
+                    (vui--stream-sync-end handle x-end)
+                    ;; If NODE was the last item, the new node is now last:
+                    ;; last-start (used by `vui-stream-update-last') follows it.
+                    (when (eq cell head)
+                      (vui--stream-set-last-start handle x-start buf))))))))
         (push new (vui-stream-handle-nodes handle))
         new))))
 
@@ -7363,10 +7496,11 @@ container separator, which we drop if the suffix renders to nothing
     (vui--park-streams from (point-max))
     (delete-region from (point-max))
     (goto-char from)
-    (let ((p (point)))
+    ;; The last item of the stream may end with a field
+    (vui--keeping-fields from
       (insert sep)
       (when (= 0 (vui--render-children-as vtree suffix))
-        (delete-region p (point))))))
+        (delete-region from (point))))))
 
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
@@ -7867,6 +8001,10 @@ container separator, which we drop if the suffix renders to nothing
                               :secret (when secret-p ?*)
                               :value-face user-face  ; Always use user face for field content
                               :notify (lambda (widget &rest _)
+                                        ;; The edit may have been at
+                                        ;; the edge of a region
+                                        (vui--field-sync-boundaries
+                                         widget captured-root)
                                         (when wrapped-change
                                           (let ((vui--current-instance captured-instance)
                                                 (vui--root-instance captured-root))
