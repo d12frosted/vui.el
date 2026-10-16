@@ -1924,11 +1924,11 @@ handler's binding and be undone when the handler returns.")
   "The root instance `vui-mount' mounted in this buffer.")
 
 (defvar-local vui--stream-rebuild-pending nil
-  "Non-nil when a stream in this buffer has to be written again.
-Set by `vui--stream-request-rebuild'.  The next commit of the root reads
-it (see `vui--commit-root'), so a request made while a render is in
-progress, from a lifecycle hook say, is not lost when that render
-commits after it.")
+  "The streams of this buffer that have to be written again, or nil.
+Added to by `vui--stream-request-rebuild'.  The next commit of the root
+reads and clears it (see `vui--commit-root'), so a request made while
+a render is in progress, from a lifecycle hook say, is not lost when
+that render commits after it.")
 
 (defvar-local vui--inline-instances nil
   "Inline instances mounted in this buffer via `vui-mount-inline'.
@@ -6084,10 +6084,31 @@ where the steps of the last render come from.
 
 The text of a child is found by its length (`vui--instance-text-length'):
 the length of its last render, and what a `vui-stream' in that text grew
-by since."
+by since.
+
+Separators go where a wholesale render puts them: a vstack writes one
+only between two children that wrote text, so a child that writes
+nothing gets no separator, and the child after it has one only when an
+earlier child wrote text.  A child keeps its text by bailing out only
+when its separator stays as it was.
+
+A list whose children hold a `vui-stream' is not patched (see
+`vui--commit-root'): the text of such a child changes with no render,
+it can go empty, and a stream that starts right after another child's
+text takes in what is written there."
   (let* ((sep (vui--incremental-separator vtree))
          (sep-len (length sep))
          (old-children (vui-instance-children instance))
+         ;; The length of each old child's text, one per position, used
+         ;; up as the walk goes.  Taken before the walk: a child that
+         ;; moved up renders at its new place first, which changes its
+         ;; length before its old text is deleted.
+         (old-lens (mapcar #'vui--instance-text-length old-children))
+         ;; Whether each old child's text has a separator before it, in
+         ;; the same order
+         (old-seps (vui--component-list-seps old-lens))
+         ;; Whether a new child before the current one wrote text
+         (wrote nil)
          (new-vnodes (remq nil (vui--incremental-segments vtree)))
          (steps (vui--component-path-steps vtree))
          (old-steps (vui--component-path-steps
@@ -6108,8 +6129,9 @@ by since."
                                       (vui-instance-def old-at-i)))
                             (equal key (vui-vnode-key
                                         (vui-instance-vnode old-at-i)))))
-             (old-seg-len (+ (if (> i 0) sep-len 0)
-                             (if old-at-i (vui--instance-text-length old-at-i) 0)))
+             (old-len (or (pop old-lens) 0))
+             (old-sep (pop old-seps))
+             (old-seg-len (+ (if old-sep sep-len 0) old-len))
              (step (pop steps))
              (old-step (pop old-steps))
              (chosen (cond
@@ -6134,9 +6156,14 @@ by since."
                  ;; what stays in place keeps the paths of its last
                  ;; render, which are right only under the same step
                  (eql step old-step)
+                 ;; and the same separator before it: that changes when a
+                 ;; child before it starts or stops writing text
+                 (eq old-sep (and wrote (> old-len 0)))
                  (vui--instance-may-bail-p chosen))
             ;; bail: leave separator+content in place, advance past it
-            (forward-char old-seg-len)
+            (progn
+              (forward-char old-seg-len)
+              (when (> old-len 0) (setq wrote t)))
           ;; render the chosen instance here, replacing what was at i
           (let* ((p (point))
                  (end (if old-at-i (+ p old-seg-len) p))
@@ -6157,11 +6184,15 @@ by since."
               (vui--remove-widget-overlays p end)
               (vui--park-streams p end)
               (delete-region p end))
-            (when (> i 0) (insert sep))
+            (when wrote (insert sep))
             (let ((s (point))
                   (vui--render-path (cons step vui--render-path)))
               (vui--render-instance chosen)
-              (setf (vui-instance-r-len chosen) (- (point) s)))
+              (setf (vui-instance-r-len chosen) (- (point) s))
+              (if (> (point) s)
+                  (setq wrote t)
+                ;; no text, so no separator either
+                (delete-region p s)))
             (dolist (ov before)
               (when (overlay-buffer ov)
                 (move-overlay ov (overlay-start ov) p)))
@@ -6173,15 +6204,26 @@ by since."
       (setq i (1+ i)))
     ;; delete the buffer regions of any leftover (removed) old children;
     ;; not pushed to `vui--new-children', so the tail unmounts them
-    (dolist (old (nthcdr i old-children))
-      (let* ((seg-len (+ (if (> i 0) sep-len 0)
-                         (vui--instance-text-length old)))
+    (dolist (_old (nthcdr i old-children))
+      (let* ((seg-len (+ (if (pop old-seps) sep-len 0)
+                         (pop old-lens)))
              (p (point)))
         (vui--forget-region-fields p (+ p seg-len))
         (vui--remove-widget-overlays p (+ p seg-len))
         (vui--park-streams p (+ p seg-len))
         (delete-region p (+ p seg-len))
         (setq i (1+ i))))))
+
+(defun vui--component-list-seps (lengths)
+  "Return whether a vstack writes a separator before each text in LENGTHS.
+LENGTHS are the lengths of the children's texts, in order: there is a
+separator before a text only when it is not empty and a text before it
+is not empty either."
+  (let ((wrote nil))
+    (mapcar (lambda (len)
+              (prog1 (and wrote (> len 0))
+                (when (> len 0) (setq wrote t))))
+            lengths)))
 
 (defun vui--render-record-compatible-p (instance vtree)
   "Return non-nil if INSTANCE's render record can be patched toward VTREE.
@@ -6203,14 +6245,12 @@ the buffer.  Used as the commit function of the root
 already matches VTREE and nothing was rendered.
 
 A stream that asked to be written again (see
-`vui--stream-rebuild-pending') makes this commit do without the record,
-so it writes the whole tree."
+`vui--stream-rebuild-pending') keeps this commit from skipping a tree
+that did not change, and from patching around that stream."
   (let* ((instance vui--current-instance)
-         (record (unless vui--stream-rebuild-pending
-                   (vui-instance-render-record instance))))
-    (when vui--stream-rebuild-pending
-      (setq vui--stream-rebuild-pending nil)
-      (setf (vui-instance-render-record instance) nil))
+         (record (vui-instance-render-record instance))
+         (pending vui--stream-rebuild-pending))
+    (setq vui--stream-rebuild-pending nil)
     (cond
      ;; Nothing to show: remove what the last commit wrote, the way the
      ;; wholesale rebuild below does.  Drop the record as well, so the
@@ -6231,7 +6271,8 @@ so it writes the whole tree."
      ;; `eq', and needs no bookkeeping, so it does not depend on the
      ;; experimental `vui-incremental-render' flag.  No child component
      ;; renders either, so tell `vui--render-instance' to keep them.
-     ((and record (eq vtree (plist-get record :vnode)))
+     ;; Not while a stream waits to be written again.
+     ((and record (not pending) (eq vtree (plist-get record :vnode)))
       'unchanged)
      ;; Stream-tail patch: a flat container whose first child is a live
      ;; stream.  The stream's region is already current (append /
@@ -6241,9 +6282,13 @@ so it writes the whole tree."
      ;; (byte-identical), and falls back below for any other shape, so it
      ;; needs no opt-in.  The rows and nodes of the stream survive a
      ;; rebuild as well (see `vui--stream-render'); here they are not
-     ;; touched at all, and no row renders again.
+     ;; touched at all, and no row renders again.  Not when that stream
+     ;; (or one in its text) waits to be written again.
      ((and (eq (plist-get record :kind) 'stream-tail)
-           (vui--stream-tail-eligible vtree))
+           (vui--stream-tail-eligible vtree)
+           (not (and pending
+                     (vui--stream-rebuild-wanted-p
+                      pending (car (vui--stream-tail-eligible vtree))))))
       (let ((elig (vui--stream-tail-eligible vtree)))
         (vui--patch-stream-tail vtree (nth 0 elig) (nth 1 elig)))
       (setf (vui-instance-render-record instance)
@@ -6261,11 +6306,15 @@ so it writes the whole tree."
         (setf (vui-instance-render-record instance)
               (list :kind 'content :vnode vtree :segs segs))))
      ;; Component patch: flat list of components, skip those that bail.
+     ;; Not when a child holds a stream: such a list is written whole
+     ;; by the branch below (see `vui--patch-component-list').
      ((and vui-incremental-render
            (eq (plist-get record :kind) 'components)
            (vui--component-container-p vtree)
            (equal (vui--incremental-separator (plist-get record :vnode))
-                  (vui--incremental-separator vtree)))
+                  (vui--incremental-separator vtree))
+           (not (cl-some #'vui-instance-r-streams
+                         (vui-instance-children instance))))
       (vui--patch-component-list instance vtree)
       (setf (vui-instance-render-record instance)
             (list :kind 'components :vnode vtree)))
@@ -6683,9 +6732,10 @@ its rows would stay mounted in the buffer otherwise."
 (defun vui--stream-request-rebuild (handle)
   "Re-render the root of HANDLE's buffer so that it writes the stream again.
 A render of the root leaves the text of a live stream alone when it can
-\(see `vui--stream-tail-eligible').  With `vui--stream-rebuild-pending'
-set, its next commit writes the whole tree again, and the stream from
-its items (see `vui--stream-render').
+\(see `vui--stream-tail-eligible'), and it skips the commit of a tree
+that did not change.  With HANDLE in `vui--stream-rebuild-pending' its
+next commit does neither for HANDLE (see `vui--commit-root'), so the
+stream is written from its items (see `vui--stream-render').
 
 Nothing happens while the root is being unmounted (a hook of its tree
 made the call): the tree would render after its effects were cleaned
@@ -6695,8 +6745,30 @@ up, and run them again with nothing left to clean them up."
                (not (and vui--unmounting
                          (eq vui--unmounting (vui-get-instance buf)))))
       (with-current-buffer buf
-        (setq vui--stream-rebuild-pending t))
+        (cl-pushnew handle vui--stream-rebuild-pending :test #'eq))
       (vui--stream-request-rerender handle))))
+
+(defun vui--stream-rebuild-wanted-p (pending handle)
+  "Non-nil when a stream in PENDING has to be written with HANDLE's text.
+That is HANDLE itself, or a stream in HANDLE's text: a stream in a
+component row of HANDLE is written only when the row renders, and the
+row renders when HANDLE is written again.  A stream that starts right
+where HANDLE ends is in that text only when HANDLE's last item is a
+row; otherwise it is the next stream (an empty one, or one in a
+fragment, has no separator before it)."
+  (let ((s (vui-stream-handle-region-start handle))
+        (e (vui-stream-handle-region-end handle))
+        (row-last (vui-instance-p (car (vui-stream-handle-items-rev handle)))))
+    (cl-some (lambda (other)
+               (or (eq other handle)
+                   (let ((os (vui-stream-handle-region-start other)))
+                     (and os s e
+                          (marker-position os) (marker-position s)
+                          (marker-position e)
+                          (eq (marker-buffer os) (marker-buffer s))
+                          (<= s os)
+                          (if row-last (<= os e) (< os e))))))
+             pending)))
 
 (defun vui--stream-region-empty-p (handle)
   "Non-nil when HANDLE's region is live and zero-width."
@@ -6736,7 +6808,7 @@ first render."
     (when (and s (marker-position s) e (marker-position e)
                (not (eq (and was-empty t)
                         (= (marker-position s) (marker-position e)))))
-      (vui--stream-request-rerender handle)
+      (vui--stream-request-rebuild handle)
       (when (and node
                  (eq (vui--stream-node-cell node)
                      (vui-stream-handle-items-rev handle)))
@@ -6781,7 +6853,7 @@ first item pays, as a plain child component, not a row."
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
      ;; the whole tree once.  (Only the very first item pays this.)
      ((not (vui--stream-in-place-p handle))
-      (vui--stream-request-rerender handle))
+      (vui--stream-request-rebuild handle))
      ;; Live and non-empty: O(1) imperative insert at the region end.
      (t
       (with-current-buffer buf
@@ -6824,7 +6896,7 @@ first item pays, as a plain child component, not a row."
           (not (vui--stream-in-place-p handle)))
       (vui--stream-push handle vnode)
       (when (and buf (buffer-live-p buf))
-        (vui--stream-request-rerender handle))
+        (vui--stream-request-rebuild handle))
       nil)                              ; no inline instance in the fallback
      (t
       (with-current-buffer buf
@@ -7486,7 +7558,7 @@ if NODE is not live."
       ;; empty -> non-empty transition - re-lay once so the buffer matches a
       ;; plain render.
       (when (null (vui-stream-handle-items-rev handle))
-        (vui--stream-request-rerender handle)))
+        (vui--stream-request-rebuild handle)))
     nil))
 
 ;; --- Box-update independence: re-render around a live stream, not it ---

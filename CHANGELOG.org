@@ -28,6 +28,42 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- With =vui-incremental-render= set, a root that renders a flat list of
+  components no longer breaks when a component writes nothing. A
+  vstack puts a separator only between two children that write text,
+  but the patch counted one before every child after the first, so it
+  looked for the text of each later child one separator too far. The
+  render signalled =args-out-of-range= or =end-of-buffer=, at times
+  after it had deleted text of the next child, and a child that stopped
+  writing text left its separator behind as an empty line. The next
+  patch after a wholesale render in which a child wrote nothing failed,
+  even one that changed nothing: the first item appended to an empty
+  =vui-stream= in such a list was one way to get there. A child that
+  moved up in a keyed list and changed its length had the wrong amount
+  of old text deleted (an error, or old text left behind), because its
+  old text was measured after it had rendered at its new place.
+
+- With =vui-incremental-render= set, a list of components in which a
+  component holds a =vui-stream= is written whole, as with the flag
+  off, instead of patched component by component. The text of such a
+  component changes between renders of the list: the stream can go
+  empty with no render (its only item removed or rewritten to nothing),
+  which left the separator after it in the buffer, and a stream that
+  starts right where the patch wrote another component's text took that
+  text in, so it did not let go when its own component was removed and
+  later wrote into the text before it.
+
+- A =vui-stream= that gets its first item or loses its last one now has
+  the layout around it written again also when the root skips its
+  update with =:should-update=. The render it asked for committed the
+  same tree again and wrote nothing, so a removed last item left its
+  separator behind. The same goes for a stream inside a component row
+  of a stream that is the root's first child: its first item did not
+  show, because the render patched around the outer stream. A request
+  like that from an =:on-unmount= hook no longer renders the tree that
+  is being unmounted either: its effects ran again after their
+  cleanups, with nothing left to clean them up.
+
 - =vui-stream-update-last= after =vui-stream-remove= took the last item
   now changes the buffer, not only the stream's item list. When the
   item left at the end was static (appended, or a finalized node),

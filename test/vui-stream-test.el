@@ -448,6 +448,154 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '("first") "n1")))
           (vui-st--kill))))))
 
+;; A root that skips its update commits the same tree again, which
+;; writes nothing.  The first or the last item of a stream changes the
+;; layout around it all the same, so the render it asks for has to write
+;; the tree.
+
+(vui-defcomponent vui-st-frozen (stream)
+  :should-update nil
+  :render (vui-vstack (vui-stream stream) (vui-text "footer")))
+
+(describe "vui-stream: a root that skips its update"
+  (it "shows the first item and lets go of the last one"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-mount (vui-component 'vui-st-frozen :stream s) "*vui-st-frozen*")
+      (unwind-protect
+          (with-current-buffer "*vui-st-frozen*"
+            ;; The mount writes no record; from this render on there is one
+            (vui-rerender (vui-get-instance))
+            (let ((node (vui-stream-open s (vui-text "a"))))
+              (expect (buffer-string) :to-equal "a\nfooter")
+              ;; rewritten to nothing and back
+              (vui-stream-update node (vui-text ""))
+              (expect (buffer-string) :to-equal "footer")
+              (vui-stream-update node (vui-text "b"))
+              (expect (buffer-string) :to-equal "b\nfooter")
+              (vui-stream-remove node)
+              (expect (buffer-string) :to-equal "footer")
+              (vui-stream-append s (vui-text "c"))
+              (expect (buffer-string) :to-equal "c\nfooter")))
+        (kill-buffer "*vui-st-frozen*"))))
+
+  (it "shows a component appended to an empty stream"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-mount (vui-component 'vui-st-frozen :stream s) "*vui-st-frozen*")
+      (unwind-protect
+          (with-current-buffer "*vui-st-frozen*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append s (vui-component 'vui-st-frozen-row))
+            (expect (buffer-string) :to-equal "[row]\nfooter"))
+        (kill-buffer "*vui-st-frozen*")))))
+
+(vui-defcomponent vui-st-frozen-row ()
+  :render (vui-text "[row]"))
+
+;; A root whose first child is a stream patches around it.  A second
+;; stream below it changes the layout of its own part only, so its first
+;; and last items must not make the first stream written again.  A
+;; stream inside a component row of the first stream lives in that
+;; stream's text, so for it the first stream has to be written again.
+
+(defvar vui-st-tail--renders nil
+  "Handles `vui--stream-render' was called with, latest first.")
+
+(defun vui-st-tail--record (handle)
+  (push handle vui-st-tail--renders))
+
+(vui-defcomponent vui-st-tail-panel (stream)
+  :render (vui-vstack (vui-text "panel") (vui-stream stream)))
+
+(vui-defcomponent vui-st-tail-root (log panel)
+  :render (vui-vstack (vui-stream log)
+                      (vui-component 'vui-st-tail-panel :stream panel)))
+
+;; A component whose only text is its stream: while that stream is
+;; empty, nothing separates it from the first stream, so it starts right
+;; where the first stream ends.
+(vui-defcomponent vui-st-tail-bare (stream)
+  :render (vui-stream stream))
+
+(vui-defcomponent vui-st-tail-bare-root (log panel mode)
+  :render (let ((kids (list (vui-stream log)
+                            (vui-component 'vui-st-tail-bare :stream panel))))
+            (if (eq mode 'fragment)
+                (apply #'vui-fragment kids)
+              (apply #'vui-vstack kids))))
+
+(defvar vui-st-tail--inner nil
+  "The stream inside `vui-st-tail-card'.")
+
+(vui-defcomponent vui-st-tail-card ()
+  :render (vui-vstack (vui-text "card")
+                      (vui-stream vui-st-tail--inner)
+                      (vui-text "end")))
+
+(describe "vui-stream: a second stream below a first-child stream"
+  (it "does not write the first stream again for its first and last items"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (panel (vui-make-stream)))
+      (dotimes (i 3) (vui-stream-append log (vui-text (format "log%d" i))))
+      (vui-mount (vui-component 'vui-st-tail-root :log log :panel panel)
+                 "*vui-st-tail*")
+      (advice-add 'vui--stream-render :before #'vui-st-tail--record)
+      (unwind-protect
+          (with-current-buffer "*vui-st-tail*"
+            (vui-rerender (vui-get-instance))
+            (setq vui-st-tail--renders nil)
+            (let ((node (vui-stream-open panel (vui-text "p1"))))
+              (expect (buffer-string) :to-equal "log0\nlog1\nlog2\npanel\np1")
+              (vui-stream-remove node)
+              (expect (buffer-string) :to-equal "log0\nlog1\nlog2\npanel"))
+            (expect (cl-count log vui-st-tail--renders) :to-equal 0)
+            (expect (cl-count panel vui-st-tail--renders) :to-equal 2))
+        (advice-remove 'vui--stream-render #'vui-st-tail--record)
+        (kill-buffer "*vui-st-tail*"))))
+
+  (dolist (mode '(vstack fragment))
+    (it (format "leaves the first stream alone for a stream right after it (%s)"
+                mode)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream))
+            (panel (vui-make-stream)))
+        (dotimes (i 3) (vui-stream-append log (vui-text (format "log%d" i))))
+        (vui-mount (vui-component 'vui-st-tail-bare-root
+                     :log log :panel panel :mode mode)
+                   "*vui-st-tail*")
+        (advice-add 'vui--stream-render :before #'vui-st-tail--record)
+        (unwind-protect
+            (with-current-buffer "*vui-st-tail*"
+              (vui-rerender (vui-get-instance))
+              (setq vui-st-tail--renders nil)
+              (let ((node (vui-stream-open panel (vui-text "p1"))))
+                (expect (buffer-string)
+                        :to-equal (if (eq mode 'fragment)
+                                      "log0\nlog1\nlog2p1"
+                                    "log0\nlog1\nlog2\np1"))
+                (vui-stream-remove node)
+                (expect (buffer-string) :to-equal "log0\nlog1\nlog2"))
+              (expect (cl-count log vui-st-tail--renders) :to-equal 0))
+          (advice-remove 'vui--stream-render #'vui-st-tail--record)
+          (kill-buffer "*vui-st-tail*")))))
+
+  (it "shows the first item of a stream inside a row of the first stream"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (setq vui-st-tail--inner (vui-make-stream))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-mount (vui-component 'vui-st-frozen :stream log) "*vui-st-tail*")
+      (unwind-protect
+          (with-current-buffer "*vui-st-tail*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-st-tail-card))
+            (expect (buffer-string) :to-equal "l0\ncard\nend\nfooter")
+            (vui-stream-append vui-st-tail--inner (vui-text "x"))
+            (expect (buffer-string) :to-equal "l0\ncard\nx\nend\nfooter"))
+        (kill-buffer "*vui-st-tail*")))))
+
 (describe "vui-stream: update-last on an empty-rendering stream re-lays the tree"
   ;; Mirror of the empty -> non-empty append transition: when an in-place
   ;; update shrinks the WHOLE stream region to zero width, the separator

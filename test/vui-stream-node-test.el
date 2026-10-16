@@ -275,6 +275,21 @@
   :render (vui-vstack (vui-stream stream)
                       (vui-component 'vui-snode-unmounting-box :stream stream)))
 
+(vui-defcomponent vui-snode-appending-box (stream)
+  "A box below STREAM that appends an item to it when it unmounts."
+  :on-unmount (progn
+                (push 'unmount vui-snode-unmounting--log)
+                (vui-stream-append stream (vui-text "late")))
+  :render (progn
+            (vui-use-effect ()
+              (push 'effect vui-snode-unmounting--log)
+              (lambda () (push 'cleanup vui-snode-unmounting--log)))
+            (vui-text "box")))
+
+(vui-defcomponent vui-snode-appending (stream)
+  :render (vui-vstack (vui-stream stream)
+                      (vui-component 'vui-snode-appending-box :stream stream)))
+
 (describe "vui-stream nodes: update-last after the last node was removed"
   (dolist (flag '(nil t))
     (it (format "replaces the static item before it (flag %s)"
@@ -408,6 +423,21 @@
                       :to-equal '(cleanup unmount)))
           (setq vui-snode-unmounting--log nil)
           (vui-snode--kill)))))
+
+  ;; The first item of an empty stream lays the tree out again, which
+  ;; must not happen for a tree that is being unmounted either
+  (it "does not render the tree again for a first item from its on-unmount"
+    (let ((vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-mount (vui-component 'vui-snode-appending :stream s) "*vui-snode*")
+      (unwind-protect
+          (progn
+            (setq vui-snode-unmounting--log nil)
+            (vui-unmount "*vui-snode*")
+            (expect (reverse vui-snode-unmounting--log)
+                    :to-equal '(cleanup unmount)))
+        (setq vui-snode-unmounting--log nil)
+        (vui-snode--kill))))
 
   (it "keeps rows and open nodes working when it writes the stream again"
     (let ((vui-render-delay nil)

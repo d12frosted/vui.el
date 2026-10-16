@@ -630,10 +630,485 @@
                         :to-equal (list (point-max) (point-max)))))
           (kill-buffer "*inc-cl-mark*"))))))
 
+;; A vstack puts a separator only between two children that write text:
+;; a child that writes nothing gets no separator.  The patcher has to
+;; keep the separators where a wholesale render puts them, also before a
+;; child that bails out of its render.
+
+(vui-defcomponent inc-ce-child (label)
+  :should-update (not (equal label (plist-get prev-props :label)))
+  :render (vui-text label))
+
+(vui-defcomponent inc-ce (items spacing)
+  :render (apply #'vui-vstack
+                 :spacing spacing
+                 (mapcar (lambda (it)
+                           (vui-component 'inc-ce-child
+                             :key (car it) :label (cdr it)))
+                         items)))
+
+(defun inc-ce--wholesale (items spacing)
+  "Buffer text of a fresh, wholesale render of `inc-ce' with ITEMS."
+  (let ((vui-incremental-render nil))
+    (vui-mount (vui-component 'inc-ce :items items :spacing spacing)
+               "*inc-ce-w*")
+    (prog1 (with-current-buffer "*inc-ce-w*" (buffer-string))
+      (kill-buffer "*inc-ce-w*"))))
+
+(describe "incremental component-list patching of a moved child"
+  ;; A keyed child that moves up renders at its new place before its old
+  ;; text is deleted, so that text has to be measured before the walk
+  (dolist (case '(((("b" . "BBB") ("a" . "A") ("c" . "C")) . "BBB\nA\nC")
+                  ((("b" . "") ("a" . "A") ("c" . "C")) . "A\nC")
+                  ;; the moved child's old text is deleted after the list
+                  ((("c" . "CCC") ("a" . "A")) . "CCC\nA")))
+    (it (format "deletes the old text of a child that moved and changed length (%S)"
+                (mapcar #'car (car case)))
+      (let ((vui-incremental-render t)
+            (vui-render-delay nil))
+        (let ((inst (vui-mount (vui-component 'inc-ce
+                                 :items '(("a" . "A") ("b" . "B") ("c" . "C"))
+                                 :spacing 0)
+                               "*inc-ce*")))
+          (unwind-protect
+              (progn
+                (vui-rerender inst)
+                (vui-update inst (list :items (car case) :spacing 0))
+                (expect (plist-get (vui-instance-render-record inst) :kind)
+                        :to-be 'components)
+                (expect (with-current-buffer "*inc-ce*" (buffer-string))
+                        :to-equal (cdr case)))
+            (kill-buffer "*inc-ce*")))))))
+
+(describe "incremental component-list patching with children that write nothing"
+  (dolist (spacing '(0 1))
+    (it (format "keeps the separators of a wholesale render (spacing %d)" spacing)
+      (let ((vui-incremental-render t)
+            (vui-render-delay nil)
+            (states '((("a" . "") ("b" . "B") ("c" . "C"))
+                      ;; a writes text now: b needs a separator, so it
+                      ;; renders again although its label did not change;
+                      ;; c bails
+                      (("a" . "A") ("b" . "B") ("c" . "C"))
+                      (("a" . "") ("b" . "") ("c" . "C"))
+                      (("a" . "") ("b" . "") ("c" . ""))
+                      (("a" . "A") ("b" . "") ("c" . "C"))
+                      (("a" . "A") ("b" . ""))
+                      (("b" . "B") ("a" . ""))
+                      (("b" . "B") ("a" . "") ("d" . "D"))
+                      (("b" . "") ("a" . "") ("d" . "D"))
+                      ;; a child with text is removed after empty ones
+                      (("b" . "") ("a" . ""))
+                      (("b" . "B") ("a" . ""))
+                      ;; an empty child is removed after one with text
+                      (("b" . "B")))))
+        (let ((inst (vui-mount (vui-component 'inc-ce
+                                 :items (car states) :spacing spacing)
+                               "*inc-ce*")))
+          (unwind-protect
+              (progn
+                ;; The mount writes no record; this render does
+                (vui-rerender inst)
+                (dolist (items states)
+                  (vui-update inst (list :items items :spacing spacing))
+                  (expect (plist-get (vui-instance-render-record inst) :kind)
+                          :to-be 'components)
+                  (expect (with-current-buffer "*inc-ce*" (buffer-string))
+                          :to-equal (inc-ce--wholesale items spacing))))
+            (kill-buffer "*inc-ce*")))))))
+
+;; A child that holds a `vui-stream' changes its text between renders of
+;; the list: items come and go, and the stream can go empty in place.
+;; The separator after such a child is what the last render wrote, and
+;; a stream that starts right after text the patch writes again must not
+;; take that text in.
+
+(vui-defcomponent inc-csx-chat (stream)
+  :render (vui-stream stream))
+
+(vui-defcomponent inc-csx-chat-bail (stream)
+  :should-update nil
+  :render (vui-stream stream))
+
+(vui-defcomponent inc-csx-box (tick)
+  :render (vui-text (format "box %s" tick)))
+
+(vui-defcomponent inc-csx-row (label)
+  :render (vui-text label))
+
+(vui-defcomponent inc-csx-shell (stream tick chat)
+  :render (vui-vstack
+           (vui-component chat :stream stream)
+           (vui-component 'inc-csx-box :tick tick)))
+
+(defmacro inc-csx--with (chat &rest body)
+  "Mount `inc-csx-shell' with a CHAT child and a fresh stream S, run BODY.
+INST is the root; the list is recorded (a render after the mount)
+before BODY runs, while the stream is still empty."
+  (declare (indent 1))
+  `(let* ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream))
+          (inst (vui-mount (vui-component 'inc-csx-shell
+                             :stream s :tick 0 :chat ,chat)
+                           "*inc-csx*")))
+     (unwind-protect
+         (with-current-buffer "*inc-csx*"
+           (vui-rerender inst)
+           ,@body)
+       (kill-buffer "*inc-csx*"))))
+
+(describe "incremental component-list patching of a stream that goes empty"
+  (it "removes the separator after a stream whose only item was removed"
+    (inc-csx--with 'inc-csx-chat
+      (let ((node (vui-stream-open s (vui-text "a"))))
+        (expect (buffer-string) :to-equal "a\nbox 0")
+        (vui-stream-remove node)
+        (expect (buffer-string) :to-equal "box 0")
+        (vui-update inst (list :stream s :tick 1 :chat 'inc-csx-chat))
+        (expect (buffer-string) :to-equal "box 1"))))
+
+  (it "removes the separator after a stream whose last item became empty"
+    (inc-csx--with 'inc-csx-chat
+      (vui-stream-append s (vui-text "a"))
+      (vui-stream-update-last s (vui-text ""))
+      (expect (buffer-string) :to-equal "box 0")
+      (vui-update inst (list :stream s :tick 1 :chat 'inc-csx-chat))
+      (expect (buffer-string) :to-equal "box 1")))
+
+  (it "shows the first item of a stream whose child bails out"
+    (inc-csx--with 'inc-csx-chat-bail
+      (vui-stream-append s (vui-text "a"))
+      (expect (buffer-string) :to-equal "a\nbox 0")))
+
+  (it "empties a stream whose child bails out"
+    (inc-csx--with 'inc-csx-chat-bail
+      (let ((node (vui-stream-open s (vui-text "a"))))
+        (vui-stream-remove node)
+        (expect (buffer-string) :to-equal "box 0")
+        (vui-update inst (list :stream s :tick 1 :chat 'inc-csx-chat-bail))
+        (expect (buffer-string) :to-equal "box 1"))))
+
+  (it "empties a stream that had text when the list was recorded"
+    (let* ((vui-incremental-render t)
+           (vui-render-delay nil)
+           (s (vui-make-stream))
+           (inst (vui-mount (vui-component 'inc-csx-shell
+                              :stream s :tick 0 :chat 'inc-csx-chat)
+                            "*inc-csx*")))
+      (unwind-protect
+          (with-current-buffer "*inc-csx*"
+            (let ((node (vui-stream-open s (vui-text "a"))))
+              (vui-rerender inst)
+              (vui-stream-remove node)
+              (expect (buffer-string) :to-equal "box 0")
+              (vui-update inst (list :stream s :tick 1 :chat 'inc-csx-chat))
+              (expect (buffer-string) :to-equal "box 1")))
+        (kill-buffer "*inc-csx*"))))
+
+  (it "drops the separator after a stream left with an empty row"
+    ;; The remove leaves text that is all an empty row: the stream is
+    ;; empty in the buffer with no render of the list
+    (let* ((vui-incremental-render t)
+           (vui-render-delay nil)
+           (s (vui-make-stream))
+           (inst (vui-mount (vui-component 'inc-csx-shell
+                              :stream s :tick 0 :chat 'inc-csx-chat)
+                            "*inc-csx*")))
+      (unwind-protect
+          (with-current-buffer "*inc-csx*"
+            (let ((node (vui-stream-open s (vui-text "a"))))
+              (vui-rerender inst)
+              (vui-stream-append s (vui-component 'inc-csx-row :label ""))
+              (vui-stream-remove node)
+              (vui-update inst (list :stream s :tick 1 :chat 'inc-csx-chat))
+              (expect (buffer-string) :to-equal "box 1")))
+        (kill-buffer "*inc-csx*")))))
+
+(vui-defcomponent inc-csm-label (label)
+  :should-update (not (equal label (plist-get prev-props :label)))
+  :render (vui-text label))
+
+(vui-defcomponent inc-csm-chat (stream)
+  :render (vui-stream stream))
+
+(vui-defcomponent inc-csm-chat-bail (stream)
+  :should-update nil
+  :render (vui-stream stream))
+
+(vui-defcomponent inc-csm-root (label chat stream mode)
+  :render (let ((kids (list (vui-component 'inc-csm-label :key "l" :label label)
+                            (when chat
+                              (vui-component chat :key "c" :stream stream)))))
+            (if (eq mode 'fragment)
+                (apply #'vui-fragment kids)
+              (apply #'vui-vstack kids))))
+
+(describe "incremental component-list patching right before a stream"
+  ;; With no separator between them, text written again for the child
+  ;; before the stream starts where the stream starts
+  (dolist (mode '(vstack fragment))
+    (it (format "lets go of a stream whose child was removed (%s)" mode)
+      (let* ((vui-incremental-render t)
+             (vui-render-delay nil)
+             (s (vui-make-stream))
+             (inst (progn
+                     (vui-stream-append s (vui-text "s0"))
+                     (vui-mount (vui-component 'inc-csm-root
+                                  :label "" :chat 'inc-csm-chat :stream s
+                                  :mode mode)
+                                "*inc-csm*"))))
+        (unwind-protect
+            (with-current-buffer "*inc-csm*"
+              (vui-rerender inst)
+              ;; the label gets text, the stream child goes
+              (vui-update inst (list :label "x" :chat nil :stream s :mode mode))
+              (expect (buffer-string) :to-equal "x")
+              ;; the stream is out of the tree: an append writes nothing
+              (vui-stream-append s (vui-text "s1"))
+              (expect (buffer-string) :to-equal "x"))
+          (kill-buffer "*inc-csm*")))))
+
+  (it "keeps the text of the child before a stream child that bails (fragment)"
+    (let* ((vui-incremental-render t)
+           (vui-render-delay nil)
+           (s (vui-make-stream))
+           (inst (progn
+                   (vui-stream-append s (vui-text "s0"))
+                   (vui-mount (vui-component 'inc-csm-root
+                                :label "ab" :chat 'inc-csm-chat-bail :stream s
+                                :mode 'fragment)
+                              "*inc-csm*"))))
+      (unwind-protect
+          (with-current-buffer "*inc-csm*"
+            (vui-rerender inst)
+            (vui-update inst (list :label "cd" :chat 'inc-csm-chat-bail
+                                   :stream s :mode 'fragment))
+            (expect (buffer-string) :to-equal "cds0")
+            (vui-update inst (list :label "e" :chat 'inc-csm-chat-bail
+                                   :stream s :mode 'fragment))
+            (expect (buffer-string) :to-equal "es0")
+            (vui-stream-append s (vui-text "s1"))
+            (expect (buffer-string) :to-equal "es0\ns1"))
+        (kill-buffer "*inc-csm*")))))
+
+;; Random lists of child components, patched one update after another
+;; and compared after each with a fresh wholesale render: the text, and
+;; the render path of every widget.  Children may write nothing, move,
+;; come and go; one of them may hold a stream that gets nodes, plain
+;; items and component rows between the renders, and whose nodes are
+;; rewritten and removed, so the stream also goes empty and back.  The
+;; text is compared after each change of the stream as well.
+
+(defconst inc-rnd--labels '("" "" "x" "yy" "multi\nline")
+  "Labels of the children; an empty one writes nothing.")
+
+(defun inc-rnd--child (label)
+  (if (string-empty-p label)
+      (vui-text "")
+    (vui-hstack (vui-text label) (vui-button label))))
+
+(vui-defcomponent inc-rnd-bail (label)
+  :should-update (not (equal label (plist-get prev-props :label)))
+  :render (inc-rnd--child label))
+
+(vui-defcomponent inc-rnd-plain (label)
+  :render (inc-rnd--child label))
+
+(defun inc-rnd--chat (label stream)
+  (if (string-empty-p label)
+      (vui-stream stream)
+    (vui-vstack (vui-text label) (vui-stream stream))))
+
+(vui-defcomponent inc-rnd-chat-bail (label stream)
+  :should-update (not (equal label (plist-get prev-props :label)))
+  :render (inc-rnd--chat label stream))
+
+(vui-defcomponent inc-rnd-chat (label stream)
+  :render (inc-rnd--chat label stream))
+
+(vui-defcomponent inc-rnd-root (items mode spacing stream)
+  :render
+  (let ((kids (mapcar (lambda (it)
+                        (when it
+                          (pcase-let ((`(,type ,key ,label) it))
+                            (vui-component type :key key :label label
+                              :stream stream))))
+                      items)))
+    (if (eq mode 'fragment)
+        (apply #'vui-fragment kids)
+      (apply #'vui-vstack :spacing spacing kids))))
+
+(defun inc-rnd--items (prev chat)
+  "Random children, made from PREV: labels change, children come, go
+and move.  CHAT is the type of the child that holds the stream."
+  (let* ((pool (copy-sequence (remq nil prev)))
+         (free (cl-set-difference '("a" "b" "c" "d" "s") (mapcar #'cadr pool)
+                                  :test #'equal)))
+    (setq pool (mapcar (lambda (it)
+                         (if (zerop (random 3))
+                             (list (car it) (cadr it)
+                                   (nth (random (length inc-rnd--labels))
+                                        inc-rnd--labels))
+                           it))
+                       pool))
+    (when (and (cdr pool) (zerop (random 4)))
+      (setq pool (remove (nth (random (length pool)) pool) pool)))
+    (when (and free (zerop (random 3)))
+      (let* ((key (nth (random (length free)) free))
+             (type (cond ((equal key "s") chat)
+                         ((zerop (random 2)) 'inc-rnd-bail)
+                         (t 'inc-rnd-plain)))
+             (pos (random (1+ (length pool)))))
+        (setq pool (append (cl-subseq pool 0 pos)
+                           (list (list type key (nth (random (length inc-rnd--labels))
+                                                     inc-rnd--labels)))
+                           (nthcdr pos pool)))))
+    (when (and (cdr pool) (zerop (random 3)))
+      (let* ((it (nth (random (length pool)) pool))
+             (rest (remq it pool))
+             (pos (random (1+ (length rest)))))
+        (setq pool (append (cl-subseq rest 0 pos) (list it) (nthcdr pos rest)))))
+    ;; nil children are skipped, as in any render
+    (let ((out nil))
+      (dolist (it pool (nreverse out))
+        (when (zerop (random 6)) (push nil out))
+        (push it out)))))
+
+(defun inc-rnd--seen (buffer)
+  "The text of BUFFER and the render path of each of its widgets."
+  (with-current-buffer buffer
+    (list (buffer-substring-no-properties (point-min) (point-max))
+          (mapcar (lambda (widget) (vui--elt-get widget :vui-path))
+                  (vui--collect-widgets)))))
+
+(defun inc-rnd--wholesale (props stream)
+  "What a fresh wholesale render of `inc-rnd-root' with PROPS shows.
+The render gets a copy of STREAM, with the same items."
+  (let* ((vui-incremental-render nil)
+         (copy (vui-make-stream))
+         (props (plist-put (copy-sequence props) :stream copy)))
+    (dolist (item (reverse (vui-stream-handle-items-rev stream)))
+      ;; a component row is a mounted instance; the copy gets its vnode
+      (vui-stream-append copy (if (vui-instance-p item)
+                                  (vui-instance-vnode item)
+                                item)))
+    (vui-mount (apply #'vui-component 'inc-rnd-root props) "*inc-rnd-w*")
+    (prog1 (inc-rnd--seen "*inc-rnd-w*")
+      (kill-buffer "*inc-rnd-w*"))))
+
+(describe "incremental component-list patching, randomized"
+  (it "matches a wholesale render after every patch"
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (failure nil))
+      (random "vui-incremental-component-list")
+      (cl-block done
+        (dotimes (run 40)
+          (let* ((chat (if (zerop (random 2)) 'inc-rnd-chat-bail 'inc-rnd-chat))
+                 (mode (if (zerop (random 3)) 'fragment 'vstack))
+                 (spacing (random 2))
+                 (s (vui-make-stream))
+                 (nodes nil)
+                 (n 0)
+                 (items (inc-rnd--items (list (list chat "s" "")) chat))
+                 (trace nil)
+                 (inst nil))
+            (unwind-protect
+                (progn
+                  (setq inst (vui-mount (vui-component 'inc-rnd-root
+                                          :items items :mode mode
+                                          :spacing spacing :stream s)
+                                        "*inc-rnd*"))
+                  (vui-rerender inst)
+                  (cl-flet ((check (step update)
+                              ;; With UPDATE the root renders the new items
+                              ;; first; without, only the stream changed
+                              (let* ((props (list :items items :mode mode
+                                                  :spacing spacing :stream s))
+                                     (err nil)
+                                     (got (condition-case e
+                                              (progn
+                                                (when update (vui-update inst props))
+                                                (inc-rnd--seen "*inc-rnd*"))
+                                            (error (setq err e) nil)))
+                                     (want (inc-rnd--wholesale props s)))
+                                (unless (and (not err) (equal got want))
+                                  (setq failure (list :run run :step step
+                                                      :update update :mode mode
+                                                      :spacing spacing :chat chat
+                                                      :err err :got got :want want
+                                                      :trace (reverse trace)))
+                                  (cl-return-from done)))))
+                    (dotimes (step 20)
+                      ;; the stream changes between renders
+                      (pcase (random 6)
+                        (0 (push (vui-stream-open
+                                  s (vui-text (format "m%d" (cl-incf n))))
+                                 nodes)
+                           (push 'open trace))
+                        (1 (when nodes
+                             (let ((node (nth (random (length nodes)) nodes)))
+                               (vui-stream-remove node)
+                               (setq nodes (delq node nodes))
+                               (push 'remove trace))))
+                        ;; Not to nothing: a remove that leaves only items
+                        ;; with no text keeps the separator before the
+                        ;; stream (see `vui-stream-remove')
+                        (2 (when nodes
+                             (vui-stream-update (nth (random (length nodes)) nodes)
+                                                (vui-text (format "u%d" step)))
+                             (push 'update trace)))
+                        (3 (vui-stream-append s (vui-text (format "a%d" (cl-incf n))))
+                           (push 'append trace))
+                        ;; A component row.  Not one that writes nothing:
+                        ;; a stream left with only such a row is edited in
+                        ;; place, and a remove or an append does not put
+                        ;; the separator before it where a render does.
+                        (4 (vui-stream-append
+                            s (vui-component 'inc-csx-row
+                                :label (format "r%d" (cl-incf n))))
+                           (push 'row trace))
+                        (_ nil))
+                      (check step nil)
+                      (setq items (inc-rnd--items items chat))
+                      (push items trace)
+                      (check step t))))
+              (when (get-buffer "*inc-rnd*")
+                (kill-buffer "*inc-rnd*"))))))
+      (expect failure :to-be nil))))
+
 (describe "incremental component-list patching around a live stream"
   ;; A `vui-stream' grows by edits that are not renders of the component
   ;; that placed it, so the text of that component is no longer what its
   ;; last render wrote.  The patcher must still find where it ends.
+
+  (it "shows the first item of a stream that was empty when the list was recorded"
+    ;; The empty stream writes nothing, so its component has no
+    ;; separator after it: the box starts the buffer
+    (let ((vui-incremental-render t)
+          (vui-render-delay nil)
+          (s (vui-make-stream)))
+      (vui-defcomponent inc-cs-first-chat (stream)
+        :render (vui-stream stream))
+      (vui-defcomponent inc-cs-first-box (tick)
+        :render (vui-text (format "box %s" tick)))
+      (vui-defcomponent inc-cs-first (stream tick)
+        :render (vui-vstack
+                 (vui-component 'inc-cs-first-chat :stream stream)
+                 (vui-component 'inc-cs-first-box :tick tick)))
+      (let ((inst (vui-mount (vui-component 'inc-cs-first :stream s :tick 0)
+                             "*inc-cs-first*")))
+        (unwind-protect
+            (with-current-buffer "*inc-cs-first*"
+              (vui-rerender inst)
+              (expect (plist-get (vui-instance-render-record inst) :kind)
+                      :to-be 'components)
+              (vui-stream-append s (vui-text "a"))
+              (expect (buffer-string) :to-equal "a\nbox 0")
+              (vui-stream-append s (vui-text "b"))
+              (expect (buffer-string) :to-equal "a\nb\nbox 0"))
+          (kill-buffer "*inc-cs-first*")))))
 
   (it "finds the text of a child whose stream grew"
     (let ((vui-incremental-render t)
