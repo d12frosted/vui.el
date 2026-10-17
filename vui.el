@@ -8199,7 +8199,8 @@ is written."
            (child (vui-vnode-box-child vnode))
            (box-start (point))
            (pad-left-str (vui--pad pad-left))
-           ;; First render to temp buffer to measure width.
+           ;; First render to temp buffer to measure width: that of its
+           ;; widest line, as pixel mode measures it.
            ;; Isolate the measure pass like table cells do: without the
            ;; rebindings, a component inside the box would be reconciled
            ;; twice per render (duplicate child entries, shifted indexes
@@ -8213,7 +8214,7 @@ is written."
                                     (vui--measuring-p t)
                                     (vui--pending-effects nil))
                                 (vui--render-vnode child))
-                              (vui--text-width (buffer-string)))))
+                              (vui--text-width (buffer-string) t))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding

@@ -246,8 +246,24 @@
       (vui-render (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
                           :width 5 :padding-left 2))
       ;; Each line should have 2-space indent
-      ;; Alignment padding (1 space) added at end of content block
-      (expect (buffer-string) :to-equal "  a\n  b ")))
+      ;; Alignment padding (2 spaces: the widest line is 1 wide) added
+      ;; at end of content block
+      (expect (buffer-string) :to-equal "  a\n  b  ")))
+
+  (it "measures multiline content by its widest line"
+    (with-temp-buffer
+      ;; "bbb" is 3 wide: 2 columns of alignment padding are left
+      (vui-render (vui-box (vui-vstack (vui-text "a") (vui-text "bbb"))
+                           :width 5))
+      (expect (buffer-string) :to-equal "a\nbbb  "))
+    (with-temp-buffer
+      (vui-render (vui-box (vui-vstack (vui-text "a") (vui-text "bbb") (vui-text "c"))
+                           :width 5))
+      (expect (buffer-string) :to-equal "a\nbbb\nc  "))
+    (with-temp-buffer
+      (vui-render (vui-box (vui-vstack (vui-text "bbb") (vui-text "a"))
+                           :width 5 :align :right))
+      (expect (buffer-string) :to-equal "  bbb\na")))
 
   (it "applies padding-left after a newline that ends the content"
     (with-temp-buffer
@@ -269,8 +285,8 @@
                     (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
                              :width 4 :padding-left 2)
                     (vui-text "y")))
-      ;; The box measures "a\nb" as 2 wide: no alignment padding
-      (expect (buffer-string) :to-equal "  x\n    a\n    b\n  y")))
+      ;; One column of alignment padding: the widest line is 1 wide
+      (expect (buffer-string) :to-equal "  x\n    a\n    b \n  y")))
 
   (it "gets the indent of a vstack after the first line of an hstack"
     (with-temp-buffer
@@ -280,7 +296,7 @@
                                 (vui-vstack
                                  (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
                                           :width 2)))))
-      (expect (buffer-string) :to-equal "  k: a\n  b")))
+      (expect (buffer-string) :to-equal "  k: a\n  b ")))
 
   (it "leaves no line in an indented vstack when it shows nothing"
     (with-temp-buffer
@@ -303,7 +319,7 @@
       (vui-render (vui-vstack :indent 2
                     (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
                              :face 'shadow :width 3 :padding-left 1)))
-      (expect (buffer-string) :to-equal "   a\n   b")
+      (expect (buffer-string) :to-equal "   a\n   b ")
       ;; On each line the indent of the vstack has no face, as on the
       ;; first line; the padding of the box after it has the face
       (expect (vui-layout-test--faces-at 1) :to-equal nil)
@@ -318,7 +334,7 @@
                     (vui-box (vui-vstack (vui-text "a")
                                          (vui-field :value "f" :size 3))
                              :width 4)))
-      (expect (buffer-string) :to-equal "  a\n  f  ")
+      (expect (buffer-string) :to-equal "  a\n  f   ")
       (let ((field (widget-field-at 7)))
         (expect field :to-be-truthy)
         (expect (widget-value field) :to-equal "f")
@@ -412,7 +428,7 @@
               (vui-rerender root)
               (vui-update root '(:label "b"))
               (expect (buffer-string)
-                      :to-equal "  b\n  two    \nafter 1\nafter 2")))
+                      :to-equal "  b\n  two     \nafter 1\nafter 2")))
         (kill-buffer buffer)))))
 
 (defun vui-layout-test--faces-at (pos)
