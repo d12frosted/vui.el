@@ -42,6 +42,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   stream. The =:on-unmount= of a component removed while the tree is
   written counts as such a hook too.
 
+- A =vui-box= directly in an indented =vui-vstack= gets the indent on
+  each of its lines, as a table there does. Only its first line got
+  it, so the other lines of a box with more than one line, for example
+  one holding a stack or a table, started at the left edge, or after
+  only the box's own padding.
+
 - An effect or a cleanup that switches buffers (a =vui-mount= from an
   effect does) no longer moves the rest of the render to that buffer.
   The render went on in that buffer: it emptied the undo list of that
