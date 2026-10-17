@@ -8230,7 +8230,10 @@ is written."
 
    ;; Table layout
    ((vui-vnode-table-p vnode)
-    (let* ((columns (vui-vnode-table-columns vnode))
+    (let* (;; Where the table starts: a marker, as the hooks of the
+           ;; components in its cells can write or delete text above it
+           (table-start (point-marker))
+           (columns (vui-vnode-table-columns vnode))
            (rows (vui-vnode-table-rows vnode))
            (border (vui-vnode-table-border vnode))
            (header-face (vui-vnode-table-header-face vnode))
@@ -8287,8 +8290,9 @@ is written."
           (when border
             (vui--render-table-border col-widths border 'bottom cell-padding
                                       border-face)))
-        ;; Remove trailing newline - tables emit content only, no trailing newline
-        (when (eq (char-before) ?\n)
+        ;; Remove trailing newline - tables emit content only, no trailing
+        ;; newline.  Not when it wrote nothing: that newline is not its own.
+        (when (and (> (point) table-start) (eq (char-before) ?\n))
           (delete-char -1))
         ;; Sticky header: register the table's region so redisplay can
         ;; pin the header row while the window is scrolled into the
@@ -8296,7 +8300,8 @@ is written."
         ;; buffer: only the real render may touch the target buffer's
         ;; header line.
         (when (and sticky header-row-start (not vui--measuring-p))
-          (vui--table-register-sticky header-row-start (point))))))
+          (vui--table-register-sticky header-row-start (point)))
+        (set-marker table-start nil))))
 
    ;; Field (editable text input)
    ((vui-vnode-field-p vnode)

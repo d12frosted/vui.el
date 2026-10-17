@@ -28,6 +28,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-table= that shows nothing (no header, and no rows or only
+  =:separator= rows without a border) no longer deletes the newline
+  before it. It removes the newline after its last row, and when it
+  wrote no row that was the newline of the text before the table.
+
 - A component row of a =vui-stream= unmounted with =vui-unmount= is no
   longer an item of the stream, also when the stream is not shown at
   the time. When the row was the last item, it stayed the last item,

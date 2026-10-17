@@ -613,6 +613,23 @@
   (it "rejects unknown keyword options"
     (expect (vui-list '("a") #'vui-text :wat 1) :to-throw 'error)))
 
+(describe "vui-table with nothing to show"
+  ;; A table writes its rows with a newline after each, and removes the
+  ;; last one: not when it wrote nothing
+  (it "keeps the newline of the text before it"
+    (with-temp-buffer
+      (vui-render (vui-fragment (vui-text "a\n")
+                                (vui-table :columns '((:width 3)) :rows nil)))
+      (expect (buffer-string) :to-equal "a\n")))
+
+  (it "keeps the newline of the host text before it in an inline region"
+    (vui-defcomponent layout-empty-table ()
+      :render (vui-table :columns '((:width 3)) :rows nil))
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-mount-inline (vui-component 'layout-empty-table) 6)
+      (expect (buffer-string) :to-equal "HEAD\nTAIL"))))
+
 (describe "vui-table"
   (it "creates a table vnode"
     (let ((node (vui-table
