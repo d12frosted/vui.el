@@ -958,7 +958,9 @@ commits and runs its effects.")
 (defvar vui--flushing-rerenders-p nil
   "Non-nil while `vui--flush-queued-rerenders' drains the queue.
 Prevents nested drains so the top-level loop can detect runaway
-state-update cycles.")
+state-update cycles.  Code that binds it to t holds the queue that way,
+and drains it itself when the binding is gone (see
+`vui--stream-append-row').")
 
 (defvar vui--rerender-queue-limit 100
   "Maximum consecutive queued re-renders before assuming a loop.
@@ -6942,11 +6944,16 @@ first item pays, as a plain child component, not a row."
                           ;; nothing and that an empty separator leaves at
                           ;; this very position.  The separator goes next to
                           ;; the same fields as an appended content item does.
-                          (row (vui--keeping-fields (point)
-                                 (insert sep)
-                                 (vui--mount-inline
-                                  vnode (point)
-                                  (vui--stream-item-path handle id) t))))
+                          ;; The renders its hooks ask for wait until the
+                          ;; row is in the stream: a render of the tree
+                          ;; before that writes the stream without the row,
+                          ;; and the row's text is lost.
+                          (row (let ((vui--flushing-rerenders-p t))
+                                 (vui--keeping-fields (point)
+                                   (insert sep)
+                                   (vui--mount-inline
+                                    vnode (point)
+                                    (vui--stream-item-path handle id) t)))))
                      (vui--stream-set-last-start handle row-start buf)
                      ;; Share the row's region-end as the stream's end: when
                      ;; the row re-renders on its own (grows/shrinks), its
@@ -6959,6 +6966,10 @@ first item pays, as a plain child component, not a row."
                      row))))))
         ;; The first text of a stream that held only rows with none
         (vui--stream-relay-empty-transition handle was-empty)
+        ;; Run the renders the row's hooks asked for.  A render in
+        ;; progress runs them itself when it is done
+        (unless vui--rendering-p
+          (vui--flush-queued-rerenders))
         row)))))   ; return the inline instance (or nil on fallback)
 
 (defun vui--string-prefix-equal-including-properties-p (o n)
@@ -7272,18 +7283,28 @@ content-only and no-op on a component node for now."
       ;; Component node: a stateful inline row addressable by ref.  The row
       ;; owns its own region markers, so the node carries no start/end.
       (let* ((row (vui--stream-append-row handle vnode))
-             (node (vui--stream-node-create
-                    :handle handle
-                    :cell (vui-stream-handle-items-rev handle)
-                    :id-cell (vui-stream-handle-ids-rev handle)
-                    ;; Only a genuine inline row counts; on the empty-stream
-                    ;; fallback `append-row' returns nil, so the node degrades
-                    ;; to an inert content-style node rather than pointing at
-                    ;; some other (e.g. root) instance.
-                    :instance (and (vui-instance-p row)
-                                   (vui--inline-p row) row))))
-        (push node (vui-stream-handle-nodes handle))
-        node)
+             (cell (vui-stream-handle-items-rev handle))
+             (id-cell (vui-stream-handle-ids-rev handle)))
+        ;; The renders the row's hooks asked for run inside the append,
+        ;; and they may have put items after the row
+        (when (vui-instance-p row)
+          (let ((c cell) (i id-cell))
+            (while (and c (not (eq (car c) row)))
+              (setq c (cdr c) i (cdr i)))
+            (when c
+              (setq cell c id-cell i))))
+        (let ((node (vui--stream-node-create
+                     :handle handle
+                     :cell cell
+                     :id-cell id-cell
+                     ;; Only a genuine inline row counts; on the empty-stream
+                     ;; fallback `append-row' returns nil, so the node
+                     ;; degrades to an inert content-style node rather than
+                     ;; pointing at some other (e.g. root) instance.
+                     :instance (and (vui-instance-p row)
+                                    (vui--inline-p row) row))))
+          (push node (vui-stream-handle-nodes handle))
+          node))
     ;; Content node: its own start/end markers bound around the inserted text.
     (progn
       (vui--stream-append-content handle (vui--stream-node-vnode vnode))

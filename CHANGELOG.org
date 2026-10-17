@@ -28,6 +28,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component row appended to a =vui-stream= keeps its text when its
+  first render asks for a render of the tree, for example when its
+  =:on-mount= gives another stream its first item. That render ran
+  before the row was part of its stream, so it wrote the stream without
+  the row: the row's text was written over, or erased with the rest of
+  the buffer, and the row lost its place in the buffer.
+
 - A =vui-stream= whose text goes empty lets go of the separator next to
   it, and gets it back with its next text. A container drops a child
   that writes nothing, and the separator it would have had.

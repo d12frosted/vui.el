@@ -765,5 +765,210 @@ handle and to the root instance, and the separator of the stream's items
                       (cl-return-from done)))))))))
       (expect failure :to-be nil))))
 
+;; A row that runs HOOK when it mounts: from inside its first render.
+(vui-defcomponent vui-sr-hook-row (label hook)
+  :on-mount (when hook (funcall hook))
+  :render (vui-text (if label (format "[%s]" label) "")))
+
+;; The same, with HOOK run by the renders after the first one.
+(vui-defcomponent vui-sr-hook-update-row (label hook)
+  :on-update (when hook (funcall hook))
+  :render (vui-text (format "[%s]" label)))
+
+(vui-defcomponent vui-sr-hook-panel (stream)
+  :render (vui-vstack (vui-text "panel") (vui-stream stream)))
+
+;; LOG is the first child with MODE `first', and comes after a line "x"
+;; otherwise.
+(vui-defcomponent vui-sr-hook-root (log panel mode)
+  :render (apply #'vui-vstack
+                 (append (unless (eq mode 'first) (list (vui-text "x")))
+                         (list (vui-stream log)
+                               (vui-component 'vui-sr-hook-panel :stream panel)
+                               (vui-text "footer")))))
+
+(defmacro vui-sr-hook--with (mode separator &rest body)
+  "Run BODY in the buffer of a root with two live streams, LOG and PANEL.
+The root renders them with MODE (see `vui-sr-hook-root').  LOG has the
+item \"l0\" and PANEL has none, and SEPARATOR sets apart the items of
+PANEL (default a newline).  BODY refers to the streams as `log' and
+`panel', and runs after a second render of the root."
+  (declare (indent 2))
+  `(let* ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (panel (vui-make-stream ,separator)))
+     (vui-stream-append log (vui-text "l0"))
+     (vui-mount (vui-component 'vui-sr-hook-root
+                               :log log :panel panel :mode ,mode)
+                "*vui-sr-h*")
+     (unwind-protect
+         (with-current-buffer "*vui-sr-h*"
+           ;; `vui-mount' leaves no render record, and this render does:
+           ;; the renders after it patch around LOG when it is the first
+           ;; child
+           (vui-rerender (vui-get-instance))
+           ,@body)
+       (vui-sr--kill "*vui-sr-h*"))))
+
+(defun vui-sr-hook--text ()
+  "Return the text of the buffer, with its lines joined by \"|\"."
+  (replace-regexp-in-string "\n" "|" (buffer-string)))
+
+(defun vui-sr-hook--render-whole ()
+  "Render the root again into an empty buffer, return `vui-sr-hook--text'."
+  (let ((root (vui-get-instance)))
+    (setf (vui-instance-render-record root) nil)
+    (vui-rerender root)
+    (vui-sr-hook--text)))
+
+(describe "vui-stream rows: renders asked for while a row mounts"
+  ;; A row that mounts can ask for renders from its hooks: of the root,
+  ;; or of a row it appends.  They wait until the row is in its stream,
+  ;; or a render of the root writes the stream without the row and the
+  ;; row's text is lost.  A render in progress runs them when it is done.
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "keeps a row that gives another stream its first item (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-append panel
+                                                         (vui-text "p0")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|panel|p0|footer"))
+          (vui-stream-append log (vui-text "l1"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|l1|panel|p0|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[r]|l1|panel|p0|footer"))))
+
+      (it (format "keeps a row that appends a row to another stream (%s)" mode)
+        ;; The second row renders when the first one is done
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "a"
+                              :hook (lambda ()
+                                      (vui-stream-append
+                                       panel (vui-component 'vui-sr-hook-row
+                                                            :label "b")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|panel|p0|[b]|footer"))
+          (vui-update (car (vui-stream-handle-items-rev panel)) '(:label "b2"))
+          (vui-stream-append log (vui-text "l1"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|l1|panel|p0|[b2]|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[a]|l1|panel|p0|[b2]|footer"))))
+
+      (it (format "appends a row from a render of another row (%s)" mode)
+        ;; That render is not over when the new row mounts, so the first
+        ;; render of the new row waits in the queue: that render runs it
+        ;; when it is done
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-update-row :label "a"))
+          (let ((once t))
+            (vui-update (car (vui-stream-handle-items-rev log))
+                        (list :label "a2"
+                              :hook (lambda ()
+                                      (when once
+                                        (setq once nil)
+                                        (vui-stream-append
+                                         panel (vui-component 'vui-sr-hook-row
+                                                              :label "b")))))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a2]|panel|p0|[b]|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[a2]|panel|p0|[b]|footer"))))
+
+      (it (format "opens a node on a row whose hooks append to its stream (%s)"
+                  mode)
+        ;; The row's hook appends a row to PANEL, and that row's first
+        ;; render opens a node on LOG, after the row
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (let* ((later nil)
+                 (node (vui-stream-open
+                        log (vui-component
+                             'vui-sr-hook-row
+                             :label "a"
+                             :hook (lambda ()
+                                     (vui-stream-append
+                                      panel (vui-component
+                                             'vui-sr-hook-row
+                                             :label "b"
+                                             :hook (lambda ()
+                                                     (setq later
+                                                           (vui-stream-open
+                                                            log (vui-text "t")))))))))))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[a]|t|panel|p0|[b]|footer"))
+            (vui-stream-update node (vui-component 'vui-sr-hook-row :label "a2"))
+            (vui-stream-update-last log (vui-text "t2"))
+            (vui-stream-update later (vui-text "t3"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[a2]|t3|panel|p0|[b]|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|[a2]|t3|panel|p0|[b]|footer")))))
+
+      (it (format "keeps a row that gives text to a stream of rows with none (%s)"
+                  mode)
+        ;; Nothing sets apart the items of PANEL, and its only item is a
+        ;; row that renders nothing, so the row appended to it brings the
+        ;; first text of PANEL with its render
+        (vui-sr-hook--with mode ""
+          (let ((node (vui-stream-open panel (vui-text "p0"))))
+            (vui-stream-append panel (vui-component 'vui-sr-hook-row))
+            (vui-stream-remove node))
+          (expect (vui-sr-hook--text) :to-equal (concat x "l0|panel|footer"))
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "a"
+                              :hook (lambda ()
+                                      (vui-stream-append
+                                       panel (vui-component 'vui-sr-hook-row
+                                                            :label "b")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|panel|[b]|footer"))
+          (vui-stream-append log (vui-text "l1"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|l1|panel|[b]|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[a]|l1|panel|[b]|footer"))))
+
+      (it (format "keeps a row that brings the first text of its stream (%s)"
+                  mode)
+        ;; Nothing sets apart the items of LOG, and its only item is a row
+        ;; that renders nothing
+        (let* ((vui-render-delay nil)
+               (log (vui-make-stream ""))
+               (panel (vui-make-stream)))
+          (vui-mount (vui-component 'vui-sr-hook-root
+                                    :log log :panel panel :mode mode)
+                     "*vui-sr-h*")
+          (unwind-protect
+              (with-current-buffer "*vui-sr-h*"
+                (vui-rerender (vui-get-instance))
+                (let ((node (vui-stream-open log (vui-text "l0"))))
+                  (vui-stream-append log (vui-component 'vui-sr-hook-row))
+                  (vui-stream-remove node))
+                (vui-stream-append
+                 log (vui-component 'vui-sr-hook-row
+                                    :label "a"
+                                    :hook (lambda ()
+                                            (vui-stream-append
+                                             panel (vui-text "p0")))))
+                (expect (vui-sr-hook--text)
+                        :to-equal (concat x "[a]|panel|p0|footer"))
+                (expect (vui-sr-hook--render-whole)
+                        :to-equal (concat x "[a]|panel|p0|footer")))
+            (vui-sr--kill "*vui-sr-h*")))))))
+
 (provide 'vui-stream-rows-test)
 ;;; vui-stream-rows-test.el ends here
