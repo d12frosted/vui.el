@@ -2315,22 +2315,25 @@ of its stream renders inside the render of another root (see
                (deps (nth 2 effect))
                (effect-fn (nth 3 effect))
                (prev-cleanup (car (nth 4 effect))))
-          ;; Run cleanup from previous effect (with context for vui-set-state)
+          ;; Run cleanup from previous effect (with context for vui-set-state).
+          ;; The effect and its cleanups run in `save-current-buffer': one
+          ;; that switches buffers (a `vui-mount' does) must not move the
+          ;; rest of the render, or the effects after it, to that buffer.
           (when (functionp prev-cleanup)
             (let ((vui--current-instance instance))
-              (funcall prev-cleanup))
+              (save-current-buffer (funcall prev-cleanup)))
             ;; It is the cleanup the instance holds: an unmount that the
             ;; effect does must not call it again
             (setcar (nth 4 effect) nil))
           ;; Run new effect, capture cleanup
           ;; Bind component context so vui-set-state works in effect body
           (let* ((vui--current-instance instance)
-                 (new-cleanup (funcall effect-fn)))
+                 (new-cleanup (save-current-buffer (funcall effect-fn))))
             (if (eq (vui-instance-mounted-p instance) 'unmounted)
                 ;; The effect unmounted its own tree, and the unmount
                 ;; is over: only this cleans up what the effect set up
                 (when (functionp new-cleanup)
-                  (funcall new-cleanup))
+                  (save-current-buffer (funcall new-cleanup)))
               ;; Store new deps and cleanup in instance
               (let ((effects (vui-instance-effects instance)))
                 (setf (vui-instance-effects instance)
@@ -4338,11 +4341,19 @@ record of the contexts its subtree read."
             (vui--instance-streams instance vui--rendered-streams)))))
 
 (defun vui--call-unmount-recursive (instance)
-  "Call on-unmount for INSTANCE and all its children recursively."
+  "Call on-unmount for INSTANCE and all its children recursively.
+The hooks and cleanups run in `save-current-buffer', as effects do (see
+`vui--run-pending-effects'): one that switches buffers must not move
+the render that removed INSTANCE to that buffer."
+  (save-current-buffer
+    (vui--call-unmount-recursive-1 instance)))
+
+(defun vui--call-unmount-recursive-1 (instance)
+  "Do the work of `vui--call-unmount-recursive' for INSTANCE."
   ;; First unmount children (depth-first)
   (vui--with-debug-indent
    (dolist (child (vui-instance-children instance))
-     (vui--call-unmount-recursive child)))
+     (vui--call-unmount-recursive-1 child)))
   ;; The rows of a stream it made with `vui-use-stream' go with it: they
   ;; are inline instances of the buffer, not children
   (when-let* ((refs (vui-instance-refs instance)))

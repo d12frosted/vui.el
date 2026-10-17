@@ -945,5 +945,118 @@ and cleanups in `vui-lifecycle-test--effects'."
                                 (setup run2) (cleanup run2))))
         (kill-buffer "*test-effect-unmount*")))))
 
+(defvar vui-lifecycle-test--switch nil
+  "Whether `lifecycle-switching-effect' mounts *test-switched* now.")
+
+(defvar vui-lifecycle-test--later-buffer nil
+  "The buffer the last effect of a switching component ran in.")
+
+(vui-defcomponent lifecycle-switching-effect (label)
+  "Has an effect that mounts *test-switched*, which switches to it, and
+an effect after it that notes the buffer it runs in."
+  :render (progn
+            (vui-use-effect (label)
+              (when vui-lifecycle-test--switch
+                (vui-mount (vui-component 'lifecycle-side) "*test-switched*"))
+              nil)
+            (vui-use-effect (label)
+              (setq vui-lifecycle-test--later-buffer (current-buffer))
+              nil)
+            (vui-text label)))
+
+(vui-defcomponent lifecycle-switching-cleanup (label)
+  "Has an effect whose cleanup makes *test-cleanup-other* current, and
+an effect after it that notes the buffer it runs in."
+  :render (progn
+            (vui-use-effect (label)
+              (lambda () (set-buffer (get-buffer-create "*test-cleanup-other*"))))
+            (vui-use-effect (label)
+              (setq vui-lifecycle-test--later-buffer (current-buffer))
+              nil)
+            (vui-text label)))
+
+(vui-defcomponent lifecycle-leaving-switcher ()
+  "Has an effect whose cleanup switches to *test-victim*."
+  :render (progn
+            (vui-use-effect ()
+              (lambda () (switch-to-buffer (get-buffer-create "*test-victim*"))))
+            (vui-text "child")))
+
+(vui-defcomponent lifecycle-leaving-mid (show)
+  "A `lifecycle-leaving-switcher' while SHOW, a line otherwise."
+  :render (if show
+              (vui-component 'lifecycle-leaving-switcher)
+            (vui-text "gone")))
+
+(vui-defcomponent lifecycle-leaving-root (show)
+  ;; The switcher is removed in the render of the mid component, which
+  ;; is in the middle of the stack
+  :render (vui-vstack (vui-text "top")
+                      (vui-component 'lifecycle-leaving-mid :show show)
+                      (vui-text "bottom")))
+
+(describe "an effect that switches buffers"
+  ;; `vui-mount' switches to its buffer: the render that ran the effect
+  ;; goes on in its own buffer
+  (it "leaves the render in the buffer it renders"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--switch nil)
+          (vui-lifecycle-test--later-buffer nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-switching-effect :label "a")
+                   "*test-switching*")
+        (unwind-protect
+            (with-current-buffer "*test-switching*"
+              (setq buffer-undo-list '((1 . 2) nil))
+              (setq vui-lifecycle-test--switch t)
+              (vui-update (vui-get-instance) '(:label "b"))
+              (expect (buffer-string) :to-equal "b")
+              ;; The effect after it runs in the buffer of the render
+              (expect vui-lifecycle-test--later-buffer
+                      :to-be (get-buffer "*test-switching*"))
+              ;; The render ends by emptying the undo list of its buffer
+              (expect buffer-undo-list :to-be nil)
+              ;; What the effect showed stays shown
+              (expect (window-buffer) :to-be (get-buffer "*test-switched*")))
+          (kill-buffer "*test-switching*")
+          (when (get-buffer "*test-switched*")
+            (kill-buffer "*test-switched*"))))))
+
+  (it "leaves the render in its buffer when a cleanup switches buffers"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--later-buffer nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-switching-cleanup :label "a")
+                   "*test-switching*")
+        (unwind-protect
+            (with-current-buffer "*test-switching*"
+              (setq buffer-undo-list '((1 . 2) nil))
+              (vui-update (vui-get-instance) '(:label "b"))
+              (expect vui-lifecycle-test--later-buffer
+                      :to-be (get-buffer "*test-switching*"))
+              (expect buffer-undo-list :to-be nil))
+          (kill-buffer "*test-switching*")
+          (when (get-buffer "*test-cleanup-other*")
+            (kill-buffer "*test-cleanup-other*"))))))
+
+  (it "writes the rest of the tree in its buffer when a removed component switches buffers"
+    ;; The cleanup runs when the render removes the component, while
+    ;; the tree is still being written
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*test-victim*")
+        (insert "VICTIM"))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-leaving-root :show t)
+                   "*test-leaving*")
+        (unwind-protect
+            (progn
+              (vui-update (vui-get-instance "*test-leaving*") '(:show nil))
+              (expect (with-current-buffer "*test-leaving*" (buffer-string))
+                      :to-equal "top\ngone\nbottom")
+              (expect (with-current-buffer "*test-victim*" (buffer-string))
+                      :to-equal "VICTIM"))
+          (kill-buffer "*test-leaving*")
+          (kill-buffer "*test-victim*"))))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here
