@@ -917,6 +917,32 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect (vui-sr-hook--render-whole)
                     :to-equal (concat x "l0|[a2]|t3|panel|p0|[b]|footer")))))
 
+      (it (format "opens a node on its own item for a component on an empty stream (%s)"
+                  mode)
+        ;; On an empty stream the component is not a row: it renders in a
+        ;; render of the tree, and its hook appends to the same stream there
+        (vui-sr-hook--with mode nil
+          (let* ((vnode (vui-component 'vui-sr-hook-row
+                                       :label "a"
+                                       :hook (lambda ()
+                                               (vui-stream-append
+                                                panel (vui-text "t")))))
+                 (node (vui-stream-open panel vnode)))
+            (expect (car (vui--stream-node-cell node)) :to-be vnode)
+            ;; The item the hook appended is in the buffer, as in a render
+            ;; of the whole tree
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|panel|[a]|t|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|panel|[a]|t|footer"))
+            ;; The node of a component that is not a row does nothing
+            (vui-stream-update node (vui-text "X"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|panel|[a]|t|footer"))
+            (vui-stream-remove node)
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|panel|[a]|t|footer")))))
+
       (it (format "writes what a hook appends to an empty stream in its first render (%s)"
                   mode)
         ;; The stream is being written again when the hook appends

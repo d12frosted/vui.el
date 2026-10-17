@@ -28,6 +28,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-stream-open= of a component on an empty stream returns a node on
+  that component's item, also when the component's hooks append to the
+  same stream. The node took the newest item (one the hooks appended),
+  so after a later render of the stream, =vui-stream-update= or
+  =vui-stream-remove= of the node changed that item.
+
 - An item appended to a =vui-stream= while a render writes the stream
   again (from a hook of a component in the tree, say the first render of
   a component appended to an empty stream) shows up. The render wrote
