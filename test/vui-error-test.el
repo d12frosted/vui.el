@@ -190,6 +190,145 @@
                     :to-equal "healthy"))
         (kill-buffer "*test-reset-eb*"))))
 
+  ;; A render that catches an error shows what the renders after it
+  ;; show: the fallback, and only that
+  (it "shows only the fallback when a child fails after another wrote text"
+    (vui-defcomponent partial-bad-child ()
+      :render (error "boom"))
+    (vui-defcomponent partial-error-app ()
+      :render
+      (vui-error-boundary
+       :id 'test-partial
+       :fallback (lambda (_) (vui-text "fallback"))
+       :children (list (vui-text "before ")
+                       (vui-field :key 'partial-field :value "typed")
+                       (vui-component 'partial-bad-child))))
+    (let ((vui-render-delay nil))
+      (vui-mount (vui-component 'partial-error-app) "*test-partial-eb*")
+      (unwind-protect
+          (with-current-buffer "*test-partial-eb*"
+            (expect (buffer-string) :to-equal "fallback")
+            ;; No field is left behind for the text that went
+            (expect widget-field-list :to-be nil)
+            (vui-rerender (vui-get-instance))
+            (expect (buffer-string) :to-equal "fallback"))
+        (kill-buffer "*test-partial-eb*"))))
+
+  (it "shows only the fallback when a child that failed wrote text above it"
+    (vui-defcomponent above-writing-child ()
+      :on-mount (let ((inhibit-read-only t))
+                  (save-excursion
+                    (goto-char (point-min))
+                    (insert "note\n")))
+      :render (vui-text "child "))
+    (vui-defcomponent above-bad-child ()
+      :render (error "boom"))
+    (vui-defcomponent above-error-app ()
+      :render
+      (vui-error-boundary
+       :id 'test-above
+       :fallback (lambda (_) (vui-text "fallback"))
+       :children (list (vui-component 'above-writing-child)
+                       (vui-component 'above-bad-child))))
+    (with-temp-buffer
+      (insert "host\n")
+      (let ((instance (vui-mount-inline (vui-component 'above-error-app))))
+        (expect (buffer-string) :to-equal "note\nhost\nfallback")
+        (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+          (expect (buffer-substring-no-properties start end)
+                  :to-equal "fallback")))))
+
+  (it "keeps the fields around it working when it drops the text of its children"
+    (vui-defcomponent fields-bad-child ()
+      :render (error "boom"))
+    (vui-defcomponent fields-error-app ()
+      :render
+      (vui-error-boundary
+       :id 'test-fields
+       :fallback (lambda (_) (vui-text "fallback"))
+       :children (list (vui-text "partial")
+                       (vui-component 'fields-bad-child))))
+    (with-temp-buffer
+      (insert "head ")
+      ;; An inline region between two fields of the host: a field takes
+      ;; in text inserted at its edge while the region is written
+      (let* ((before (widget-create 'editable-field :size 3 "one"))
+             (position (point))
+             (after (widget-create 'editable-field :size 3 "two")))
+        (insert "\ntail")
+        (widget-setup)
+        (vui-mount-inline (vui-component 'fields-error-app) position)
+        (expect (buffer-string) :to-equal "head onefallbacktwo\ntail")
+        (expect (length widget-field-list) :to-equal 2)
+        (expect (widget-value before) :to-equal "one")
+        (expect (widget-value after) :to-equal "two")
+        ;; Typing into a field after the region
+        (goto-char (1+ (widget-field-start after)))
+        (insert "X")
+        (expect (widget-value after) :to-equal "tXwo"))))
+
+  (it "parks a stream its children wrote before the error"
+    (let ((log (vui-make-stream)))
+      (vui-stream-append log (vui-text "item"))
+      (vui-defcomponent stream-bad-child ()
+        :render (error "boom"))
+      (with-temp-buffer
+        (vui-render (vui-error-boundary
+                     :id 'test-stream
+                     :fallback (lambda (_) (vui-text "fallback"))
+                     :children (list (vui-stream log)
+                                     (vui-component 'stream-bad-child))))
+        (expect (buffer-string) :to-equal "fallback")
+        (expect (memq log vui--streams) :to-be nil)
+        (expect (marker-position (vui-stream-handle-region-start log))
+                :to-be nil))))
+
+  (it "puts the header line back when its children wrote a sticky table"
+    (vui-defcomponent sticky-bad-child ()
+      :render (error "boom"))
+    (with-temp-buffer
+      (vui-render (vui-error-boundary
+                   :id 'test-sticky
+                   :fallback (lambda (_) (vui-text "fallback"))
+                   :children (list (vui-table :columns '((:header "H"))
+                                              :rows '(("a"))
+                                              :sticky-header t)
+                                   (vui-component 'sticky-bad-child))))
+      (expect (buffer-string) :to-equal "fallback")
+      (expect header-line-format :to-be nil)))
+
+  (it "does not run the effects of the children that failed"
+    (let ((should-error t)
+          (effects 0))
+      (vui-defcomponent failed-effect-bomb ()
+        :render (if should-error (error "boom") (vui-text "healthy")))
+      (vui-defcomponent failed-effect-child ()
+        :render (progn
+                  (vui-use-effect ()
+                    (cl-incf effects))
+                  (vui-component 'failed-effect-bomb)))
+      (vui-defcomponent failed-effect-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-failed-effect
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'failed-effect-child))))
+      (let ((vui-render-delay nil))
+        (vui-mount (vui-component 'failed-effect-app) "*test-failed-effect*")
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*test-failed-effect*" (buffer-string))
+                      :to-equal "fallback")
+              (expect effects :to-equal 0)
+              ;; Once it renders, its effect runs
+              (setq should-error nil)
+              (with-current-buffer "*test-failed-effect*"
+                (vui-reset-error-boundary 'test-failed-effect))
+              (expect (with-current-buffer "*test-failed-effect*" (buffer-string))
+                      :to-equal "healthy")
+              (expect effects :to-equal 1))
+          (kill-buffer "*test-failed-effect*")))))
+
   (it "resets all boundaries when vui-reset-error-boundary gets no id"
     (let ((should-error t))
       (vui-defcomponent reset-all-child ()

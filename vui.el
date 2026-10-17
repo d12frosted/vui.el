@@ -8502,24 +8502,49 @@ is written."
                   (vui--render-path fallback-path))
               (vui--render-vnode fallback-vnode)))
         ;; No error yet - try to render children, each one a step in
-        ;; the render path (see the provider above)
-        (condition-case err
-            (let ((idx 0))
-              (dolist (child children)
-                (let ((vui--render-path (cons idx vui--render-path)))
-                  (vui--render-vnode child))
-                (cl-incf idx)))
-          (error
-           ;; Store the error for this boundary
-           (puthash boundary-key err table)
-           ;; Call on-error callback if provided
-           (when on-error
-             (funcall on-error err))
-           ;; Render fallback
-           (when fallback
-             (let ((fallback-vnode (funcall fallback err))
-                   (vui--render-path fallback-path))
-               (vui--render-vnode fallback-vnode))))))))
+        ;; the render path (see the provider above).  When one fails,
+        ;; the boundary shows what the renders after this one show:
+        ;; the fallback alone.  So what the children wrote before the
+        ;; error goes, and so do the effects they asked for, which
+        ;; would run for components that are not shown.  The start is
+        ;; a marker, as their hooks can write or delete text above it.
+        (let ((start (point-marker))
+              (effects vui--pending-effects))
+          (condition-case err
+              (let ((idx 0))
+                (dolist (child children)
+                  (let ((vui--render-path (cons idx vui--render-path)))
+                    (vui--render-vnode child))
+                  (cl-incf idx)))
+            (error
+             (let ((end (max start (point))))
+               ;; The fields in that text are not set up yet: they wait
+               ;; in `widget-field-new' for `widget-setup', with no
+               ;; overlay.  A field around it is set up, and stays.
+               (setq widget-field-new
+                     (cl-remove-if
+                      (lambda (widget)
+                        (let ((from (widget-get widget :from)))
+                          (and (markerp from)
+                               (>= from start) (< from end))))
+                      widget-field-new))
+               (vui--park-streams start end)
+               (delete-region start end))
+             (goto-char start)
+             ;; A sticky table in that text goes too
+             (vui--table-restore-header-line)
+             (setq vui--pending-effects effects)
+             ;; Store the error for this boundary
+             (puthash boundary-key err table)
+             ;; Call on-error callback if provided
+             (when on-error
+               (funcall on-error err))
+             ;; Render fallback
+             (when fallback
+               (let ((fallback-vnode (funcall fallback err))
+                     (vui--render-path fallback-path))
+                 (vui--render-vnode fallback-vnode)))))
+          (set-marker start nil)))))
 
    ;; String shorthand
    ((stringp vnode)

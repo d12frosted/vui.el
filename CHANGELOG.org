@@ -28,6 +28,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An error boundary that catches an error shows only its fallback, as
+  the renders after it do. The text its children wrote before the error
+  stayed in front of the fallback until the next render, with the
+  fields, streams and sticky table headers in it. The effects of those
+  children ran too, also for a component that failed on its first
+  render and was never shown: its effect then did not run when it
+  rendered later.
+
 - A tree rendered from a hook of a component under a context provider
   sees the default value of that context, as on its re-renders. It saw
   the value of the provider, so its text changed on its first
