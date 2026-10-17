@@ -575,5 +575,182 @@ Return what ACTION returned."
                     :to-equal "PLAIN"))
         (kill-buffer "*test-resize-stale-root*")))))
 
+(defvar vui-lifecycle-test--effects nil
+  "The count of effect setups and cleanups, as (SETUPS . CLEANUPS).")
+
+(defvar vui-lifecycle-test--set nil
+  "How `lifecycle-unmount-set-state' sets its state when it unmounts.")
+
+(vui-defcomponent lifecycle-effect-child ()
+  :render (progn
+            (vui-use-effect ()
+              (cl-incf (car vui-lifecycle-test--effects))
+              (lambda () (cl-incf (cdr vui-lifecycle-test--effects))))
+            (vui-text "child")))
+
+(vui-defcomponent lifecycle-unmount-set-state (where)
+  "Has a child with an effect.  On unmount, sets its own state when WHERE
+is root; when WHERE is kid, a kid sets its own state instead.  The state
+is set as `vui-lifecycle-test--set' says: plainly, in a `vui-batch', or
+followed by `vui-flush-sync'."
+  :state ((n 0))
+  :on-unmount (when (eq where 'root)
+                (pcase vui-lifecycle-test--set
+                  ('batch (vui-batch (vui-set-state :n (1+ n))))
+                  ('flush (vui-set-state :n (1+ n)) (vui-flush-sync))
+                  (_ (vui-set-state :n (1+ n)))))
+  :render (vui-vstack (vui-text (format "n=%d" n))
+                      (vui-component 'lifecycle-effect-child)
+                      (when (eq where 'kid)
+                        (vui-component 'lifecycle-unmount-set-state-kid))))
+
+(vui-defcomponent lifecycle-plain ()
+  :render (vui-text "new"))
+
+(vui-defcomponent lifecycle-unmount-set-state-kid ()
+  :state ((n 0))
+  :on-unmount (vui-set-state :n (1+ n))
+  :render (vui-text (format "kid %d" n)))
+
+(defvar vui-lifecycle-test--stream nil
+  "A stream that `lifecycle-unmount-other' renders.")
+
+(defvar vui-lifecycle-test--callback nil
+  "A callback in the async context of `lifecycle-unmount-other'.")
+
+(vui-defcomponent lifecycle-unmount-other ()
+  "Has a child with an effect, and a stream.  On unmount, unmounts
+*test-other*."
+  :state ((n 0))
+  :on-mount (progn
+              (setq vui-lifecycle-test--callback
+                    (vui-with-async-context (vui-set-state :n #'1+)))
+              nil)
+  :on-unmount (vui-unmount "*test-other*")
+  :render (vui-vstack (vui-text (format "n=%d" n))
+                      (vui-component 'lifecycle-effect-child)
+                      (vui-stream vui-lifecycle-test--stream)))
+
+(vui-defcomponent lifecycle-unmount-ask (how)
+  "On unmount, asks for a render of `lifecycle-unmount-other': with HOW
+`stream', by giving its stream its first item, with `state', by setting
+its state through `vui-lifecycle-test--callback'."
+  :on-unmount (pcase how
+                ('stream (vui-stream-append vui-lifecycle-test--stream
+                                            (vui-text "bye")))
+                ('state (funcall vui-lifecycle-test--callback)))
+  :render (vui-text "other"))
+
+(defvar vui-lifecycle-test--rows nil
+  "The stream of `lifecycle-row-root'.")
+
+(defvar vui-lifecycle-test--tell-root nil
+  "A callback in the async context of `lifecycle-row-root'.")
+
+(vui-defcomponent lifecycle-row (how)
+  "A row with a child with an effect.  On unmount, sets its own state
+when HOW is own, or the state of the root around its stream when HOW is
+root."
+  :state ((n 0))
+  :on-unmount (pcase how
+                ('own (vui-set-state :n (1+ n)))
+                ('root (funcall vui-lifecycle-test--tell-root)))
+  :render (vui-vstack (vui-text (format "row %d" n))
+                      (vui-component 'lifecycle-effect-child)))
+
+(vui-defcomponent lifecycle-row-root ()
+  :state ((gone 0))
+  :render (let ((stream (vui-use-stream)))
+            (setq vui-lifecycle-test--rows stream
+                  vui-lifecycle-test--tell-root
+                  (vui-with-async-context (vui-set-state :gone #'1+)))
+            (vui-vstack (vui-text (format "gone=%d" gone))
+                        (vui-stream stream))))
+
+(describe "a tree that is being unmounted"
+  ;; The tree is still in the buffer while its hooks run, but it must
+  ;; not render again: that would set up its effects again after their
+  ;; cleanups ran, and nothing would clean them up
+  (dolist (where '(root kid))
+    (dolist (how '(unmount kill-buffer mount render inline))
+      (it (format "does not render again when a hook sets state (%s, %s)"
+                  where how)
+        (let ((vui-render-delay nil)
+              (vui-lifecycle-test--effects (cons 0 0))
+              (vnode (vui-component 'lifecycle-unmount-set-state
+                                    :where where)))
+          (if (eq how 'inline)
+              (with-temp-buffer
+                (insert "host\n")
+                (vui-unmount (vui-mount-inline vnode)))
+            (unwind-protect
+                (progn
+                  (vui-mount vnode "*test-unmount-set-state*")
+                  (pcase how
+                    ('unmount (vui-unmount "*test-unmount-set-state*"))
+                    ('kill-buffer (kill-buffer "*test-unmount-set-state*"))
+                    ;; A new tree in the buffer
+                    ('mount (vui-mount (vui-component 'lifecycle-plain)
+                                       "*test-unmount-set-state*"))
+                    ('render (vui-render (vui-text "new")
+                                         "*test-unmount-set-state*"))))
+              (when (get-buffer "*test-unmount-set-state*")
+                (kill-buffer "*test-unmount-set-state*"))))
+          (expect vui-lifecycle-test--effects :to-equal (cons 1 1))))))
+
+  (dolist (set '(batch flush))
+    (it (format "does not render again when a hook sets state (%s)" set)
+      ;; `vui-flush-sync' renders also with a delay
+      (let ((vui-render-delay (and (eq set 'flush) 0.01))
+            (vui-lifecycle-test--effects (cons 0 0))
+            (vui-lifecycle-test--set set))
+        (vui-mount (vui-component 'lifecycle-unmount-set-state :where 'root)
+                   "*test-unmount-set-state*")
+        (unwind-protect
+            (vui-unmount "*test-unmount-set-state*")
+          (kill-buffer "*test-unmount-set-state*"))
+        (expect vui-lifecycle-test--effects :to-equal (cons 1 1)))))
+
+  (dolist (how '(own root))
+    (it (format "does not render a stream row again when it is unmounted (%s state)"
+                how)
+      ;; The render of the root writes the stream again, and the row is
+      ;; still one of its items then
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-test--effects (cons 0 0))
+            (vui-lifecycle-test--rows nil)
+            (vui-lifecycle-test--tell-root nil))
+        (vui-mount (vui-component 'lifecycle-row-root) "*test-unmount-row*")
+        (unwind-protect
+            (with-current-buffer "*test-unmount-row*"
+              (vui-stream-append vui-lifecycle-test--rows (vui-text "first"))
+              (vui-stream-append vui-lifecycle-test--rows
+                                 (vui-component 'lifecycle-row :how how))
+              (vui-unmount (car (vui-stream-handle-rows
+                                 vui-lifecycle-test--rows)))
+              (expect vui-lifecycle-test--effects :to-equal (cons 1 1))
+              ;; The stream is live without the row
+              (vui-stream-append vui-lifecycle-test--rows (vui-text "after"))
+              (expect (buffer-string) :to-match "first\nafter\\'"))
+          (kill-buffer "*test-unmount-row*")))))
+
+  (dolist (how '(stream state))
+    (it (format "does not render again from the hook of a tree its own hook unmounts (%s)"
+                how)
+      ;; The hook of the other tree runs while both are being unmounted
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-test--effects (cons 0 0))
+            (vui-lifecycle-test--stream (vui-make-stream))
+            (vui-lifecycle-test--callback nil))
+        (vui-mount (vui-component 'lifecycle-unmount-ask :how how)
+                   "*test-other*")
+        (vui-mount (vui-component 'lifecycle-unmount-other) "*test-first*")
+        (unwind-protect
+            (progn
+              (vui-unmount "*test-first*")
+              (expect vui-lifecycle-test--effects :to-equal (cons 1 1)))
+          (kill-buffer "*test-other*")
+          (kill-buffer "*test-first*"))))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

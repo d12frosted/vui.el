@@ -128,6 +128,11 @@ subtree: effect cleanups, cleanup functions returned from =:on-mount=,
 pending async processes are cancelled, and =:on-unmount= hooks fire
 (children before parents).
 
+When a whole tree is unmounted (the last three cases above, or
+=vui-unmount= on an inline mount), it does not render again. If an
+=:on-unmount= hook sets state in that tree, nothing changes on screen,
+and the effects of the tree do not run again.
+
 ** Use Cases
 
 - Canceling timers

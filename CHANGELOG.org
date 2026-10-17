@@ -28,6 +28,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A tree that is being unmounted (=vui-unmount=, a new =vui-mount= or
+  =vui-render= into its buffer, or killing the buffer) no longer renders
+  again when an =:on-unmount= hook sets state in it and the change
+  renders right away (=vui-render-delay= nil, or =vui-flush-sync=). That
+  render ran after the effects of the tree were cleaned up, and set them
+  up again, with nothing left to clean them up. The same goes for a
+  component row of a =vui-stream= unmounted on its own, whose hook made
+  the tree around the stream render: that render wrote the row again.
+
 - A =vui-box= with =:padding-left=, and a table in an indented
   =vui-vstack=, indent only their own lines. The indent went after
   every newline up to the end of the buffer, so the text after the

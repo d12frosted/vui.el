@@ -950,6 +950,14 @@ While set, re-render requests are queued in `vui--queued-rerenders'
 instead of starting a nested render that would erase the buffer
 mid-walk.")
 
+(defvar vui--unmounting nil
+  "The root instances whose teardown `vui--unmount-root' is running.
+Their hooks run while the trees are still in their buffers, but the
+trees must not render again then: the render would set up their
+effects again after the cleanups ran, with nothing left to clean them
+up (see `vui--rerender-instance' and `vui--stream-request-rebuild').  A
+list: a hook can unmount another tree.")
+
 (defvar vui--queued-rerenders nil
   "Roots whose re-render was requested while a render was in progress.
 Drained by `vui--flush-queued-rerenders' after the in-progress render
@@ -3169,8 +3177,13 @@ When called while another render is already in progress (for
 example, from `vui-set-state' in a lifecycle hook or effect with
 `vui-render-delay' set to nil), the request is queued and runs after
 the in-progress render commits, instead of erasing the buffer
-mid-render."
+mid-render.
+
+Nothing happens while INSTANCE is being unmounted, as when a hook of
+its tree sets state (see `vui--unmounting')."
   (cond
+   ((memq instance vui--unmounting)
+    nil)
    (vui--rendering-p
     (cl-pushnew instance vui--queued-rerenders :test #'eq))
    ((vui--inline-p instance)
@@ -4359,18 +4372,13 @@ becomes a no-op for it, and async callbacks created via
   (dolist (child (vui-instance-children instance))
     (vui--detach-instance child)))
 
-(defvar vui--unmounting nil
-  "The root instance whose teardown `vui--unmount-root' is running, or nil.
-Its hooks run while the tree is still in the buffer, but the tree must
-not render again then (see `vui--stream-request-rebuild').")
-
 (defun vui--unmount-root (instance)
   "Run full lifecycle teardown for root INSTANCE and detach it.
 Calls on-unmount hooks, effect cleanups, on-mount cleanup functions,
 and async process cleanup for the whole tree, cancels any pending
 deferred render, and clears buffer references so stale re-render
 requests for this tree become no-ops."
-  (let ((vui--unmounting instance))
+  (let ((vui--unmounting (cons instance vui--unmounting)))
     (vui--call-unmount-recursive instance))
   ;; Cancel after cleanups: an on-unmount hook calling `vui-set-state'
   ;; would otherwise leave a fresh timer behind.
@@ -6676,6 +6684,13 @@ silently dropping every subsequent streamed append."
                                      (current-buffer)))))
          ;; A row unmounted on its own has no text any more
          ((not (vui--stream-row-p item)))
+         ;; Nor does a row that is being unmounted: a hook of it made
+         ;; this render, and the row must not render again (see
+         ;; `vui--unmounting').  The unmount still deletes the row's
+         ;; region after this, so the stream keeps off its end marker.
+         ((memq item vui--unmounting)
+          (when (eq (vui-instance-region-end item) old-end)
+            (setq shared t)))
          (t
           (unless first (insert sep))
           (setq first nil
@@ -6790,13 +6805,13 @@ that did not change.  With HANDLE in `vui--stream-rebuild-pending' its
 next commit does neither for HANDLE (see `vui--commit-root'), so the
 stream is written from its items (see `vui--stream-render').
 
-Nothing happens while the root is being unmounted (a hook of its tree
-made the call): the tree would render after its effects were cleaned
-up, and run them again with nothing left to clean them up."
+Nothing happens while the root is being unmounted (a hook of its tree,
+or of a tree it unmounts, made the call): the tree would render after
+its effects were cleaned up, and run them again with nothing left to
+clean them up."
   (let ((buf (vui-stream-handle-buffer handle)))
     (when (and buf (buffer-live-p buf)
-               (not (and vui--unmounting
-                         (eq vui--unmounting (vui-get-instance buf)))))
+               (not (memq (vui-get-instance buf) vui--unmounting)))
       (with-current-buffer buf
         (cl-pushnew handle vui--stream-rebuild-pending :test #'eq))
       (vui--stream-request-rerender handle))))
