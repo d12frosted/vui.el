@@ -137,4 +137,96 @@
           (kill-buffer "*test-ctx4*"))))))
 
 
+(vui-defcontext vui-context-test-theme 'light
+  "A context for the specs of trees mounted from a hook.")
+
+(defvar vui-context-test--side-root nil
+  "The root that `vui-context-test-mounting-host' mounts.")
+
+(vui-defcomponent vui-context-test-theme-reader ()
+  "The value of `vui-context-test-theme' as text."
+  :render (vui-text (format "theme %s" (vui-use-context
+                                        vui-context-test-theme-context))))
+
+(vui-defcomponent vui-context-test-mounting-host ()
+  "Mounts a theme reader in a buffer of its own from its `:on-mount'."
+  :on-mount (setq vui-context-test--side-root
+                  (save-window-excursion
+                    (vui-mount (vui-component 'vui-context-test-theme-reader)
+                               "*test-ctx-side*")))
+  :render (vui-text "host"))
+
+(vui-defcomponent vui-context-test-provided-host ()
+  "A `dark' provider around a `vui-context-test-mounting-host' and a
+theme reader."
+  :render (vui-context-test-theme-provider 'dark
+            (vui-vstack (vui-component 'vui-context-test-mounting-host)
+                        (vui-component 'vui-context-test-theme-reader))))
+
+(vui-defcomponent vui-context-test-hook-runner (hook)
+  "Calls HOOK from its `:on-mount'."
+  :on-mount (funcall hook)
+  :render (vui-text "runner"))
+
+(describe "a tree mounted from a hook"
+  (it "does not see the context values of the tree it is mounted from"
+    (let ((vui-render-delay nil))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-context-test-provided-host)
+                         "*test-ctx-host*"))
+            (expect (with-current-buffer "*test-ctx-side*" (buffer-string))
+                    :to-equal "theme light")
+            ;; The same after a render of its own
+            (vui-rerender vui-context-test--side-root)
+            (expect (with-current-buffer "*test-ctx-side*" (buffer-string))
+                    :to-equal "theme light")
+            ;; And the tree it is mounted from keeps its own
+            (expect (with-current-buffer "*test-ctx-host*" (buffer-string))
+                    :to-equal "host\ntheme dark"))
+        (dolist (buffer '("*test-ctx-side*" "*test-ctx-host*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  ;; The hooks of a tree that `vui-render' renders run outside of any
+  ;; render, so what they render is rendered right away
+  (it "does not see the context values of a tree that renders it from a hook"
+    (let ((vui-render-delay nil)
+          (root nil))
+      (unwind-protect
+          (progn
+            (setq root (save-window-excursion
+                         (vui-mount (vui-component 'vui-context-test-theme-reader)
+                                    "*test-ctx-side*")))
+            (with-temp-buffer
+              (vui-render (vui-context-test-theme-provider 'dark
+                            (vui-component 'vui-context-test-hook-runner
+                                           :hook (lambda () (vui-rerender root))))))
+            (expect (with-current-buffer "*test-ctx-side*" (buffer-string))
+                    :to-equal "theme light"))
+        (when (get-buffer "*test-ctx-side*")
+          (kill-buffer "*test-ctx-side*")))))
+
+  (it "does not see the context values of a tree that mounts it inline from a hook"
+    (let ((vui-render-delay nil)
+          (instance nil))
+      (with-temp-buffer
+        (insert "host\n")
+        (let ((host (current-buffer)))
+          (with-temp-buffer
+            (vui-render (vui-context-test-theme-provider 'dark
+                          (vui-component
+                           'vui-context-test-hook-runner
+                           :hook (lambda ()
+                                   (with-current-buffer host
+                                     (setq instance
+                                           (vui-mount-inline
+                                            (vui-component
+                                             'vui-context-test-theme-reader)
+                                            (point-max))))))))))
+        (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+          (expect (buffer-substring-no-properties start end)
+                  :to-equal "theme light"))))))
+
 ;;; vui-context-test.el ends here

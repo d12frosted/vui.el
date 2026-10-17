@@ -28,6 +28,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A tree rendered from a hook of a component under a context provider
+  sees the default value of that context, as on its re-renders. It saw
+  the value of the provider, so its text changed on its first
+  re-render. That was a tree that =vui-mount= mounts from a hook, and,
+  from a hook of a tree that =vui-render= renders, also a re-render
+  (=vui-rerender=, =vui-update=, a stream row) or an inline mount.
+
 - =vui-render= renders a tree of its own, also when it is called from
   a hook or an effect of a mounted tree. Its components reconciled
   against the component of that hook or effect: they could take over

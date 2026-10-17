@@ -3244,6 +3244,11 @@ stream does (see `vui--stream-relay-empty-transition')."
                (vui--root-instance instance)
                ;; Nil but for a stream row, which is one step of its stream
                (vui--render-path (vui-instance-base-path instance))
+               ;; No provider above it either: a row of a stream renders
+               ;; on its own (see `vui--stream-reseat-row'), and a root
+               ;; has none, also when this runs from a hook of a tree
+               ;; under one
+               (vui--context-stack nil)
                (vui--pending-effects nil))
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
@@ -3370,6 +3375,9 @@ writes there goes into the region."
                (vui--root-instance instance)
                ;; Initialize render path for cursor tracking
                (vui--render-path nil)
+               ;; A root has no provider above it, also when this runs
+               ;; from a hook of a tree under one
+               (vui--context-stack nil)
                ;; Clear pending effects before render
                (vui--pending-effects nil))
           ;; Queue re-render requests (vui-set-state with nil delay)
@@ -8626,7 +8634,10 @@ returns, the tree may not show those changes yet."
          (vui--pending-effects nil)
          ;; The paths of this tree start here.  A mount from a hook or
          ;; an effect of another tree runs inside that tree's render.
-         (vui--render-path nil))
+         (vui--render-path nil)
+         ;; It does not see the context values of that tree either:
+         ;; its re-renders render it on its own and would not
+         (vui--context-stack nil))
     ;; Store buffer reference in instance for re-rendering
     (setf (vui-instance-buffer instance) buf)
     (with-current-buffer buf
