@@ -1127,5 +1127,86 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
           (expect (vui-sr-hook--text)
                   :to-equal (concat x "l0|t|panel|p0|[r2]|footer")))))))
 
+(defvar vui-sr-owned--stream nil
+  "The stream of the last `vui-sr-owned' to render.")
+
+(defvar vui-sr-owned--renders 0
+  "How many times `vui-sr-owned-root' rendered.")
+
+(vui-defcomponent vui-sr-owned ()
+  "Owns a stream, from `vui-use-stream'."
+  :render (let ((stream (vui-use-stream)))
+            (setq vui-sr-owned--stream stream)
+            (vui-stream stream)))
+
+(vui-defcomponent vui-sr-owned-root (show)
+  :render (progn
+            (cl-incf vui-sr-owned--renders)
+            (vui-vstack (vui-text "top")
+                        (when show (vui-component 'vui-sr-owned))
+                        (vui-text "footer"))))
+
+(describe "vui-stream rows: a row unmounted on its own"
+  ;; The row's text goes, and the stream is written again without it
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (pcase-dolist (`(,where ,before ,after ,expected ,appended)
+                     '((only nil nil "" "b")
+                       (start nil "c" "c" "c|b")
+                       (middle "a" "c" "a|c" "a|c|b")
+                       (last "a" nil "a" "a|b")))
+        (it (format "lets go of its text and separator (%s, %s)" where mode)
+          (vui-sr-hook--with mode nil
+            (let ((node (vui-stream-open panel (vui-text "n"))))
+              (when before
+                (vui-stream-append panel (vui-text before)))
+              (vui-stream-append panel (vui-component 'vui-sr-hook-row
+                                                      :label "r"))
+              (when after
+                (vui-stream-append panel (vui-text after)))
+              (vui-stream-remove node))
+            (vui-unmount (car (vui-stream-handle-rows panel)))
+            (let ((rest (if (string-empty-p expected) "" (concat "|" expected))))
+              (expect (vui-sr-hook--text)
+                      :to-equal (concat x "l0|panel" rest "|footer")))
+            (vui-stream-append panel (vui-text "b"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|panel|" appended "|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|panel|" appended "|footer")))))))
+
+  ;; LOG is the first child with MODE first: a render of the root
+  ;; patches around it, unless it has to be written again
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "lets go of its text and separator (a row of the first stream, %s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append log (vui-component 'vui-sr-hook-row :label "r"))
+          (vui-stream-append log (vui-text "c"))
+          (vui-unmount (car (vui-stream-handle-rows log)))
+          (expect (vui-sr-hook--text) :to-equal (concat x "l0|c|panel|footer"))
+          (vui-stream-append log (vui-text "b"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|c|b|panel|footer"))))))
+
+  (it "does not render the tree again when it goes with the owner of its stream"
+    ;; The stream goes with its owner, and its rows with it
+    (let ((vui-render-delay nil)
+          (vui-sr-owned--stream nil)
+          (vui-sr-owned--renders 0))
+      (vui-mount (vui-component 'vui-sr-owned-root :show t) "*vui-sr-owned*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-owned*"
+            (vui-stream-append vui-sr-owned--stream (vui-text "a"))
+            (vui-stream-append vui-sr-owned--stream
+                               (vui-component 'vui-sr-hook-row :label "r"))
+            (expect (buffer-string) :to-equal "top\na\n[r]\nfooter")
+            (let ((renders vui-sr-owned--renders))
+              (vui-update (vui-get-instance) '(:show nil))
+              (expect (buffer-string) :to-equal "top\nfooter")
+              (expect vui-sr-owned--renders :to-equal (1+ renders))))
+        (kill-buffer "*vui-sr-owned*")))))
+
 (provide 'vui-stream-rows-test)
 ;;; vui-stream-rows-test.el ends here

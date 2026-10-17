@@ -28,6 +28,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-unmount= of a component row of a =vui-stream= also removes the
+  separator next to the row, and items appended to the stream after
+  that show up. The separator stayed, and when the row was the last
+  item, the stream lost its end with it, so what was appended next did
+  not show up.
+
 - =vui-stream-open= of text on an empty stream returns a node on that
   text, also when a hook in the render that this first item asks for
   appends to the same stream. The node took the item the hook
