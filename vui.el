@@ -961,7 +961,8 @@ list: a hook can unmount another tree.")
 (defvar vui--queued-rerenders nil
   "Roots whose re-render was requested while a render was in progress.
 Drained by `vui--flush-queued-rerenders' after the in-progress render
-commits and runs its effects.")
+commits and runs its effects, or while its error propagates when it
+signals (see `vui--draining-queue-on-error').")
 
 (defvar vui--flushing-rerenders-p nil
   "Non-nil while `vui--flush-queued-rerenders' drains the queue.
@@ -3170,7 +3171,10 @@ that stay.  Returns the value of BODY."
 Only the top-level call drains the queue; renders started from here
 queue further requests instead of draining recursively, so a
 state-update cycle that never settles is detected and signalled
-instead of overflowing the stack."
+instead of overflowing the stack.
+
+A re-render that signals leaves the rest of the queue to the render
+that runs this one (see `vui--draining-queue-on-error')."
   (unless vui--flushing-rerenders-p
     (let ((vui--flushing-rerenders-p t)
           (iterations 0))
@@ -3181,6 +3185,70 @@ instead of overflowing the stack."
 (state-update loop in a lifecycle hook or effect?)"
                  vui--rerender-queue-limit))
         (vui--rerender-instance (pop vui--queued-rerenders))))))
+
+(defun vui--drain-queue-after-error ()
+  "Run the queued re-renders while the error of a render propagates.
+A re-render that signals is shown as a warning and the rest still run,
+so the caller gets the first error.  A tree that failed here does not
+run again in this drain, also when it asks for itself again, and the
+renders count against `vui--rerender-queue-limit', as in
+`vui--flush-queued-rerenders'.  A quit stops the drain."
+  (let ((vui--flushing-rerenders-p t)
+        (iterations 0)
+        (failed nil))
+    (while vui--queued-rerenders
+      (let ((instance (pop vui--queued-rerenders)))
+        (cond
+         ((> (cl-incf iterations) vui--rerender-queue-limit)
+          (setq vui--queued-rerenders nil)
+          (display-warning
+           'vui (format "VUI re-renders did not settle after %d iterations"
+                        vui--rerender-queue-limit)
+           :warning))
+         ((memq instance failed))
+         (t
+          (condition-case err
+              (vui--rerender-instance instance)
+            (quit
+             (setq vui--queued-rerenders nil)
+             (signal (car err) (cdr err)))
+            (t
+             (push instance failed)
+             (display-warning
+              'vui (format "VUI re-render failed: %s"
+                           (error-message-string err))
+              :warning)))))))))
+
+(defmacro vui--draining-queue-on-error (top-level &rest body)
+  "Run BODY, a render, and drain the queue when it exits early at TOP-LEVEL.
+TOP-LEVEL is evaluated once, before BODY.  The re-renders that BODY
+asked for before an error would otherwise wait in
+`vui--queued-rerenders' for the next render that drains the queue, of
+any tree and at any time.  They run while the error propagates (see
+`vui--drain-queue-after-error').  The error is not caught, so the
+debugger sees it where it was signalled.  A quit empties the queue
+instead: it asks for no more work.  When TOP-LEVEL is nil, BODY runs
+inside another render, which drains the queue itself.  Nor does it
+drain while `vui--flush-queued-rerenders' runs: the render that called
+it drains the rest."
+  (declare (indent 1) (debug t))
+  (let ((top (make-symbol "top"))
+        (done (make-symbol "done"))
+        (quit (make-symbol "quit")))
+    `(let ((,top ,top-level)
+           (,done nil))
+       (unwind-protect
+           (condition-case ,quit
+               (prog1 (progn ,@body)
+                 (setq ,done t))
+             ((debug quit)
+              (setq ,done t
+                    vui--queued-rerenders nil)
+              ;; The debugger, if any, has seen it where it was signalled
+              (let ((debug-on-quit nil))
+                (signal (car ,quit) (cdr ,quit)))))
+         (unless (or ,done (not ,top) vui--flushing-rerenders-p)
+           (vui--drain-queue-after-error))))))
 
 (defun vui--rerender-instance (instance)
   "Re-render INSTANCE and update the buffer.
@@ -3214,6 +3282,11 @@ ephemeral chrome, not document content.
 A component row of a `vui-stream' that renders the stream's only text
 away, or brings it back, has the tree laid out again, as an edit of the
 stream does (see `vui--stream-relay-empty-transition')."
+  (vui--draining-queue-on-error t
+    (vui--rerender-inline-1 instance)))
+
+(defun vui--rerender-inline-1 (instance)
+  "Do the work of `vui--rerender-inline' for INSTANCE."
   (let* ((buffer (vui-instance-buffer instance))
          (bounds (vui--inline-bounds instance))
          (row-p (and buffer (buffer-live-p buffer) bounds
@@ -3352,6 +3425,11 @@ writes there goes into the region."
 
 (defun vui--rerender-buffer (instance)
   "Re-render INSTANCE as the root of its whole buffer."
+  (vui--draining-queue-on-error t
+    (vui--rerender-buffer-1 instance)))
+
+(defun vui--rerender-buffer-1 (instance)
+  "Do the work of `vui--rerender-buffer' for INSTANCE."
   (let ((buffer (vui-instance-buffer instance)))
     (when (and buffer (buffer-live-p buffer))
       (with-current-buffer buffer
@@ -7034,49 +7112,52 @@ last item of the stream, before anything is written."
         (vui--stream-request-rebuild handle))
       nil)                              ; no inline instance in the fallback
      (t
-      (let ((was-empty (vui--stream-region-empty-p handle))
-            (row
-             (with-current-buffer buf
-               (let ((inhibit-read-only t)
-                     (inhibit-modification-hooks t)
-                     (buffer-undo-list t))
-                 (save-excursion
-                   (goto-char (marker-position end))
-                   (let* ((row-start (+ (point) (length sep)))
-                          (id (vui--stream-new-id handle))
-                          ;; The row renders on its own from here on,
-                          ;; always under its item's path.  It goes below
-                          ;; the rows before it, also the ones that render
-                          ;; nothing and that an empty separator leaves at
-                          ;; this very position.  The separator goes next to
-                          ;; the same fields as an appended content item does.
-                          ;; The renders its hooks ask for wait until the
-                          ;; row is in the stream: a render of the tree
-                          ;; before that writes the stream without the row,
-                          ;; and the row's text is lost.
-                          (row (let ((vui--flushing-rerenders-p t))
-                                 (vui--keeping-fields (point)
-                                   (insert sep)
-                                   (vui--mount-inline
-                                    vnode (point)
-                                    (vui--stream-item-path handle id) t)))))
-                     (vui--stream-set-last-start handle row-start buf)
-                     ;; Share the row's region-end as the stream's end: when
-                     ;; the row re-renders on its own (grows/shrinks), its
-                     ;; marker moves and the stream end - and the box below -
-                     ;; stay correct.
-                     (setf (vui-stream-handle-region-end handle)
-                           (vui-instance-region-end row))
-                     (vui--stream-push handle row id)
-                     (push row (vui-stream-handle-rows handle))
-                     row))))))
-        ;; The first text of a stream that held only rows with none
-        (vui--stream-relay-empty-transition handle was-empty)
-        ;; Run the renders the row's hooks asked for.  A render in
-        ;; progress runs them itself when it is done
-        (unless vui--rendering-p
-          (vui--flush-queued-rerenders))
-        row)))))   ; return the inline instance (or nil on fallback)
+      ;; The renders the row's hooks ask for wait until the row is in the
+      ;; stream (see below), also when its first render signals
+      (vui--draining-queue-on-error (not vui--rendering-p)
+        (let ((was-empty (vui--stream-region-empty-p handle))
+              (row
+               (with-current-buffer buf
+                 (let ((inhibit-read-only t)
+                       (inhibit-modification-hooks t)
+                       (buffer-undo-list t))
+                   (save-excursion
+                     (goto-char (marker-position end))
+                     (let* ((row-start (+ (point) (length sep)))
+                            (id (vui--stream-new-id handle))
+                            ;; The row renders on its own from here on,
+                            ;; always under its item's path.  It goes below
+                            ;; the rows before it, also the ones that render
+                            ;; nothing and that an empty separator leaves at
+                            ;; this very position.  The separator goes next to
+                            ;; the same fields as an appended content item does.
+                            ;; The renders its hooks ask for wait until the
+                            ;; row is in the stream: a render of the tree
+                            ;; before that writes the stream without the row,
+                            ;; and the row's text is lost.
+                            (row (let ((vui--flushing-rerenders-p t))
+                                   (vui--keeping-fields (point)
+                                     (insert sep)
+                                     (vui--mount-inline
+                                      vnode (point)
+                                      (vui--stream-item-path handle id) t)))))
+                       (vui--stream-set-last-start handle row-start buf)
+                       ;; Share the row's region-end as the stream's end: when
+                       ;; the row re-renders on its own (grows/shrinks), its
+                       ;; marker moves and the stream end - and the box below -
+                       ;; stay correct.
+                       (setf (vui-stream-handle-region-end handle)
+                             (vui-instance-region-end row))
+                       (vui--stream-push handle row id)
+                       (push row (vui-stream-handle-rows handle))
+                       row))))))
+          ;; The first text of a stream that held only rows with none
+          (vui--stream-relay-empty-transition handle was-empty)
+          ;; Run the renders the row's hooks asked for.  A render in
+          ;; progress runs them itself when it is done
+          (unless vui--rendering-p
+            (vui--flush-queued-rerenders))
+          row))))))   ; return the inline instance (or nil on fallback)
 
 (defun vui--string-prefix-equal-including-properties-p (o n)
   "Return non-nil when O is a prefix of N, text properties included.
@@ -8717,21 +8798,22 @@ returns, the tree may not show those changes yet."
           ;; Queue re-render requests (sync resolve, vui-set-state with
           ;; nil delay) until commit and effects are done
           (setq vui--rendering-p t)
-          (unwind-protect
-              (progn
-                (vui--render-instance instance)
-                ;; widget-setup installs before-change-functions that
-                ;; prevent editing outside of editable fields - no need
-                ;; for buffer-read-only
-                (widget-setup)
-                (vui--setup-field-placeholders)
-                ;; Run effects after initial render
-                (vui--run-pending-effects))
-            (setq vui--rendering-p outer-rendering))
-          ;; Run any re-renders requested during render/effects.  The
-          ;; render in progress, if any, runs them when it is done.
-          (unless outer-rendering
-            (vui--flush-queued-rerenders)))
+          (vui--draining-queue-on-error (not outer-rendering)
+            (unwind-protect
+                (progn
+                  (vui--render-instance instance)
+                  ;; widget-setup installs before-change-functions that
+                  ;; prevent editing outside of editable fields - no need
+                  ;; for buffer-read-only
+                  (widget-setup)
+                  (vui--setup-field-placeholders)
+                  ;; Run effects after initial render
+                  (vui--run-pending-effects))
+              (setq vui--rendering-p outer-rendering))
+            ;; Run any re-renders requested during render/effects.  The
+            ;; render in progress, if any, runs them when it is done.
+            (unless outer-rendering
+              (vui--flush-queued-rerenders))))
         (goto-char (point-min)))
       ;; Outside the `buffer-undo-list' binding: leave the list empty, as
       ;; `widget-setup' did before the render stopped recording.

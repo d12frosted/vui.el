@@ -362,6 +362,314 @@
                   :to-equal "synced=t")
         (kill-buffer "*test-reentrant-effect*"))))
 
+  (it "runs the re-renders a render asked for before it signalled"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (failed nil))
+      (vui-defcomponent reentrant-failing-hook ()
+        :state ((n 0))
+        ;; Asks for a render, then fails, the first time only
+        :on-mount (progn
+                    (vui-set-state :n 1)
+                    (unless failed
+                      (setq failed t)
+                      (error "Boom")))
+        :render (vui-text (format "n=%d" n)))
+      (unwind-protect
+          (progn
+            (expect (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-failing-hook)
+                                   "*test-reentrant-failing*"))
+                    :to-throw 'error)
+            (expect (with-current-buffer "*test-reentrant-failing*"
+                      (buffer-string))
+                    :to-equal "n=1")
+            (expect vui--queued-rerenders :to-be nil))
+        (kill-buffer "*test-reentrant-failing*"))))
+
+  (it "runs the re-renders a re-render asked for before it signalled"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (fail nil))
+      (vui-defcomponent reentrant-failing-update (v)
+        :state ((n 0))
+        ;; Asks for a render, then fails, once
+        :on-update (when (and fail (= n 0))
+                     (vui-set-state :n 1)
+                     (setq fail nil)
+                     (error "Boom"))
+        :render (vui-text (format "%s n=%d" v n)))
+      (dolist (inline '(nil t))
+        (with-temp-buffer
+          (let ((instance
+                 (if inline
+                     (vui-mount-inline (vui-component 'reentrant-failing-update
+                                                      :v 'a))
+                   (save-window-excursion
+                     (vui-mount (vui-component 'reentrant-failing-update :v 'a)
+                                (current-buffer))))))
+            (setq fail t)
+            (expect (vui-update-props instance '(:v b))
+                    :to-throw 'error)
+            (expect (buffer-string) :to-equal "b n=1")
+            (expect vui--queued-rerenders :to-be nil))))))
+
+  (it "runs the rest of the asked re-renders when one of them signals"
+    (let ((vui-render-delay nil)
+          (bad nil)
+          (good nil))
+      (vui-defcomponent reentrant-bad (go)
+        :render (if go (error "Boom") (vui-text "bad")))
+      (vui-defcomponent reentrant-good (k)
+        :render (vui-text (format "good %s" k)))
+      (vui-defcomponent reentrant-asker ()
+        ;; The queue runs the last request first: the bad one
+        :on-mount (progn
+                    (vui-update-props good '(:k 7))
+                    (vui-update-props bad '(:go t)))
+        :render (vui-text "asker"))
+      (unwind-protect
+          (progn
+            (setq bad (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-bad)
+                                   "*test-reentrant-bad*"))
+                  good (save-window-excursion
+                         (vui-mount (vui-component 'reentrant-good :k 0)
+                                    "*test-reentrant-good*")))
+            ;; The error of the bad one still reaches the caller
+            (expect (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-asker)
+                                   "*test-reentrant-asker*"))
+                    :to-throw 'error)
+            (expect (with-current-buffer "*test-reentrant-good*"
+                      (buffer-string))
+                    :to-equal "good 7")
+            (expect vui--queued-rerenders :to-be nil))
+        (dolist (buffer '("*test-reentrant-bad*" "*test-reentrant-good*"
+                          "*test-reentrant-asker*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "shows the errors of the other asked re-renders as warnings"
+    (let ((vui-render-delay nil)
+          (first nil)
+          (second nil))
+      (vui-defcomponent reentrant-bad-1 (go)
+        :render (if go (error "Bad 1") (vui-text "bad 1")))
+      (vui-defcomponent reentrant-bad-2 (go)
+        :render (if go (error "Bad 2") (vui-text "bad 2")))
+      (vui-defcomponent reentrant-two-asker ()
+        :on-mount (progn
+                    (vui-update-props second '(:go t))
+                    (vui-update-props first '(:go t)))
+        :render (vui-text "asker"))
+      (spy-on 'display-warning)
+      (unwind-protect
+          (progn
+            (setq first (save-window-excursion
+                          (vui-mount (vui-component 'reentrant-bad-1)
+                                     "*test-reentrant-bad-1*"))
+                  second (save-window-excursion
+                           (vui-mount (vui-component 'reentrant-bad-2)
+                                      "*test-reentrant-bad-2*")))
+            (expect (condition-case err
+                        (save-window-excursion
+                            (vui-mount (vui-component 'reentrant-two-asker)
+                                       "*test-reentrant-two-asker*"))
+                      (error (cadr err)))
+                    :to-equal "Bad 1")
+            (expect (spy-calls-count 'display-warning) :to-equal 1)
+            (expect (nth 1 (spy-calls-args-for 'display-warning 0))
+                    :to-match "Bad 2"))
+        (dolist (buffer '("*test-reentrant-bad-1*" "*test-reentrant-bad-2*"
+                          "*test-reentrant-two-asker*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "gives the caller the error of the render when an asked re-render fails too"
+    (let ((vui-render-delay nil)
+          (bad nil))
+      (vui-defcomponent reentrant-bad-asked (go)
+        :render (if go (error "Asked") (vui-text "bad")))
+      (vui-defcomponent reentrant-failing-asker ()
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-update-props bad '(:go t))
+                    (error "Own"))
+                  (vui-text "asker")))
+      (spy-on 'display-warning)
+      (unwind-protect
+          (progn
+            (setq bad (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-bad-asked)
+                                   "*test-reentrant-bad-asked*")))
+            (expect (condition-case err
+                        (save-window-excursion
+                            (vui-mount (vui-component 'reentrant-failing-asker)
+                                       "*test-reentrant-failing-asker*"))
+                      (error (cadr err)))
+                    :to-equal "Own")
+            (expect (spy-calls-count 'display-warning) :to-equal 1)
+            (expect (nth 1 (spy-calls-args-for 'display-warning 0))
+                    :to-match "Asked"))
+        (dolist (buffer '("*test-reentrant-bad-asked*"
+                          "*test-reentrant-failing-asker*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "leaves the re-renders a failing mount asked for to the render around it"
+    (let ((vui-render-delay nil)
+          (failed nil))
+      (vui-defcomponent reentrant-inner-failing ()
+        :state ((n 0))
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-set-state :n 1)
+                    (unless failed
+                      (setq failed t)
+                      (error "Inner")))
+                  (vui-text (format "inner n=%d" n))))
+      (vui-defcomponent reentrant-outer-mounting ()
+        ;; With the default handler, the error of the hook is a warning
+        ;; and the render of this tree goes on
+        :on-mount (save-window-excursion
+                    (vui-mount (vui-component 'reentrant-inner-failing)
+                               "*test-reentrant-inner*"))
+        :render (vui-text "outer"))
+      (spy-on 'display-warning)
+      (unwind-protect
+          (progn
+            (save-window-excursion
+                (vui-mount (vui-component 'reentrant-outer-mounting)
+                           "*test-reentrant-outer*"))
+            (expect (with-current-buffer "*test-reentrant-inner*"
+                      (buffer-string))
+                    :to-equal "inner n=1")
+            (expect vui--queued-rerenders :to-be nil))
+        (dolist (buffer '("*test-reentrant-inner*" "*test-reentrant-outer*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "runs a failing re-render once when it asks for itself again"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (renders 0)
+          (fail nil))
+      (vui-defcomponent reentrant-always-failing (v)
+        :state ((n 0))
+        ;; Once it fails, it asks for a render and fails on every one
+        :on-update (when fail
+                     (vui-set-state :n (1+ n))
+                     (error "Again"))
+        :render (progn
+                  (cl-incf renders)
+                  (vui-text (format "%s-%s" v n))))
+      (let ((instance (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-always-failing
+                                                  :v 1)
+                                   "*test-reentrant-always*"))))
+        (spy-on 'display-warning)
+        (unwind-protect
+            (progn
+              (setq renders 0
+                    fail t)
+              (expect (vui-update-props instance '(:v 2)) :to-throw 'error)
+              ;; The render that failed, and the one it asked for
+              (expect renders :to-equal 2)
+              (expect (spy-calls-count 'display-warning) :to-equal 1)
+              (expect vui--queued-rerenders :to-be nil))
+          (kill-buffer "*test-reentrant-always*")))))
+
+  (it "stops the asked re-renders of a failed render that never settle"
+    (let ((vui-render-delay nil)
+          (loop nil))
+      (vui-defcomponent reentrant-never-settles (v)
+        :state ((n 0))
+        :on-update (vui-set-state :n (1+ n))
+        :render (vui-text (format "%s-%s" v n)))
+      (vui-defcomponent reentrant-failing-starter ()
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-update-props loop '(:v 2))
+                    (error "Starter"))
+                  (vui-text "starter")))
+      (spy-on 'display-warning)
+      (unwind-protect
+          (progn
+            (setq loop (save-window-excursion
+                         (vui-mount (vui-component 'reentrant-never-settles
+                                                   :v 1)
+                                    "*test-reentrant-never*")))
+            (expect (save-window-excursion
+                      (vui-mount (vui-component 'reentrant-failing-starter)
+                                 "*test-reentrant-starter*"))
+                    :to-throw 'error)
+            (expect (spy-calls-count 'display-warning) :to-equal 1)
+            (expect (nth 1 (spy-calls-args-for 'display-warning 0))
+                    :to-match "did not settle")
+            (expect vui--queued-rerenders :to-be nil))
+        (dolist (buffer '("*test-reentrant-never*" "*test-reentrant-starter*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "shows a signal that is not an error of an asked re-render as a warning"
+    ;; A signal symbol of its own, not an `error'
+    (put 'vui-state-test-odd 'error-conditions '(vui-state-test-odd))
+    (put 'vui-state-test-odd 'error-message "Odd")
+    (let ((vui-render-delay nil)
+          (odd nil))
+      (vui-defcomponent reentrant-odd (go)
+        :render (if go (signal 'vui-state-test-odd nil) (vui-text "odd")))
+      (vui-defcomponent reentrant-odd-asker ()
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-update-props odd '(:go t))
+                    (error "Own"))
+                  (vui-text "asker")))
+      (spy-on 'display-warning)
+      (unwind-protect
+          (progn
+            (setq odd (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-odd)
+                                   "*test-reentrant-odd*")))
+            (expect (condition-case err
+                        (save-window-excursion
+                          (vui-mount (vui-component 'reentrant-odd-asker)
+                                     "*test-reentrant-odd-asker*"))
+                      (error (cadr err)))
+                    :to-equal "Own")
+            (expect (spy-calls-count 'display-warning) :to-equal 1))
+        (dolist (buffer '("*test-reentrant-odd*" "*test-reentrant-odd-asker*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "stops the asked re-renders on a quit"
+    (let ((vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent reentrant-quitting (v)
+        :state ((n 0))
+        ;; Never settles, and quits on its tenth render
+        :on-update (progn
+                     (vui-set-state :n (1+ n))
+                     (when (= n 10)
+                       (signal 'quit nil)))
+        :render (progn
+                  (cl-incf renders)
+                  (vui-text (format "%s-%s" v n))))
+      (let ((instance (save-window-excursion
+                        (vui-mount (vui-component 'reentrant-quitting :v 1)
+                                   "*test-reentrant-quitting*"))))
+        (unwind-protect
+            (progn
+              (setq renders 0)
+              (expect (condition-case nil
+                          (vui-update-props instance '(:v 2))
+                        (quit 'quit))
+                      :to-be 'quit)
+              (expect renders :to-equal 11)
+              (expect vui--queued-rerenders :to-be nil))
+          (kill-buffer "*test-reentrant-quitting*")))))
+
   (it "signals an error instead of looping when state updates never settle"
     (let ((vui-render-delay nil))
       (vui-defcomponent reentrant-runaway (v)

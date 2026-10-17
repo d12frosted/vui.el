@@ -1252,5 +1252,43 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
               (expect vui-sr-owned--renders :to-equal (1+ renders))))
         (kill-buffer "*vui-sr-owned*")))))
 
+(defvar vui-stream-rows-test--fail nil
+  "Non-nil makes `vui-stream-rows-test-failing-row' fail on its mount.")
+
+(vui-defcomponent vui-stream-rows-test-failing-row ()
+  "A row that asks for a render on its first render, then fails, once."
+  :state ((n 0))
+  :on-mount (progn
+              (vui-set-state :n 1)
+              (when vui-stream-rows-test--fail
+                (setq vui-stream-rows-test--fail nil)
+                (error "Row")))
+  :render (vui-text (format "row n=%d" n)))
+
+(vui-defcomponent vui-stream-rows-test-failing-root (log)
+  "A tree with LOG."
+  :render (vui-vstack (vui-stream log)))
+
+(describe "a stream row whose first render signals"
+  (it "runs the re-renders it asked for before the error"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-failing-root :log log)
+                   "*test-failing-row*"))
+      (unwind-protect
+          (progn
+            (setq vui-stream-rows-test--fail t)
+            (expect (vui-stream-append
+                     log (vui-component 'vui-stream-rows-test-failing-row))
+                    :to-throw 'error)
+            (expect (with-current-buffer "*test-failing-row*" (buffer-string))
+                    :to-equal "l0\nrow n=1")
+            (expect vui--queued-rerenders :to-be nil))
+        (kill-buffer "*test-failing-row*")))))
+
 (provide 'vui-stream-rows-test)
+
 ;;; vui-stream-rows-test.el ends here

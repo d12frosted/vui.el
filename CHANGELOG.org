@@ -28,6 +28,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A render that signals still runs the re-renders it asked for before
+  the error, such as one from a =vui-set-state= in an effect with
+  =vui-render-delay= set to nil. They used to wait for the next render
+  of any tree, at any time, and then changed the text of a buffer
+  nothing had touched. The same goes for the re-renders queued after
+  one that signals, and for a stream row whose first render signals.
+  They now run while the error propagates. When one of them signals
+  too, its error is shown as a warning, so the caller gets the first
+  error; a tree that fails there does not run again, and the renders
+  stop at the usual limit of 100. A quit (=C-g=) drops them instead.
+
 - An error boundary that catches an error shows only its fallback, as
   the renders after it do. The text its children wrote before the error
   stayed in front of the fallback until the next render, with the
