@@ -42,6 +42,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   stream. The =:on-unmount= of a component removed while the tree is
   written counts as such a hook too.
 
+- =vui-stream-open= of text on an empty stream returns a node on that
+  text, also when a hook in the render that this first item asks for
+  appends to the same stream. The node took the item the hook
+  appended, so =vui-stream-update= of the node rewrote that item.
+
 - =vui-stream-open= of a component on an empty stream returns a node on
   that component's item, also when the component's hooks append to the
   same stream. The node took the newest item (one the hooks appended),
