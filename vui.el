@@ -8507,7 +8507,13 @@ Creates the buffer if it doesn't exist, switches to it."
   "Mount a component as root and render to BUFFER-NAME.
 COMPONENT-VNODE should be created with `vui-component'.
 BUFFER-NAME defaults to \"*vui*\".
-Returns the root instance."
+Returns the root instance.
+
+Called from a hook or an effect of a render in progress, the mount
+renders the tree once, and the re-renders the tree asks for while it
+mounts (state set from its own hooks, say) wait for that render to be
+done, like every re-render asked for during it.  Right after this
+returns, the tree may not show those changes yet."
   (let* ((buf-name (or buffer-name "*vui*"))
          (buf (get-buffer-create buf-name))
          (instance (vui--create-instance component-vnode nil))
@@ -8562,7 +8568,11 @@ Returns the root instance."
         ;; `vui-rerender-on-resize-default')
         (when vui-rerender-on-resize-default
           (vui-rerender-on-resize))
-        (let ((vui--root-instance instance))
+        (let ((vui--root-instance instance)
+              ;; A mount from a hook or an effect runs inside the render
+              ;; of another tree, which has to go on queueing requests
+              ;; after this one is done
+              (outer-rendering vui--rendering-p))
           ;; Queue re-render requests (sync resolve, vui-set-state with
           ;; nil delay) until commit and effects are done
           (setq vui--rendering-p t)
@@ -8576,9 +8586,11 @@ Returns the root instance."
                 (vui--setup-field-placeholders)
                 ;; Run effects after initial render
                 (vui--run-pending-effects))
-            (setq vui--rendering-p nil))
-          ;; Run any re-renders requested during render/effects
-          (vui--flush-queued-rerenders))
+            (setq vui--rendering-p outer-rendering))
+          ;; Run any re-renders requested during render/effects.  The
+          ;; render in progress, if any, runs them when it is done.
+          (unless outer-rendering
+            (vui--flush-queued-rerenders)))
         (goto-char (point-min)))
       ;; Outside the `buffer-undo-list' binding: leave the list empty, as
       ;; `widget-setup' did before the render stopped recording.

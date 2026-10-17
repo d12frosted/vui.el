@@ -752,5 +752,66 @@ root."
           (kill-buffer "*test-other*")
           (kill-buffer "*test-first*"))))))
 
+(vui-defcomponent lifecycle-side ()
+  "Shows a count, which its `:on-mount' adds one to."
+  :state ((n 0))
+  :on-mount (vui-set-state :n (1+ n))
+  :render (vui-text (format "side n=%d" n)))
+
+(defun vui-lifecycle-test--mount-and-count (count n)
+  "Mount *test-side*, and set the count of the component to N + 1.
+Before the mount when COUNT is `before', after it when COUNT is `after'."
+  (when (eq count 'before)
+    (vui-set-state :n (1+ n)))
+  (save-window-excursion
+    (vui-mount (vui-component 'lifecycle-side) "*test-side*"))
+  (when (eq count 'after)
+    (vui-set-state :n (1+ n)))
+  nil)
+
+(vui-defcomponent lifecycle-mounting-child (label count from)
+  "Shows LABEL and a count.  Mounts *test-side* from its `:on-mount' when
+FROM is `hook', or from an effect when FROM is `effect', and adds one to
+the count as COUNT says (see `vui-lifecycle-test--mount-and-count')."
+  :state ((n 0))
+  :on-mount (when (eq from 'hook)
+              (vui-lifecycle-test--mount-and-count count n))
+  :render (progn
+            (vui-use-effect ()
+              (when (eq from 'effect)
+                (vui-lifecycle-test--mount-and-count count n)))
+            (vui-text (format "%s n=%d" label n))))
+
+(vui-defcomponent lifecycle-mounting-root (count from)
+  :render (vui-vstack (vui-text "top")
+                      (vui-component 'lifecycle-mounting-child
+                                     :label "a" :count count :from from)
+                      (vui-text "bottom")))
+
+(describe "a tree mounted from inside a render"
+  ;; The render that ran the hook or the effect is still in progress:
+  ;; what they ask for, before the mount or after it, and what the new
+  ;; tree asks for, wait for that render, as they would without the
+  ;; mount
+  (dolist (from '(hook effect))
+    (dolist (count '(before after))
+      (it (format "lets the render in progress finish first (%s, state set %s the mount)"
+                  from count)
+        (let ((vui-render-delay nil))
+          (unwind-protect
+              (progn
+                (save-window-excursion
+                  (vui-mount (vui-component 'lifecycle-mounting-root
+                                            :count count :from from)
+                             "*test-mounting*"))
+                (with-current-buffer "*test-mounting*"
+                  (expect (buffer-string) :to-equal "top\na n=1\nbottom"))
+                (with-current-buffer "*test-side*"
+                  (expect (buffer-string) :to-equal "side n=1")))
+            (when (get-buffer "*test-mounting*")
+              (kill-buffer "*test-mounting*"))
+            (when (get-buffer "*test-side*")
+              (kill-buffer "*test-side*"))))))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-mount= called from a hook or an effect of a render no longer
+  runs re-renders in the middle of that render. With
+  =vui-render-delay= nil, re-renders asked for during a render wait
+  until it is done, but the mount ran the ones asked for so far and let
+  the later ones run right away. A hook that set state and mounted a
+  buffer left broken text in its own buffer, and one that set state
+  after the mount rendered its tree again and again until Emacs hit
+  =max-lisp-eval-depth=. The re-renders the mounted tree asks for wait
+  for that render too.
+
 - A tree that is being unmounted (=vui-unmount=, a new =vui-mount= or
   =vui-render= into its buffer, or killing the buffer) no longer renders
   again when an =:on-unmount= hook sets state in it and the change
