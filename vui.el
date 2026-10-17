@@ -6976,6 +6976,20 @@ fragment, has no separator before it)."
                           (if row-last (<= os e) (< os e))))))
              pending)))
 
+(defun vui--stream-written-p (handle)
+  "Non-nil when the text of HANDLE is in its live buffer.
+Both markers of its region have to point there.  While a render writes
+the stream again (see `vui--stream-render'), its start points nowhere
+until the stream is written, and its end can already be the end of a
+row that rendered again.  An append or an update of the last item then
+asks for another render, which writes the stream again with it when
+the current render is done, as for a stream that is not rendered yet."
+  (let ((buf (vui-stream-handle-buffer handle))
+        (s (vui-stream-handle-region-start handle))
+        (e (vui-stream-handle-region-end handle)))
+    (and buf (buffer-live-p buf)
+         s (marker-position s) e (marker-position e))))
+
 (defun vui--stream-region-empty-p (handle)
   "Non-nil when HANDLE's region is live and zero-width."
   (let ((s (vui-stream-handle-region-start handle))
@@ -7056,7 +7070,7 @@ last item of the stream, before anything is written."
      ;; can be writing the stream right now, from its items as they were
      ;; before this one (a hook of a component in the tree appends): it
      ;; writes the stream again when it is done.
-     ((not (and buf (buffer-live-p buf) end (marker-position end)))
+     ((not (vui--stream-written-p handle))
       (when (and buf (buffer-live-p buf) vui--rendering-p)
         (vui--stream-request-rebuild handle)))
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
@@ -7103,7 +7117,7 @@ last item of the stream, before anything is written."
      ;; plain child component, not a scoped row - the documented fallback).
      ;; A stream that holds a row has its place in the buffer, also when
      ;; that row renders nothing, so the new row goes there.
-     ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
+     ((or (not (vui--stream-written-p handle))
           (not (or (vui--stream-in-place-p handle)
                    (cl-some #'vui--stream-row-p
                             (vui-stream-handle-items-rev handle)))))
@@ -7268,8 +7282,12 @@ keeping its state."
                 (end (vui-stream-handle-region-end handle)))
             (setcar (vui-stream-handle-items-rev handle) vnode)
             (cond
-             ((not (and buf (buffer-live-p buf) end (marker-position end)))
-              nil)
+             ;; Not in the buffer: the new last item shows when the stream
+             ;; is rendered.  A render in progress can be writing it now,
+             ;; from the item as it was (see `vui--stream-append-content').
+             ((not (vui--stream-written-p handle))
+              (when (and buf (buffer-live-p buf) vui--rendering-p)
+                (vui--stream-request-rebuild handle)))
              ;; Nothing marks where the last item starts: it is static,
              ;; and `vui-stream-remove' took the item after it.  Write the
              ;; stream again from its items, which marks the place for the

@@ -28,6 +28,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An append to a =vui-stream= from a hook of its last row, or of a
+  component in that row, while a render writes the stream again (the
+  root renders again) no longer signals =wrong-type-argument=. Appended
+  text was missing from the buffer until the next render of the tree,
+  and an appended component was lost. The stream is now written again
+  right after that render, with the new item, as for an append to a
+  stream that is not rendered yet. As there, an appended component is a
+  plain child component, not a row. A =vui-stream-update-last= of a
+  last line from such a hook works the same way: the new line used to
+  show only on the next render.
+
 - A render that signals still runs the re-renders it asked for before
   the error, such as one from a =vui-set-state= in an effect with
   =vui-render-delay= set to nil. They used to wait for the next render

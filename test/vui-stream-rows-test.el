@@ -1289,6 +1289,127 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect vui--queued-rerenders :to-be nil))
         (kill-buffer "*test-failing-row*")))))
 
+(defvar vui-stream-rows-test--rebuild-hooks nil
+  "Alist of a place and the function its `:on-update' calls once.
+The places are the label of a `vui-stream-rows-test-hooked-row', `kid'
+for the child of a row and `footer' for the line after the panel.")
+
+(defun vui-stream-rows-test--run-hook (place)
+  "Call the hook of PLACE once, if any."
+  (when-let* ((cell (assoc place vui-stream-rows-test--rebuild-hooks)))
+    (setq vui-stream-rows-test--rebuild-hooks
+          (delq cell vui-stream-rows-test--rebuild-hooks))
+    (funcall (cdr cell))))
+
+(vui-defcomponent vui-stream-rows-test-hooked-kid ()
+  "A child of a row; its `:on-update' calls the hook of `kid'."
+  :on-update (vui-stream-rows-test--run-hook 'kid)
+  :render (vui-text "(c)"))
+
+(vui-defcomponent vui-stream-rows-test-hooked-row (label kid)
+  "LABEL in brackets, and a child when KID; its `:on-update' calls the
+hook of LABEL."
+  :on-update (vui-stream-rows-test--run-hook label)
+  :render (vui-fragment
+           (vui-text (format "[%s]" label))
+           (when kid (vui-component 'vui-stream-rows-test-hooked-kid))))
+
+(vui-defcomponent vui-stream-rows-test-hooked-footer ()
+  "The line after the panel; its `:on-update' calls the hook of `footer'."
+  :on-update (vui-stream-rows-test--run-hook 'footer)
+  :render (vui-text "footer"))
+
+(vui-defcomponent vui-stream-rows-test-panel (stream)
+  "A line, then STREAM."
+  :render (vui-vstack (vui-text "panel") (vui-stream stream)))
+
+(vui-defcomponent vui-stream-rows-test-rebuild-root (log panel)
+  "LOG, then a panel with PANEL, then a footer."
+  :render (vui-vstack (vui-text "x")
+                      (vui-stream log)
+                      (vui-component 'vui-stream-rows-test-panel :stream panel)
+                      (vui-component 'vui-stream-rows-test-hooked-footer)))
+
+(defvar vui-stream-rows-test--row nil
+  "The row a case of the specs below set up.")
+
+(describe "a stream edited from a hook while it is written again"
+  ;; A render of the root writes the stream again, and renders its rows
+  ;; again in their place: their hooks run while the stream is written.
+  ;; Each case: its name, the items after "p0", the place of the hook,
+  ;; the edit, and the text of the panel's stream after the render.
+  (pcase-dolist
+      (`(,name ,items ,place ,edit ,expected)
+       `(("an append of text from the last row" (row) "r"
+          ,(lambda (panel) (vui-stream-append panel (vui-text "t")))
+          "p0\n[r]\nt")
+         ("an append of a component from the last row" (row) "r"
+          ,(lambda (panel)
+             (vui-stream-append
+              panel (vui-component 'vui-stream-rows-test-hooked-row :label "t")))
+          "p0\n[r]\n[t]")
+         ("an open node from the last row" (row) "r"
+          ,(lambda (panel) (vui-stream-open panel (vui-text "t")))
+          "p0\n[r]\nt")
+         ("an append from a child of the last row" (row-with-kid) kid
+          ,(lambda (panel) (vui-stream-append panel (vui-text "t")))
+          "p0\n[r](c)\nt")
+         ("an update of the last row from the last row" (row) "r"
+          ,(lambda (panel)
+             (vui-stream-update-last
+              panel (vui-component 'vui-stream-rows-test-hooked-row :label "t")))
+          "p0\n[t]")
+         ("an update of a last line from a row above it" (row "c") "r"
+          ,(lambda (panel) (vui-stream-update-last panel (vui-text "u")))
+          "p0\n[r]\nu")
+         ("an append after the last row is unmounted, from the footer" (row)
+          footer
+          ,(lambda (panel)
+             (vui-unmount vui-stream-rows-test--row)
+             (vui-stream-append panel (vui-text "t")))
+          "p0\nt")))
+    (it (format "keeps %s" name)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'signal)
+            (log (vui-make-stream))
+            (panel (vui-make-stream)))
+        (vui-stream-append log (vui-text "l0"))
+        (save-window-excursion
+          (vui-mount (vui-component 'vui-stream-rows-test-rebuild-root
+                                    :log log :panel panel)
+                     "*test-rebuild-edit*"))
+        (unwind-protect
+            (with-current-buffer "*test-rebuild-edit*"
+              (vui-rerender (vui-get-instance))
+              (vui-stream-append panel (vui-text "p0"))
+              (dolist (item items)
+                (pcase item
+                  ('row
+                   (vui-stream-append
+                    panel (vui-component 'vui-stream-rows-test-hooked-row
+                                         :label "r"))
+                   (setq vui-stream-rows-test--row
+                         (car (vui-stream-handle-items-rev panel))))
+                  ('row-with-kid
+                   (vui-stream-append
+                    panel (vui-component 'vui-stream-rows-test-hooked-row
+                                         :label "r" :kid t))
+                   (setq vui-stream-rows-test--row
+                         (car (vui-stream-handle-items-rev panel))))
+                  (_ (vui-stream-append panel (vui-text item)))))
+              (let ((vui-stream-rows-test--rebuild-hooks
+                     (list (cons place (lambda () (funcall edit panel))))))
+                (vui-rerender (vui-get-instance)))
+              (expect (buffer-string)
+                      :to-equal (format "x\nl0\npanel\n%s\nfooter" expected))
+              ;; The same as a render of the tree from scratch
+              (let ((text (buffer-string))
+                    (root (vui-get-instance)))
+                (setf (vui-instance-render-record root) nil)
+                (vui-rerender root)
+                (expect (buffer-string) :to-equal text)))
+          (kill-buffer "*test-rebuild-edit*"))))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here
