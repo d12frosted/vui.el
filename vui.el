@@ -8531,7 +8531,15 @@ is written."
 Clears the buffer before rendering.  A component tree previously
 mounted in BUFFER is unmounted first: erasing destroys its output,
 and a live instance left behind would re-render the old UI over this
-one from a timer, an async callback, or a window resize."
+one from a timer, an async callback, or a window resize.
+
+The components in VNODE render once.  Their `:on-mount' runs, but
+nothing else of their lifecycle does: a state change does not render
+them again, their effects do not run, and nothing unmounts them, so a
+cleanup that `:on-mount' returns is never called.  The tree is its own
+also when this is called from a hook or an effect of another tree: it
+does not see the context values of that tree, so put a provider in
+VNODE to give it one.  Use `vui-mount' for a tree that lives."
   (with-current-buffer (or buffer (current-buffer))
     ;; TODO: Implement cursor preservation across re-renders.
     ;; Should track position relative to logical elements (keys/components),
@@ -8539,7 +8547,27 @@ one from a timer, an async callback, or a window resize."
     (let ((inhibit-read-only t)
           ;; The paths of this tree start here, also when it is rendered
           ;; from a hook or an effect of a tree that is being rendered
-          (vui--render-path nil))
+          (vui--render-path nil)
+          ;; The tree is not part of the one this is called from, as in
+          ;; a measure pass (see `vui--measure-render-to-string'): from
+          ;; a hook or an effect of a tree, its components would
+          ;; otherwise reconcile against the instance of that hook or
+          ;; effect, take over its children, and render that tree on a
+          ;; state change.  Unlike a measure pass, it does not see the
+          ;; context values of that tree either.
+          (vui--current-instance nil)
+          (vui--root-instance nil)
+          (vui--new-children nil)
+          (vui--child-index 0)
+          (vui--reconcile-lookup nil)
+          (vui--context-stack nil)
+          (vui--measure-reconcile nil)
+          (vui--measure-live-parent nil)
+          ;; The effects of this tree are dropped, as nothing would clean
+          ;; up after them.  Without this binding they would wait in the
+          ;; global list, or, called from a hook of a tree being
+          ;; rendered, run with the effects of that tree, in its buffer.
+          (vui--pending-effects nil))
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))

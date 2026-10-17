@@ -358,6 +358,240 @@
             (expect (vui-field-value 'second-key) :to-equal "second"))
         (kill-buffer "*test-fv4*")))))
 
+(defvar vui-test--render-effects nil
+  "What the effects of the components below saw, newest first.")
+
+(defvar vui-test--render-host-renders 0
+  "How many times `vui-test-render-from-hook' rendered.")
+
+(vui-defcomponent vui-test-render-effect (tag)
+  "TAG as text, with an effect that notes TAG and the buffer it runs in,
+and a button that counts its clicks."
+  :state ((clicks 0))
+  :render (progn
+            (vui-use-effect ()
+              (push (list tag (buffer-name)) vui-test--render-effects))
+            (vui-hstack (vui-text (format "%s %d" tag clicks))
+                        (vui-button "click"
+                          :on-click (lambda () (vui-set-state :clicks #'1+))))))
+
+(vui-defcomponent vui-test-render-from-hook (buffer)
+  "Renders a `vui-test-render-effect' into BUFFER from its `:on-mount'."
+  :on-mount (vui-render (vui-component 'vui-test-render-effect :tag 'side)
+                        buffer)
+  :render (progn
+            (cl-incf vui-test--render-host-renders)
+            (vui-use-effect ()
+              (push (list 'host (buffer-name)) vui-test--render-effects))
+            (vui-text "host")))
+
+(vui-defcomponent vui-test-render-from-effect (buffer)
+  "A `vui-test-render-effect' of its own, and an effect that renders
+another one into BUFFER."
+  :render (progn
+            (vui-use-effect ()
+              (vui-render (vui-component 'vui-test-render-effect :tag 'side)
+                          buffer))
+            (vui-vstack (vui-component 'vui-test-render-effect :tag 'own))))
+
+(vui-defcontext vui-test-render-theme 'light
+  "A context for the `vui-render' specs.")
+
+(vui-defcomponent vui-test-render-theme-reader ()
+  "The value of `vui-test-render-theme' as text."
+  :render (vui-text (format "theme %s" (vui-use-context
+                                        vui-test-render-theme-context))))
+
+(vui-defcomponent vui-test-render-under-provider (side inner)
+  "Renders a theme reader into SIDE from its `:on-mount', under a
+provider, and with one of its own around the reader when INNER."
+  :on-mount (vui-render (if inner
+                            (vui-test-render-theme-provider 'inner
+                              (vui-component 'vui-test-render-theme-reader))
+                          (vui-component 'vui-test-render-theme-reader))
+                        side)
+  :render (vui-text "host"))
+
+(vui-defcomponent vui-test-render-theme-root (side inner)
+  "A `dark' provider around a `vui-test-render-under-provider'."
+  :render (vui-test-render-theme-provider 'dark
+            (vui-component 'vui-test-render-under-provider
+                           :side side :inner inner)))
+
+(vui-defcomponent vui-test-render-boom ()
+  "Fails to render."
+  :render (error "Boom"))
+
+(vui-defcomponent vui-test-render-boundary-host (side)
+  "An error boundary around text; its `:on-mount' renders a boundary at
+the same place around a failing component into SIDE."
+  :on-mount (vui-render (vui-error-boundary
+                         :fallback (lambda (_error) (vui-text "side fallback"))
+                         :children (list (vui-component 'vui-test-render-boom)))
+                        side)
+  :render (vui-error-boundary
+           :fallback (lambda (_error) (vui-text "host fallback"))
+           :children (list (vui-text "host"))))
+
+(vui-defcomponent vui-test-render-sibling ()
+  "Its state as text."
+  :state ((n 0))
+  :render (vui-text (format "sibling %d" n)))
+
+(defvar vui-test--render-side-texts nil
+  "The text of the buffer `vui-test-render-in-render' renders into,
+after each of its renders, newest first.")
+
+(vui-defcomponent vui-test-render-in-render (side)
+  "Renders a `vui-test-render-sibling' into SIDE from its render."
+  :render (progn
+            (vui-render (vui-component 'vui-test-render-sibling) side)
+            (push (with-current-buffer side (buffer-string))
+                  vui-test--render-side-texts)
+            (vui-text "caller")))
+
+(vui-defcomponent vui-test-render-measured (side)
+  "A flex row, which measures its children: a `vui-test-render-sibling'
+and a `vui-test-render-in-render'."
+  :render (vui-flex (vui-component 'vui-test-render-sibling)
+                    (vui-component 'vui-test-render-in-render :side side)))
+
+(describe "vui-render of components"
+  ;; `vui-render' does not mount what it renders: the tree is its own,
+  ;; and nothing would clean up after an effect
+  (before-each (setq vui-test--render-effects nil
+                     vui-test--render-host-renders 0))
+
+  (it "leaves no effect and no child waiting for another render"
+    (let ((vui--pending-effects nil)
+          (vui--new-children nil))
+      (with-temp-buffer
+        (vui-render (vui-component 'vui-test-render-effect :tag 'top))
+        (expect (buffer-string) :to-equal "top 0 [click]")
+        (expect (length vui--pending-effects) :to-equal 0)
+        (expect (length vui--new-children) :to-equal 0)
+        (expect vui-test--render-effects :to-be nil))))
+
+  (it "does not run its effects with those of the render it is called from"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*")))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-test-render-from-hook :buffer side)
+                         "*test-render-host*"))
+            (expect (with-current-buffer side (buffer-string))
+                    :to-equal "side 0 [click]")
+            (expect vui-test--render-effects
+                    :to-equal '((host "*test-render-host*"))))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*")))))
+
+  (it "does not render the tree it is called from on a click"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*")))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-test-render-from-hook :buffer side)
+                         "*test-render-host*"))
+            (expect vui-test--render-host-renders :to-equal 1)
+            (with-current-buffer side
+              (goto-char (point-min))
+              (search-forward "[click")
+              (vui-test--click-button-at (match-beginning 0)))
+            (expect vui-test--render-host-renders :to-equal 1))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*")))))
+
+  (it "leaves the children of the tree it is called from as they are"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*"))
+          ;; As in a fresh Emacs: the index the next child of a render
+          ;; would take, when nothing binds it
+          (vui--child-index 0)
+          (vui--new-children nil))
+      (unwind-protect
+          (let* ((root (save-window-excursion
+                         (vui-mount (vui-component 'vui-test-render-from-effect
+                                                   :buffer side)
+                                    "*test-render-host*")))
+                 (child (car (vui-instance-children root))))
+            (expect (with-current-buffer side (buffer-string))
+                    :to-equal "side 0 [click]")
+            (expect (plist-get (vui-instance-props child) :tag) :to-be 'own)
+            (expect (vui-instance-children root) :to-equal (list child))
+            (vui-rerender root)
+            (expect (with-current-buffer "*test-render-host*" (buffer-string))
+                    :to-equal "own 0 [click]"))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*")))))
+
+  (it "does not see the context values of the tree it is called from"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*")))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-test-render-theme-root :side side)
+                         "*test-render-host*"))
+            (expect (with-current-buffer side (buffer-string))
+                    :to-equal "theme light")
+            ;; A provider in the tree it renders
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-test-render-theme-root
+                                        :side side :inner t)
+                         "*test-render-host*"))
+            (expect (with-current-buffer side (buffer-string))
+                    :to-equal "theme inner"))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*")))))
+
+  (it "keeps the errors its error boundaries catch out of the tree it is called from"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*")))
+      (unwind-protect
+          (let ((root (save-window-excursion
+                        (vui-mount (vui-component 'vui-test-render-boundary-host
+                                                  :side side)
+                                   "*test-render-host*"))))
+            (expect (with-current-buffer side (buffer-string))
+                    :to-equal "side fallback")
+            (vui-rerender root)
+            (expect (with-current-buffer "*test-render-host*" (buffer-string))
+                    :to-equal "host"))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*")))))
+
+  (it "renders a tree of its own from a render that a layout measures"
+    (let ((vui-render-delay nil)
+          (side (get-buffer-create "*test-render-side*")))
+      (unwind-protect
+          (let* ((root (save-window-excursion
+                         (vui-mount (vui-component 'vui-test-render-measured
+                                                   :side side)
+                                    "*test-render-host*")))
+                 (sibling (car (vui-instance-children root)))
+                 (caller (cadr (vui-instance-children root))))
+            ;; The flex measures its children as they are live: the
+            ;; sibling in SIDE, at the same place in its own tree as the
+            ;; live one in the flex, must not take its state
+            (setf (vui-instance-state sibling) (list :n 5))
+            (setq vui-test--render-side-texts nil)
+            (vui-rerender root)
+            (expect vui-test--render-side-texts :not :to-equal nil)
+            (expect (seq-uniq vui-test--render-side-texts)
+                    :to-equal '("sibling 0"))
+            (expect (vui-instance-children caller) :to-be nil))
+        (kill-buffer side)
+        (when (get-buffer "*test-render-host*")
+          (kill-buffer "*test-render-host*"))))))
+
 (describe "vui-render re-render on the same buffer"
   ;; Regression: calling the low-level `vui-render' twice on the same
   ;; buffer used to signal (number-or-marker-p nil) during the second

@@ -28,6 +28,22 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-render= renders a tree of its own, also when it is called from
+  a hook or an effect of a mounted tree. Its components reconciled
+  against the component of that hook or effect: they could take over
+  its children, and a state change in them rendered that tree. Their
+  effects are dropped, as nothing would clean up after them. At top
+  level they never ran either, but they stayed in a global list for as
+  long as Emacs ran, and so did the instances. From a hook they ran
+  with the effects of the tree, in its buffer. It no longer sees the
+  context values of the tree either: from a hook it saw the providers
+  above it, from an effect it did not. And an error that an error
+  boundary in it catches no longer goes to that tree, where a boundary
+  at the same place showed its fallback. The docstring of =vui-render=
+  now says what it does with components: their =:on-mount= runs, but a
+  state change does not render them again, their effects do not run,
+  and nothing unmounts them.
+
 - A =vui-box= measures content with more than one line by its widest
   line, as it does with =vui-width-mode= set to =pixel=. In char mode it
   added up the widths of all the lines, so it added too little
