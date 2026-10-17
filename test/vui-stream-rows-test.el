@@ -970,5 +970,95 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
                         :to-equal (concat x "[a]|panel|p0|footer")))
             (vui-sr--kill "*vui-sr-h*")))))))
 
+(defvar vui-sr-above--child-hook nil
+  "When non-nil, `vui-sr-above-row' has a child that calls it on mount.")
+
+(vui-defcomponent vui-sr-above-child (hook)
+  :on-mount (funcall hook)
+  :render (vui-text "(c)"))
+
+(vui-defcomponent vui-sr-above-row (label)
+  :render (vui-fragment
+           (vui-text (format "[%s]" label))
+           (when vui-sr-above--child-hook
+             (vui-component 'vui-sr-above-child
+                            :hook vui-sr-above--child-hook))))
+
+(describe "vui-stream rows: a row whose hooks write above it"
+  ;; The row is in PANEL, and its hooks write into LOG, above it
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "keeps its text when a hook of its first render writes above it (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append
+           panel (vui-component 'vui-sr-hook-row
+                                :label "r"
+                                :hook (lambda ()
+                                        (vui-stream-append log (vui-text "t")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r]|footer"))
+          (vui-update (car (vui-stream-handle-items-rev panel)) '(:label "r2"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r2]|footer"))))
+
+      (it (format "keeps its text when a later render writes above it (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append
+           panel (vui-component 'vui-sr-hook-update-row :label "r"))
+          (let ((row (car (vui-stream-handle-items-rev panel))))
+            (vui-update row
+                        (list :label "r2"
+                              :hook (lambda ()
+                                      (vui-stream-append log (vui-text "t")))))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|t|panel|p0|[r2]|footer"))
+            (vui-update row '(:label "r3"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|t|panel|p0|[r3]|footer")))))
+
+      (it (format "keeps its text when its hook writes above it in a render of the root (%s)"
+                  mode)
+        ;; PANEL is not the first child, so a render of the root writes it
+        ;; again, and its row renders again there
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (let ((once t))
+            (vui-stream-append
+             panel (vui-component 'vui-sr-hook-update-row
+                                  :label "r"
+                                  :hook (lambda ()
+                                          (when once
+                                            (setq once nil)
+                                            (vui-stream-append
+                                             log (vui-text "t")))))))
+          (vui-rerender (vui-get-instance))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r]|footer"))
+          (vui-update (car (vui-stream-handle-items-rev panel)) '(:label "r2"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r2]|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|t|panel|p0|[r2]|footer"))))
+
+      (it (format "keeps its text when a child writes above it in a render of the root (%s)"
+                  mode)
+        ;; The child of the row mounts when the render of the root writes
+        ;; the row again, and its hook runs while the row is being written
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append panel (vui-component 'vui-sr-above-row :label "r"))
+          (let ((vui-sr-above--child-hook
+                 (lambda () (vui-stream-append log (vui-text "t")))))
+            (vui-rerender (vui-get-instance)))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r](c)|footer"))
+          (vui-update (car (vui-stream-handle-items-rev panel)) '(:label "r2"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|t|panel|p0|[r2]|footer")))))))
+
 (provide 'vui-stream-rows-test)
 ;;; vui-stream-rows-test.el ends here

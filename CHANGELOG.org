@@ -28,6 +28,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component mounted inline (=vui-mount-inline=, or a component row of
+  a =vui-stream=) keeps its region in place when its hooks, or the hooks
+  of its children, write or delete text above it, or write text after
+  it once it has text. The region was set from where it was before the
+  render, so text written above it pulled the same amount of host text
+  into the region, and a deletion above it pushed the start of its own
+  text out of it. Text written right after it was deleted with its old
+  text. The next render of the component then deleted that host text,
+  or left part of its old text behind: in a stream, a row whose hook
+  appended to a stream above it deleted the end of the item before it.
+  Text a hook writes right at the start of the region, or right after a
+  region that has no text yet, still goes into the region. An
+  =:on-mount= or =:on-update= that moves point no longer moves where
+  the rest of the tree is written.
+
 - A component row appended to a =vui-stream= keeps its text when its
   first render asks for a render of the tree, for example when its
   =:on-mount= gives another stream its first item. That render ran

@@ -3221,12 +3221,13 @@ stream does (see `vui--stream-relay-empty-transition')."
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
-              (let ((new-end-pos nil))
+              (let ((new-bounds nil))
                 (save-excursion
                   (vui--remove-widget-overlays pos end-pos)
                   (vui--forget-region-fields pos end-pos)
                   (vui--park-streams pos end-pos instance)
-                  (setq new-end-pos
+                  ;; The hooks of the render can move the region
+                  (setq new-bounds
                         (vui--inline-replace-text instance pos end-pos))
                   ;; The header line of a sticky table that is gone, as
                   ;; in `vui--rerender-buffer'
@@ -3235,8 +3236,9 @@ stream does (see `vui--stream-relay-empty-transition')."
                   (vui--setup-field-placeholders))
                 (when saved-point
                   (goto-char (vui--restored-position
-                              saved-point pos new-end-pos)))
-                (vui--restore-window-points window-points pos new-end-pos)
+                              saved-point (car new-bounds) (cdr new-bounds))))
+                (vui--restore-window-points
+                 window-points (car new-bounds) (cdr new-bounds))
                 ;; Run effects after commit
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil))))
@@ -3254,7 +3256,7 @@ stream does (see `vui--stream-relay-empty-transition')."
 
 (defun vui--inline-replace-text (instance pos end-pos)
   "Render inline INSTANCE at POS, in place of its text from POS to END-POS.
-Return the position the new text ends at.
+Return (START . END), where the new text is.
 
 The new text is written in front of the old text, and the old text is
 deleted after that.  Nothing is inserted at the end of the old text
@@ -3272,20 +3274,32 @@ While the render runs, the region is all of it: the new text and the
 old text after it.  A hook that unmounts INSTANCE from inside the
 render removes both.  The region is put around the new text when the
 render is over, also when it signals: it is then around what was
-written before the error."
-  (let ((start (vui-instance-region-start instance))
-        (end (vui-instance-region-end instance))
-        (below (and (= pos end-pos)
-                    (vui--inline-empties-below instance pos)))
-        ;; Advances with the text written at POS, so it is at the end
-        ;; of that text, where the old text starts
-        (new-end (copy-marker pos t))
-        (new-end-pos pos))
-    ;; START stays at POS.  END is after the old text, and advances
-    ;; with the new text when there is no old text to keep it ahead.
+written before the error.
+
+The hooks of the render can write or delete text around the region.
+The start of the new text is read from the start marker, which moves
+with what they write or delete above the region: POS can be stale by
+then.  What they write after a region with text stays after the end
+marker, which does not move with insertions then.  Two places cannot be
+told apart from the new text: the start of the region, where the start
+marker stays before what is written, and the end of a region that was
+empty, where the end marker moves with the new text.  What a hook
+writes there goes into the region."
+  (let* ((start (vui-instance-region-start instance))
+         (end (vui-instance-region-end instance))
+         (empty (= pos end-pos))
+         (below (and empty (vui--inline-empties-below instance pos)))
+         ;; Advances with the text written at POS, so it is at the end
+         ;; of that text, where the old text starts
+         (new-end (copy-marker pos t))
+         (new-end-pos pos))
+    ;; START stays before the text written at POS, and moves with what
+    ;; a hook writes above it.  END is after the old text, and advances
+    ;; with the new text only when there is no old text to keep it
+    ;; ahead: what a hook writes after the old text is not the region's.
     (set-marker start pos)
     (set-marker-insertion-type start nil)
-    (set-marker-insertion-type end t)
+    (set-marker-insertion-type end empty)
     (goto-char pos)
     (unwind-protect
         ;; A field of the host buffer that ends or starts here is not
@@ -3297,11 +3311,12 @@ written before the error."
       ;; Not when a hook unmounted INSTANCE: its region is gone then
       (when (vui--inline-bounds instance)
         (delete-region new-end-pos (max new-end-pos (marker-position end)))
-        (vui--inline-set-bounds instance pos new-end-pos)
+        (vui--inline-set-bounds instance (marker-position start) new-end-pos)
         (dolist (other below)
           (when (vui--inline-bounds other)
             (vui--inline-set-bounds other new-end-pos new-end-pos)))))
-    new-end-pos))
+    (or (vui--inline-bounds instance)
+        (cons new-end-pos new-end-pos))))
 
 (defun vui--rerender-buffer (instance)
   "Re-render INSTANCE as the root of its whole buffer."
@@ -4253,7 +4268,9 @@ record of the contexts its subtree read."
                                      acc))))))))
     ;; Lifecycle hooks (wrapped with error handling).
     ;; Skipped during measure passes: those render throwaway instances
-    ;; into a temp buffer and must not produce side effects.
+    ;; into a temp buffer and must not produce side effects.  The render
+    ;; goes on writing at point after them, so a hook that moves point
+    ;; does not move that.
     (unless vui--measuring-p
       (if first-render-p
           ;; First render: call on-mount
@@ -4261,11 +4278,12 @@ record of the contexts its subtree read."
             (setf (vui-instance-mounted-p instance) t)
             (vui--debug-log 'mount "<%s> mounted" component-name)
             (vui--with-timing 'mount component-name
-              (let ((result (vui--call-lifecycle-hook
-                             "on-mount"
-                             (vui-component-def-on-mount def)
-                             instance
-                             props state)))
+              (let ((result (save-excursion
+                              (vui--call-lifecycle-hook
+                               "on-mount"
+                               (vui-component-def-on-mount def)
+                               instance
+                               props state))))
                 ;; If on-mount returns a function, store it as cleanup
                 (when (functionp result)
                   (setf (vui-instance-mount-cleanup instance) result)))))
@@ -4273,11 +4291,12 @@ record of the contexts its subtree read."
         (when should-render-p
           (vui--debug-log 'update "<%s> updated" component-name)
           (vui--with-timing 'update component-name
-            (vui--call-lifecycle-hook
-             "on-update"
-             (vui-component-def-on-update def)
-             instance
-             props state prev-props prev-state)))))
+            (save-excursion
+              (vui--call-lifecycle-hook
+               "on-update"
+               (vui-component-def-on-update def)
+               instance
+               props state prev-props prev-state))))))
     ;; Store current props/state for next render's on-update.  A
     ;; shallow copy is enough: it owns its own plist cells, so the
     ;; in-place plist-put done by `vui-set-state' cannot reach it,
@@ -6575,6 +6594,9 @@ ROW as their root (see `vui--run-pending-effects')."
         (pos (point)))
     (set-marker start pos)
     (set-marker end pos)
+    ;; Before what the row writes, and moved by what its hooks write
+    ;; above it
+    (set-marker-insertion-type start nil)
     ;; The re-renders of the row start from this path too
     (setf (vui-instance-base-path row) path)
     (let ((vui--root-instance row)
@@ -6582,8 +6604,10 @@ ROW as their root (see `vui--run-pending-effects')."
           (vui--context-stack nil))
       (vui--render-instance row))
     ;; Around what the row wrote, with the insertion types of a region
-    ;; with text or of an empty one (see `vui--inline-set-bounds')
-    (vui--inline-set-bounds row pos (point))))
+    ;; with text or of an empty one (see `vui--inline-set-bounds').  The
+    ;; render stopped writing at point, which its hooks do not move (see
+    ;; `vui--render-instance').
+    (vui--inline-set-bounds row (marker-position start) (point))))
 
 (defun vui--stream-measure-row (row)
   "Render what stream ROW renders when the stream is rebuilt, to measure it.

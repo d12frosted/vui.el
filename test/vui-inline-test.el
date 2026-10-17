@@ -909,5 +909,202 @@ of them between the region markers of its instance."
                     :to-be nil))
         (kill-buffer "*test-inline-full*")))))
 
+(vui-defcomponent inline-hooked (label mount-hook update-hook)
+  "LABEL in brackets.  Its hooks call MOUNT-HOOK and UPDATE-HOOK."
+  :on-mount (when mount-hook (funcall mount-hook))
+  :on-update (when update-hook (funcall update-hook))
+  :render (vui-text (format "[%s]" label)))
+
+(vui-defcomponent inline-hooked-child (hook)
+  "The text (c).  Its `:on-mount' calls HOOK."
+  :on-mount (when hook (funcall hook))
+  :render (vui-text "(c)"))
+
+(vui-defcomponent inline-hooked-parent (label hook)
+  "LABEL in brackets, then a child that calls HOOK when it mounts."
+  :render (vui-fragment
+           (vui-text (format "[%s]" label))
+           (when hook (vui-component 'inline-hooked-child :hook hook))))
+
+(vui-defcomponent inline-hooked-lines (lines update-hook)
+  "LINES as they are.  Its `:on-update' calls UPDATE-HOOK."
+  :on-update (when update-hook (funcall update-hook))
+  :render (vui-text lines))
+
+(vui-defcomponent inline-point-mover ()
+  "The text (c).  Its `:on-mount' moves point to the end of the buffer."
+  :on-mount (goto-char (point-max))
+  :render (vui-text "(c)"))
+
+(vui-defcomponent inline-point-mover-parent (label mover)
+  "LABEL in brackets, a `inline-point-mover' when MOVER, then a tail."
+  :render (vui-vstack
+           (vui-text (format "[%s]" label))
+           (when mover (vui-component 'inline-point-mover))
+           (vui-text "tail")))
+
+(defun vui-inline-test--region-text (instance)
+  "Return the text of the region of INSTANCE."
+  (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+    (buffer-substring-no-properties start end)))
+
+(describe "inline regions whose hooks edit the host buffer"
+  ;; The hooks of a component run inside its render.  What they write or
+  ;; delete outside the region belongs to the host.
+  (it "keeps the host text a hook writes above the region"
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance
+             (vui-mount-inline
+              (vui-component 'inline-hooked
+                             :label "a"
+                             :mount-hook (lambda ()
+                                           (vui-inline-test--host-insert
+                                            (point-min) "note: "))))))
+        (expect (buffer-string) :to-equal "note: host line\n[a]")
+        (expect (vui-inline-test--region-text instance) :to-equal "[a]")
+        (vui-update instance '(:label "b"))
+        (expect (buffer-string) :to-equal "note: host line\n[b]"))))
+
+  (it "keeps the host text a hook writes right after the region"
+    ;; A region with text: what is written right after an empty one,
+    ;; where the render writes too, goes into it
+    (with-temp-buffer
+      (insert "host\nend")
+      (let ((instance
+             (vui-mount-inline (vui-component 'inline-hooked :label "a") 6)))
+        (vui-update instance
+                    (list :label "a"
+                          :update-hook (lambda ()
+                                         (vui-inline-test--host-insert
+                                          (- (point-max) 3) " (tail)"))))
+        (expect (buffer-string) :to-equal "host\n[a] (tail)end")
+        (expect (vui-inline-test--region-text instance) :to-equal "[a]")
+        (vui-update instance '(:label "b"))
+        (expect (buffer-string) :to-equal "host\n[b] (tail)end"))))
+
+  (it "keeps the host text a hook writes above the region when it renders again"
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-hooked :label "a"))))
+        (vui-update instance
+                    (list :label "b"
+                          :update-hook (lambda ()
+                                         (vui-inline-test--host-insert
+                                          (point-min) "note: "))))
+        (expect (buffer-string) :to-equal "note: host line\n[b]")
+        (vui-update instance '(:label "c"))
+        (expect (buffer-string) :to-equal "note: host line\n[c]"))))
+
+  (it "keeps its text when a hook deletes host text above the region"
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-hooked :label "a"))))
+        (vui-update instance
+                    (list :label "b"
+                          :update-hook (lambda ()
+                                         (let ((inhibit-read-only t))
+                                           (delete-region 1 6)))))
+        (expect (buffer-string) :to-equal "line\n[b]")
+        (expect (vui-inline-test--region-text instance) :to-equal "[b]")
+        (vui-update instance '(:label "c"))
+        (expect (buffer-string) :to-equal "line\n[c]"))))
+
+  (it "keeps point in the region when a hook writes above it"
+    ;; Point is on plain text, which no widget finds again: it goes to
+    ;; the start of the region, not to where that was before the hook
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-hooked-lines
+                                      :lines "[a]\n[b]"))))
+        (goto-char (1- (point-max)))
+        (vui-update instance
+                    (list :lines "[a]\n[b]"
+                          :update-hook (lambda ()
+                                         (vui-inline-test--host-insert
+                                          (point-min) "n1\nn2\n"))))
+        (expect (buffer-string) :to-equal "n1\nn2\nhost line\n[a]\n[b]")
+        (expect (point) :to-equal (car (vui--inline-bounds instance))))))
+
+  (it "keeps a window's point in the region when a hook writes above it"
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-hooked-lines
+                                      :lines "[a]\n[b]"))))
+        (vui-inline-test--with-side-window side
+          (set-window-point side (1- (point-max)))
+          (vui-update instance
+                      (list :lines "[a]\n[b]"
+                            :update-hook (lambda ()
+                                           (vui-inline-test--host-insert
+                                            (point-min) "n1\nn2\n"))))
+          (expect (window-point side)
+                  :to-equal (car (vui--inline-bounds instance)))))))
+
+  ;; The hooks of a child run while the tree is still being written
+  (dolist (when-mounted '(first later))
+    (it (format "writes the rest of the tree in place when a child's hook moves point (%s render)"
+                when-mounted)
+      (with-temp-buffer
+        (insert "host\n")
+        (let ((instance
+               (vui-mount-inline
+                (vui-component 'inline-point-mover-parent
+                               :label "a" :mover (eq when-mounted 'first)))))
+          (vui-update instance '(:label "b" :mover t))
+          (expect (buffer-string) :to-equal "host\n[b]\n(c)\ntail")
+          (expect (vui-inline-test--region-text instance)
+                  :to-equal "[b]\n(c)\ntail")
+          (vui-update instance '(:label "c" :mover t))
+          (expect (buffer-string) :to-equal "host\n[c]\n(c)\ntail")))))
+
+  (it "removes what it wrote when a child's hook unmounts it"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-mount-inline
+       (vui-component 'inline-hooked-parent
+                      :label "a"
+                      :hook (lambda () (vui-unmount (vui-inline-instance-at 6))))
+       6)
+      (expect (buffer-string) :to-equal "HEAD\nTAIL")))
+
+  (it "keeps the host text a child writes above the region"
+    (with-temp-buffer
+      (insert "host line\n")
+      (let ((instance
+             (vui-mount-inline
+              (vui-component 'inline-hooked-parent
+                             :label "a"
+                             :hook (lambda ()
+                                     (vui-inline-test--host-insert
+                                      (point-min) "note: "))))))
+        (expect (buffer-string) :to-equal "note: host line\n[a](c)")
+        (expect (vui-inline-test--region-text instance) :to-equal "[a](c)")
+        (vui-update instance (list :label "b"
+                                   :hook (plist-get (vui-instance-props instance)
+                                                    :hook)))
+        (expect (buffer-string) :to-equal "note: host line\n[b](c)"))))
+
+  (it "keeps the host text a child writes right after the region"
+    (with-temp-buffer
+      (insert "host\nend")
+      (let* ((tail (lambda ()
+                     (vui-inline-test--host-insert
+                      (- (point-max) 3) " (tail)")))
+             (instance
+              (vui-mount-inline
+               (vui-component 'inline-hooked-parent :label "a")
+               6)))
+        ;; The child mounts in this render, after the region has text
+        (vui-update instance (list :label "a" :hook tail))
+        (expect (buffer-string) :to-equal "host\n[a](c) (tail)end")
+        (expect (vui-inline-test--region-text instance) :to-equal "[a](c)")
+        (vui-update instance (list :label "b" :hook tail))
+        (expect (buffer-string) :to-equal "host\n[b](c) (tail)end")))))
+
 (provide 'vui-inline-test)
 ;;; vui-inline-test.el ends here

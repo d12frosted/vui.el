@@ -116,6 +116,14 @@ Inline regions are ephemeral UI chrome, not document content:
   region's boundaries stays outside it. A field that starts or ends the
   region is the exception: what you type at that edge of the field goes
   into the field, and the region grows with it.
+- *Edits from hooks*: =:on-mount= and =:on-update= run inside the
+  render. They can write or delete host text outside the region, and
+  the region keeps its place. Text they write at its boundaries stays
+  outside it, with two exceptions: text written right at the start of
+  the region, and text written right after a region that has no text
+  yet (as on its first render), go into the region, and the next
+  render deletes it. Point is back where it was after each of these
+  hooks, so the render goes on where it stopped.
 - *Saving*: if the host buffer visits a file, a mounted form's text
   would be saved like any other text. Dismiss forms before saving, or
   mount them in non-file buffers.
