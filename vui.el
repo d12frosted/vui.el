@@ -7137,7 +7137,8 @@ last item of the stream, before anything is written."
                        (buffer-undo-list t))
                    (save-excursion
                      (goto-char (marker-position end))
-                     (let* ((row-start (+ (point) (length sep)))
+                     (let* ((sep-end nil)
+                            (row-start (+ (point) (length sep)))
                             (id (vui--stream-new-id handle))
                             ;; The row renders on its own from here on,
                             ;; always under its item's path.  It goes below
@@ -7152,19 +7153,33 @@ last item of the stream, before anything is written."
                             (row (let ((vui--flushing-rerenders-p t))
                                    (vui--keeping-fields (point)
                                      (insert sep)
+                                     ;; The hooks of the row can write at
+                                     ;; the end of the stream, before
+                                     ;; the separator
+                                     (setq sep-end (point-marker))
                                      (vui--mount-inline
                                       vnode (point)
                                       (vui--stream-item-path handle id) t)))))
-                       (vui--stream-set-last-start handle row-start buf)
-                       ;; Share the row's region-end as the stream's end: when
-                       ;; the row re-renders on its own (grows/shrinks), its
-                       ;; marker moves and the stream end - and the box below -
-                       ;; stay correct.
-                       (setf (vui-stream-handle-region-end handle)
-                             (vui-instance-region-end row))
-                       (vui--stream-push handle row id)
-                       (push row (vui-stream-handle-rows handle))
-                       row))))))
+                       (prog1
+                           (if (not (vui--inline-bounds row))
+                               ;; It unmounted itself in its first render: it
+                               ;; is no item of the stream, and the separator
+                               ;; written for it goes too
+                               (progn
+                                 (delete-region (- sep-end (length sep))
+                                                sep-end)
+                                 nil)
+                             (vui--stream-set-last-start handle row-start buf)
+                             ;; Share the row's region-end as the stream's end:
+                             ;; when the row re-renders on its own
+                             ;; (grows/shrinks), its marker moves and the
+                             ;; stream end - and the box below - stay correct.
+                             (setf (vui-stream-handle-region-end handle)
+                                   (vui-instance-region-end row))
+                             (vui--stream-push handle row id)
+                             (push row (vui-stream-handle-rows handle))
+                             row)
+                         (set-marker sep-end nil))))))))
           ;; The first text of a stream that held only rows with none
           (vui--stream-relay-empty-transition handle was-empty)
           ;; Run the renders the row's hooks asked for.  A render in
@@ -7500,8 +7515,9 @@ content-only and no-op on a component node for now."
               (i id-cell))
           (while (and c (not (eq (car c) item)))
             (setq c (cdr c) i (cdr i)))
-          (when c
-            (setq cell c id-cell i)))
+          ;; Nil when the row is no item: it unmounted itself in its
+          ;; first render (see `vui--stream-append-row')
+          (setq cell c id-cell i))
         (let ((node (vui--stream-node-create
                      :handle handle
                      :cell cell
@@ -7512,7 +7528,8 @@ content-only and no-op on a component node for now."
                      ;; pointing at some other (e.g. root) instance.
                      :instance (and (vui-instance-p row)
                                     (vui--inline-p row) row))))
-          (push node (vui-stream-handle-nodes handle))
+          (when cell
+            (push node (vui-stream-handle-nodes handle)))
           node))
     ;; Content node: its own start/end markers bound around the inserted text.
     (let ((node nil))

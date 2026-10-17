@@ -1410,6 +1410,86 @@ hook of LABEL."
                 (expect (buffer-string) :to-equal text)))
           (kill-buffer "*test-rebuild-edit*"))))))
 
+(defvar vui-stream-rows-test--self-unmount-log nil
+  "The stream that `vui-stream-rows-test-self-unmounting' appends to.")
+
+(vui-defcomponent vui-stream-rows-test-self-unmounting (append)
+  "A row that unmounts itself in its first render, after it appends
+APPEND, if any, to `vui-stream-rows-test--self-unmount-log'."
+  :on-mount (progn
+              (when append
+                (vui-stream-append vui-stream-rows-test--self-unmount-log
+                                   (vui-text append)))
+              (vui-unmount vui--current-instance))
+  :render (vui-text "gone"))
+
+(vui-defcomponent vui-stream-rows-test-self-unmount-root (log first)
+  "LOG between two lines, or as the first child when FIRST."
+  :render (apply #'vui-vstack
+                 (append (unless first (list (vui-text "x")))
+                         (list (vui-stream log) (vui-text "footer")))))
+
+(defmacro vui-stream-rows-test--with-self-unmount (spec &rest body)
+  "Run BODY in a mounted root with a stream LOG holding \"l0\".
+SPEC is (LOG FIRST SEPARATOR): FIRST makes the stream the first child of
+the root, SEPARATOR is the separator of the stream."
+  (declare (indent 1))
+  (let ((log (nth 0 spec)) (first (nth 1 spec)) (sep (nth 2 spec)))
+    `(let* ((vui-render-delay nil)
+            (,log (if ,sep (vui-make-stream ,sep) (vui-make-stream)))
+            (vui-stream-rows-test--self-unmount-log ,log))
+       (vui-stream-append ,log (vui-text "l0"))
+       (save-window-excursion
+         (vui-mount (vui-component 'vui-stream-rows-test-self-unmount-root
+                                   :log ,log :first ,first)
+                    "*test-self-unmount*"))
+       (unwind-protect
+           (with-current-buffer "*test-self-unmount*"
+             ;; A render that leaves a record, as the renders after the
+             ;; mount do
+             (vui-rerender (vui-get-instance))
+             ,@body)
+         (kill-buffer "*test-self-unmount*")))))
+
+(defun vui-stream-rows-test--fresh-text ()
+  "Return the text of the root rendered from scratch."
+  (let ((root (vui-get-instance)))
+    (setf (vui-instance-render-record root) nil)
+    (vui-rerender root)
+    (buffer-string)))
+
+(describe "a stream row that unmounts itself in its first render"
+  (pcase-dolist (`(,first ,sep ,append ,after ,after-l1)
+                 '((nil nil nil "l0" "l0\nl1")
+                   (t nil nil "l0" "l0\nl1")
+                   (nil "--" nil "l0" "l0--l1")
+                   (nil nil "h" "l0\nh" "l0\nh\nl1")
+                   (nil "--" "h" "l0--h" "l0--h--l1")))
+    (it (format "leaves the stream as it was (first %s, separator %S, append %S)"
+                first sep append)
+      (vui-stream-rows-test--with-self-unmount (log first sep)
+        (let ((top (if first "" "x\n")))
+          (vui-stream-append
+           log (vui-component 'vui-stream-rows-test-self-unmounting
+                              :append append))
+          (expect (buffer-string) :to-equal (concat top after "\nfooter"))
+          ;; The stream still takes appends
+          (vui-stream-append log (vui-text "l1"))
+          (expect (buffer-string) :to-equal (concat top after-l1 "\nfooter"))
+          (let ((text (buffer-string)))
+            (expect (vui-stream-rows-test--fresh-text) :to-equal text))))))
+
+  (it "leaves the node opened before it working"
+    (vui-stream-rows-test--with-self-unmount (log nil nil)
+      (let ((node (vui-stream-open log (vui-text "a"))))
+        (vui-stream-open log (vui-component 'vui-stream-rows-test-self-unmounting))
+        (expect (buffer-string) :to-equal "x\nl0\na\nfooter")
+        ;; A render of the tree writes the stream again and binds its nodes
+        (expect (vui-stream-rows-test--fresh-text)
+                :to-equal "x\nl0\na\nfooter")
+        (vui-stream-append-to node (vui-text "+more"))
+        (expect (buffer-string) :to-equal "x\nl0\na+more\nfooter")))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here

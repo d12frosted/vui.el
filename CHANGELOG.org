@@ -28,6 +28,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component appended to a =vui-stream= that unmounts itself in its
+  first render (from =:on-mount= or an effect, say) no longer breaks the
+  stream. The separator written for it stayed (an empty line with the
+  default separator), and the stream kept the end of the removed row as
+  its own end, so every append after it was dropped without a word. The
+  stream is now left as it was before the append, with what the hooks
+  of the row appended to it. A node that =vui-stream-open= returns for
+  such a component is inert, and no longer takes the place of the item
+  before it.
+
 - An append to a =vui-stream= from a hook of its last row, or of a
   component in that row, while a render writes the stream again (the
   root renders again) no longer signals =wrong-type-argument=. Appended
