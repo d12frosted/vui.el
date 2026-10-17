@@ -42,6 +42,20 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   stream. The =:on-unmount= of a component removed while the tree is
   written counts as such a hook too.
 
+- An effect or a cleanup that switches buffers (a =vui-mount= from an
+  effect does) no longer moves the rest of the render to that buffer.
+  The render went on in that buffer: it emptied the undo list of that
+  buffer, not its own, and the effects after that one ran there. A first
+  =vui-mount= also moved point to the start of that buffer, and left
+  point at the end of the mounted one. A cleanup or =:on-unmount= of a
+  component removed by a render even had the rest of the tree written
+  into that buffer.
+
+- A =vui-table= that shows nothing (no header, and no rows or only
+  =:separator= rows without a border) no longer deletes the newline
+  before it. It removes the newline after its last row, and when it
+  wrote no row that was the newline of the text before the table.
+
 - A component row of a =vui-stream= unmounted with =vui-unmount= is no
   longer an item of the stream, also when the stream is not shown at
   the time. When the row was the last item, it stayed the last item,
