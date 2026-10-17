@@ -42,6 +42,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   stream. The =:on-unmount= of a component removed while the tree is
   written counts as such a hook too.
 
+- A =vui-box= measures content with more than one line by its widest
+  line, as it does with =vui-width-mode= set to =pixel=. In char mode it
+  added up the widths of all the lines, so it added too little
+  alignment padding, and the two modes rendered different text.
+
 - A =vui-box= directly in an indented =vui-vstack= gets the indent on
   each of its lines, as a table there does. Only its first line got
   it, so the other lines of a box with more than one line, for example

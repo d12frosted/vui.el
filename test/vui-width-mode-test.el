@@ -275,6 +275,13 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
        (lambda () (vui-box (vui-text "hi") :width 12 :align align
                            :padding-left 1 :padding-right 2)))))
 
+  (it "vui-box with lines of different widths in every alignment"
+    ;; A box measures its content by its widest line in both modes
+    (dolist (align '(:left :center :right))
+      (vui-test--parity
+       (lambda () (vui-box (vui-vstack (vui-text "a") (vui-text "bbb"))
+                           :width 8 :align align :padding-left 1)))))
+
   (it "table with headers, borders and every alignment"
     (dolist (border '(nil :ascii :unicode))
       (vui-test--parity

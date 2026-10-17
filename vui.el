@@ -6886,8 +6886,11 @@ stream that is not rendered yet."
 Call it before deleting the text between START and END (the whole
 buffer when they are nil); see `vui--stream-park'.  A stream with no
 text right at START or END may belong to the text on either side, so it
-stays: it holds no row and no node, and its next append re-renders the
-tree.
+stays.  It can still hold items, also component rows and open nodes,
+but none of them has text.  Whatever gives the stream text again lays
+the tree out again: an append, a node put before or after another, an
+edit of a node or of the last item, a row that renders text (see
+`vui--stream-in-place-p' and `vui--stream-relay-empty-transition').
 
 ROW is the inline instance whose region is deleted, if any.  When it is
 the only item of a stream, the stream has the same text as ROW, and it
@@ -8283,7 +8286,8 @@ is written."
            (box-start (vui--container-start (vui-vnode-box-face vnode)
                                             (vui-vnode-box-keymap vnode)))
            (pad-left-str (vui--pad pad-left))
-           ;; First render to temp buffer to measure width.
+           ;; First render to temp buffer to measure width: that of its
+           ;; widest line, as pixel mode measures it.
            ;; Isolate the measure pass like table cells do: without the
            ;; rebindings, a component inside the box would be reconciled
            ;; twice per render (duplicate child entries, shifted indexes
@@ -8297,7 +8301,7 @@ is written."
                                     (vui--measuring-p t)
                                     (vui--pending-effects nil))
                                 (vui--render-vnode child))
-                              (vui--text-width (buffer-string)))))
+                              (vui--text-width (buffer-string) t))))
            (inner-width (- width pad-left pad-right))
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding
