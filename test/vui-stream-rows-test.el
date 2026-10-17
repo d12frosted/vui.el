@@ -1060,5 +1060,47 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
           (expect (vui-sr-hook--text)
                   :to-equal (concat x "l0|t|panel|p0|[r2]|footer")))))))
 
+(defvar vui-sr-reseat--edit nil
+  "Whether `vui-sr-reseat-row' writes a line at the top when it renders.")
+
+(vui-defcomponent vui-sr-reseat-row ()
+  "Its `:on-update' writes a line at the start of the buffer while
+`vui-sr-reseat--edit' is non-nil."
+  :on-update (when vui-sr-reseat--edit
+               (let ((inhibit-read-only t))
+                 (save-excursion (goto-char (point-min)) (insert "N1\n"))))
+  :render (vui-text "r"))
+
+(vui-defcomponent vui-sr-reseat-root (log n)
+  :render (vui-vstack (vui-text (format "aa%d" n))
+                      (vui-vstack :face 'bold
+                                  (vui-text "cc")
+                                  (vui-stream log)
+                                  (vui-text "bb"))))
+
+(describe "vui-stream rows: a row that writes above in a rebuild"
+  ;; The render of the root writes the stream again, and the row renders
+  ;; again in it, after the stream started
+  (it "keeps the region of its stream around the items"
+    (let ((vui-render-delay nil)
+          (vui-sr-reseat--edit nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "s1"))
+      (vui-mount (vui-component 'vui-sr-reseat-root :log log :n 0)
+                 "*vui-sr-reseat*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-reseat*"
+            (vui-stream-append log (vui-component 'vui-sr-reseat-row))
+            (setq vui-sr-reseat--edit t)
+            (vui-update (vui-get-instance) (list :log log :n 1))
+            (setq vui-sr-reseat--edit nil)
+            (expect (buffer-substring-no-properties
+                     (vui-stream-handle-region-start log)
+                     (vui-stream-handle-region-end log))
+                    :to-equal "s1\nr")
+            (vui-stream-append log (vui-text "s3"))
+            (expect (buffer-string) :to-equal "N1\naa1\ncc\ns1\nr\ns3\nbb"))
+        (kill-buffer "*vui-sr-reseat*")))))
+
 (provide 'vui-stream-rows-test)
 ;;; vui-stream-rows-test.el ends here
