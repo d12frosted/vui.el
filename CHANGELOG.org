@@ -28,6 +28,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An item appended to a =vui-stream= while a render writes the stream
+  again (from a hook of a component in the tree, say the first render of
+  a component appended to an empty stream) shows up. The render wrote
+  the stream from its items as they were before, and the item stayed out
+  of the buffer until another render; a =vui-stream-update-last= before
+  that broke the text of the stream.
+
 - An effect that unmounts its own tree no longer lets the effects after
   it in the same render run. They ran on the unmounted tree after its
   cleanups, so nothing cleaned up what they set up, and an effect that

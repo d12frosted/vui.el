@@ -917,6 +917,22 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect (vui-sr-hook--render-whole)
                     :to-equal (concat x "l0|[a2]|t3|panel|p0|[b]|footer")))))
 
+      (it (format "writes what a hook appends to an empty stream in its first render (%s)"
+                  mode)
+        ;; The stream is being written again when the hook appends
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           panel (vui-component 'vui-sr-hook-row
+                                :label "a"
+                                :hook (lambda ()
+                                        (vui-stream-append
+                                         panel (vui-text "t")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|panel|[a]|t|footer"))
+          (vui-stream-update-last panel (vui-text "t2"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|panel|[a]|t2|footer"))))
+
       (it (format "keeps a row that gives text to a stream of rows with none (%s)"
                   mode)
         ;; Nothing sets apart the items of PANEL, and its only item is a

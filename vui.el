@@ -6927,9 +6927,13 @@ first item pays, as a plain child component, not a row."
          (end (vui-stream-handle-region-end handle))
          (id (vui--stream-push handle vnode)))
     (cond
-     ;; Not live yet: emitted on the next render.
+     ;; Not live yet: emitted on the next render.  A render in progress
+     ;; can be writing the stream right now, from its items as they were
+     ;; before this one (a hook of a component in the tree appends): it
+     ;; writes the stream again when it is done.
      ((not (and buf (buffer-live-p buf) end (marker-position end)))
-      nil)
+      (when (and buf (buffer-live-p buf) vui--rendering-p)
+        (vui--stream-request-rebuild handle)))
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
      ;; the whole tree once.  (Only the very first item pays this.)
      ((not (vui--stream-in-place-p handle))
