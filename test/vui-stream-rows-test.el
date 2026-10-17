@@ -1188,6 +1188,12 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
                         (when show (vui-component 'vui-sr-owned))
                         (vui-text "footer"))))
 
+(vui-defcomponent vui-sr-toggle-root (log show)
+  "LOG between two lines while SHOW, a line in its place otherwise."
+  :render (vui-vstack (vui-text "top")
+                      (if show (vui-stream log) (vui-text "other"))
+                      (vui-text "footer")))
+
 (describe "vui-stream rows: a row unmounted on its own"
   ;; The row's text goes, and the stream is written again without it
   (dolist (mode '(first middle))
@@ -1216,6 +1222,44 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
                     :to-equal (concat x "l0|panel|" appended "|footer"))
             (expect (vui-sr-hook--render-whole)
                     :to-equal (concat x "l0|panel|" appended "|footer")))))))
+
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "is no longer an item of its stream (%s)" mode)
+        ;; The last item is the one before it again
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "a"))
+          (vui-stream-append panel (vui-component 'vui-sr-hook-row :label "r"))
+          (vui-unmount (car (vui-stream-handle-rows panel)))
+          (expect (length (vui-stream-handle-rows panel)) :to-equal 0)
+          (expect (length (vui-stream-handle-items-rev panel)) :to-equal 1)
+          (expect (vui-stream-handle-ids-rev panel) :to-equal '(0))
+          (vui-stream-update-last panel (vui-text "q"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|panel|q|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|panel|q|footer"))))))
+
+  (it "is no longer an item of its stream when unmounted while the stream is hidden"
+    ;; The stream is not in the buffer: the next render of it takes the
+    ;; row out
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "a"))
+      (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                 "*vui-sr-toggle*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-toggle*"
+            (vui-stream-append log (vui-component 'vui-sr-hook-row :label "r"))
+            (let ((row (car (vui-stream-handle-rows log))))
+              (vui-update (vui-get-instance) (list :log log :show nil))
+              (vui-unmount row)
+              (vui-update (vui-get-instance) (list :log log :show t))
+              (expect (buffer-string) :to-equal "top\na\nfooter")
+              (expect (length (vui-stream-handle-items-rev log)) :to-equal 1)
+              (vui-stream-update-last log (vui-text "q"))
+              (expect (buffer-string) :to-equal "top\nq\nfooter")))
+        (kill-buffer "*vui-sr-toggle*"))))
 
   ;; LOG is the first child with MODE first: a render of the root
   ;; patches around it, unless it has to be written again
