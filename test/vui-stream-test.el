@@ -728,5 +728,117 @@ leading separator), matching what a plain declarative list renders."
               (expect (vui-st--buffer) :to-equal (vui-st--oracle '("hi" "b") "x")))
           (vui-st--kill))))))
 
+;; A container drops a child that writes nothing, and the separator it
+;; would have had.  So when the text of a stream goes empty, or comes
+;; back, the separators around it change, whatever made it change: a
+;; remove that leaves only items with no text, an append to such a
+;; stream, or a component row that renders again on its own.
+
+(vui-defcomponent vui-st-empty-row (label)
+  :render (vui-text label))
+
+(vui-defcomponent vui-st-empty-root (stream mode)
+  :render (if (eq mode 'first)
+              (vui-vstack (vui-stream stream) (vui-text "footer"))
+            (vui-vstack (vui-text "x") (vui-stream stream) (vui-text "footer"))))
+
+(defmacro vui-st-empty--with (mode &rest body)
+  "Mount `vui-st-empty-root' in MODE with a stream S, run BODY there."
+  (declare (indent 1))
+  `(let ((vui-render-delay nil)
+         (s (vui-make-stream)))
+     (vui-mount (vui-component 'vui-st-empty-root :stream s :mode ,mode)
+                "*vui-st-empty*")
+     (unwind-protect
+         (with-current-buffer "*vui-st-empty*"
+           (vui-rerender (vui-get-instance))
+           ,@body)
+       (kill-buffer "*vui-st-empty*"))))
+
+(defun vui-st-empty--text ()
+  (replace-regexp-in-string "\n" "|" (buffer-string)))
+
+(describe "vui-stream: a stream whose text goes empty"
+  (it "lets go of its separator when a remove leaves an item with no text"
+    (vui-st-empty--with 'middle
+      (let* ((node (vui-stream-open s (vui-text "a")))
+             (other (vui-stream-open s (vui-text "b"))))
+        (vui-stream-update other (vui-text ""))
+        (vui-stream-remove node)
+        (expect (vui-st-empty--text) :to-equal "x|footer")
+        (vui-stream-append s (vui-text "c"))
+        (expect (vui-st-empty--text) :to-equal "x||c|footer"))))
+
+  (dolist (side '(before after))
+    (it (format "gets its separator back for an item put %s one with no text"
+                side)
+      (vui-st-empty--with 'middle
+        (let* ((node (vui-stream-open s (vui-text "a")))
+               (empty (vui-stream-open s (vui-text ""))))
+          (vui-stream-remove node)
+          (expect (vui-st-empty--text) :to-equal "x|footer")
+          (if (eq side 'before)
+              (vui-stream-before empty (vui-text "z"))
+            (vui-stream-after empty (vui-text "z")))
+          (expect (vui-st-empty--text)
+                  :to-equal (if (eq side 'before) "x|z||footer" "x||z|footer"))
+          ;; both nodes stay live
+          (vui-stream-update empty (vui-text "e"))
+          (expect (vui-st-empty--text)
+                  :to-equal (if (eq side 'before) "x|z|e|footer" "x|e|z|footer"))))))
+
+  (it "mounts a component on a stream left with only a row with no text"
+    (vui-st-empty--with 'middle
+      (let ((node (vui-stream-open s (vui-text "a")))
+            (card nil))
+        (vui-stream-append s (vui-component 'vui-st-empty-row :label ""))
+        (vui-stream-remove node)
+        (setq card (vui-stream-open
+                    s (vui-component 'vui-st-empty-row :label "c1")))
+        (expect (vui-st-empty--text) :to-equal "x||c1|footer")
+        ;; a row, which its node updates
+        (vui-stream-update card (vui-component 'vui-st-empty-row :label "c2"))
+        (expect (vui-st-empty--text) :to-equal "x||c2|footer"))))
+
+  (it "lets go of its separator when a remove leaves a row with no text"
+    (vui-st-empty--with 'middle
+      (let ((node (vui-stream-open s (vui-text "a"))))
+        (vui-stream-append s (vui-component 'vui-st-empty-row :label ""))
+        (vui-stream-remove node)
+        (expect (vui-st-empty--text) :to-equal "x|footer")
+        (vui-stream-append s (vui-text "b"))
+        (expect (vui-st-empty--text) :to-equal "x||b|footer"))))
+
+  (it "follows a row that goes empty and back on its own"
+    (vui-st-empty--with 'middle
+      ;; A component opened on an empty stream is not a row, so the row
+      ;; goes after an item that is removed next
+      (let* ((node (vui-stream-open s (vui-text "a")))
+             (row (vui-stream-open
+                   s (vui-component 'vui-st-empty-row :label "r"))))
+        (vui-stream-remove node)
+        (expect (vui-st-empty--text) :to-equal "x|r|footer")
+        (vui-stream-update row (vui-component 'vui-st-empty-row :label ""))
+        (expect (vui-st-empty--text) :to-equal "x|footer")
+        (vui-stream-update row (vui-component 'vui-st-empty-row :label "r2"))
+        (expect (vui-st-empty--text) :to-equal "x|r2|footer"))))
+
+  (it "keeps a row with no text through a render of the root"
+    ;; The stream is the first child and holds only a row that renders
+    ;; nothing: the render of the root writes the stream again, with the
+    ;; row
+    (vui-st-empty--with 'first
+      (let* ((node (vui-stream-open s (vui-text "a")))
+             (row (vui-stream-open
+                   s (vui-component 'vui-st-empty-row :label ""))))
+        (vui-stream-remove node)
+        (expect (vui-st-empty--text) :to-equal "footer")
+        (vui-rerender (vui-get-instance))
+        (expect (vui-st-empty--text) :to-equal "footer")
+        (vui-stream-update row (vui-component 'vui-st-empty-row :label "r"))
+        (expect (vui-st-empty--text) :to-equal "r|footer")
+        (vui-stream-append s (vui-text "b"))
+        (expect (vui-st-empty--text) :to-equal "r|b|footer")))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here

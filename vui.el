@@ -3180,9 +3180,22 @@ mid-render."
   "Re-render inline INSTANCE inside the region it manages.
 The host buffer outside the region is left untouched.  Region
 mutations are kept out of the undo history: the rendered UI is
-ephemeral chrome, not document content."
-  (let ((buffer (vui-instance-buffer instance))
-        (bounds (vui--inline-bounds instance)))
+ephemeral chrome, not document content.
+
+A component row of a `vui-stream' that renders the stream's only text
+away, or brings it back, has the tree laid out again, as an edit of the
+stream does (see `vui--stream-relay-empty-transition')."
+  (let* ((buffer (vui-instance-buffer instance))
+         (bounds (vui--inline-bounds instance))
+         (row-p (and buffer (buffer-live-p buffer) bounds
+                     (vui-instance-base-path instance)))
+         ;; The stream's text can go or come back only with this row's:
+         ;; a row with text before and after leaves it as it is, and is
+         ;; the common case, so the stream is looked up only when needed
+         (stream (and row-p (= (car bounds) (cdr bounds))
+                      (with-current-buffer buffer
+                        (vui--stream-of-row instance))))
+         (was-empty (and stream (vui--stream-region-empty-p stream))))
     (when (and buffer (buffer-live-p buffer) bounds)
       (with-current-buffer buffer
         (let* ((inhibit-read-only t)
@@ -3225,6 +3238,15 @@ ephemeral chrome, not document content."
                 ;; Run effects after commit
                 (vui--run-pending-effects))
             (setq vui--rendering-p nil))))
+      ;; A row that had text and has none now: its stream had text
+      (when (and row-p (not stream) (buffer-live-p buffer))
+        (let ((now (vui--inline-bounds instance)))
+          (when (and now (= (car now) (cdr now)))
+            (setq stream (with-current-buffer buffer
+                           (vui--stream-of-row instance))
+                  was-empty nil))))
+      (when stream
+        (vui--stream-relay-empty-transition stream was-empty))
       ;; Run any re-renders requested during render/effects
       (vui--flush-queued-rerenders))))
 
@@ -6532,6 +6554,11 @@ A row unmounted on its own (with `vui-unmount') has no text any more."
        (vui-instance-region-start row)
        t))
 
+(defun vui--stream-of-row (row)
+  "Return the stream of the current buffer that ROW is a row of, or nil."
+  (cl-find-if (lambda (handle) (memq row (vui-stream-handle-rows handle)))
+              vui--streams))
+
 (defun vui--stream-reseat-row (row path)
   "Render stream ROW at point, in a region of its own, under PATH.
 The rebuild of the stream erased what ROW wrote, so ROW gets its region
@@ -6781,16 +6808,12 @@ fragment, has no separator before it)."
   "Non-nil when HANDLE's live region is edited in place, not laid out again.
 That is a region with text in it.  The first item of an empty stream
 is laid out with the whole tree instead, which sets the separators
-around the stream.
-
-A stream that holds a component row is edited in place even when its
-region is empty, which it is when that row is the only item left and
-renders nothing.  The row is in the buffer, with a region of its own
-that holds the stream's place, and laying the items out again would
-not bring it back (see `vui--stream-render')."
-  (or (/= (marker-position (vui-stream-handle-region-start handle))
-          (marker-position (vui-stream-handle-region-end handle)))
-      (cl-some #'vui-instance-p (vui-stream-handle-items-rev handle))))
+around the stream.  The same goes for a stream that has items but no
+text, also when one of them is a component row: the container dropped
+the stream and its separator, and a render of the stream writes the row
+again at its place (see `vui--stream-reseat-row')."
+  (/= (marker-position (vui-stream-handle-region-start handle))
+      (marker-position (vui-stream-handle-region-end handle))))
 
 (defun vui--stream-relay-empty-transition (handle was-empty &optional node)
   "Re-lay HANDLE's tree when an in-place edit crossed the empty boundary.
@@ -6798,7 +6821,7 @@ WAS-EMPTY is whether the whole stream region was zero-width before the
 edit.  When its emptiness changed, the separators the container emitted
 around the stream are stale (it drops a zero-output child), the mirror
 of the empty -> non-empty append and the emptying
-`vui-stream-remove-last' - so re-lay once so the buffer matches a plain
+`vui-stream-remove' - so re-lay once so the buffer matches a plain
 render.  The re-lay re-binds the handle's markers; when NODE (the edited
 node) is the last item, re-seat its markers on the fresh region so it
 stays updatable, like `vui-stream-open' does after the empty stream's
@@ -6892,40 +6915,51 @@ first item pays, as a plain child component, not a row."
      ;; Not live, or still empty: a row needs a live, non-empty stream.
      ;; Record the vnode and lay it out with a full render (it renders as a
      ;; plain child component, not a scoped row - the documented fallback).
+     ;; A stream that holds a row has its place in the buffer, also when
+     ;; that row renders nothing, so the new row goes there.
      ((or (not (and buf (buffer-live-p buf) end (marker-position end)))
-          (not (vui--stream-in-place-p handle)))
+          (not (or (vui--stream-in-place-p handle)
+                   (cl-some #'vui--stream-row-p
+                            (vui-stream-handle-items-rev handle)))))
       (vui--stream-push handle vnode)
       (when (and buf (buffer-live-p buf))
         (vui--stream-request-rebuild handle))
       nil)                              ; no inline instance in the fallback
      (t
-      (with-current-buffer buf
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              (buffer-undo-list t))
-          (save-excursion
-            (goto-char (marker-position end))
-            (let* ((row-start (+ (point) (length sep)))
-                   (id (vui--stream-new-id handle))
-                   ;; The row renders on its own from here on, always
-                   ;; under its item's path.  It goes below the rows
-                   ;; before it, also the ones that render nothing and
-                   ;; that an empty separator leaves at this very position.
-                   ;; The separator goes next to the same fields as an
-                   ;; appended content item does.
-                   (row (vui--keeping-fields (point)
-                          (insert sep)
-                          (vui--mount-inline
-                           vnode (point) (vui--stream-item-path handle id) t))))
-              (vui--stream-set-last-start handle row-start buf)
-              ;; Share the row's region-end as the stream's end: when the
-              ;; row re-renders on its own (grows/shrinks), its marker moves
-              ;; and the stream end - and the box below - stay correct.
-              (setf (vui-stream-handle-region-end handle)
-                    (vui-instance-region-end row))
-              (vui--stream-push handle row id)
-              (push row (vui-stream-handle-rows handle))
-              row))))))))   ; return the inline instance (or nil on fallback)
+      (let ((was-empty (vui--stream-region-empty-p handle))
+            (row
+             (with-current-buffer buf
+               (let ((inhibit-read-only t)
+                     (inhibit-modification-hooks t)
+                     (buffer-undo-list t))
+                 (save-excursion
+                   (goto-char (marker-position end))
+                   (let* ((row-start (+ (point) (length sep)))
+                          (id (vui--stream-new-id handle))
+                          ;; The row renders on its own from here on,
+                          ;; always under its item's path.  It goes below
+                          ;; the rows before it, also the ones that render
+                          ;; nothing and that an empty separator leaves at
+                          ;; this very position.  The separator goes next to
+                          ;; the same fields as an appended content item does.
+                          (row (vui--keeping-fields (point)
+                                 (insert sep)
+                                 (vui--mount-inline
+                                  vnode (point)
+                                  (vui--stream-item-path handle id) t))))
+                     (vui--stream-set-last-start handle row-start buf)
+                     ;; Share the row's region-end as the stream's end: when
+                     ;; the row re-renders on its own (grows/shrinks), its
+                     ;; marker moves and the stream end - and the box below -
+                     ;; stay correct.
+                     (setf (vui-stream-handle-region-end handle)
+                           (vui-instance-region-end row))
+                     (vui--stream-push handle row id)
+                     (push row (vui-stream-handle-rows handle))
+                     row))))))
+        ;; The first text of a stream that held only rows with none
+        (vui--stream-relay-empty-transition handle was-empty)
+        row)))))   ; return the inline instance (or nil on fallback)
 
 (defun vui--string-prefix-equal-including-properties-p (o n)
   "Return non-nil when O is a prefix of N, text properties included.
@@ -7396,7 +7430,8 @@ screen.  A no-op returning nil if NODE is not live."
       (let ((new (vui--stream-node-create :handle handle))
             (id (vui--stream-new-id handle))
             (id-cell (vui--stream-node-id-cell node))
-            (vnode (vui--stream-node-vnode vnode)))
+            (vnode (vui--stream-node-vnode vnode))
+            (was-empty (vui--stream-region-empty-p handle)))
         ;; items-rev is reverse render order, so an item ABOVE NODE is OLDER
         ;; and sits just after NODE's cell.  Its id goes to the same place
         ;; in ids-rev.
@@ -7430,6 +7465,8 @@ screen.  A no-op returning nil if NODE is not live."
                       (vui--stream-set-last-start handle (point) buf))
                     (vui--stream-node-bind new x-start x-end buf)))))))
         (push new (vui-stream-handle-nodes handle))
+        ;; The first text of a stream that had none
+        (vui--stream-relay-empty-transition handle was-empty)
         new))))
 
 (defun vui-stream-after (node vnode)
@@ -7445,7 +7482,8 @@ if NODE is not live."
       (let ((new (vui--stream-node-create :handle handle))
             (id (vui--stream-new-id handle))
             (head (vui-stream-handle-items-rev handle))
-            (vnode (vui--stream-node-vnode vnode)))
+            (vnode (vui--stream-node-vnode vnode))
+            (was-empty (vui--stream-region-empty-p handle)))
         ;; An item BELOW NODE is NEWER and sits just before NODE's cell.
         ;; Its id goes to the same place in ids-rev.
         (if (eq cell head)
@@ -7482,6 +7520,8 @@ if NODE is not live."
                     (when (eq cell head)
                       (vui--stream-set-last-start handle x-start buf))))))))
         (push new (vui-stream-handle-nodes handle))
+        ;; The first text of a stream that had none
+        (vui--stream-relay-empty-transition handle was-empty)
         new))))
 
 (defun vui-stream-remove (node)
@@ -7495,7 +7535,8 @@ if NODE is not live."
          (seplen (length (vui-stream-handle-separator handle)))
          (start (vui--stream-node-start node))
          (end (vui--stream-node-end node))
-         (head (vui-stream-handle-items-rev handle)))
+         (head (vui-stream-handle-items-rev handle))
+         (was-empty (vui--stream-region-empty-p handle)))
     (when (and buf (buffer-live-p buf)
                start (marker-position start) end (marker-position end))
       (with-current-buffer buf
@@ -7556,9 +7597,9 @@ if NODE is not live."
       ;; Emptying the stream changes the surrounding layout (the container
       ;; drops the now-empty child and its separator), the mirror of the
       ;; empty -> non-empty transition - re-lay once so the buffer matches a
-      ;; plain render.
-      (when (null (vui-stream-handle-items-rev handle))
-        (vui--stream-request-rebuild handle)))
+      ;; plain render.  The text is what counts, not the items: the ones
+      ;; left may all write nothing.
+      (vui--stream-relay-empty-transition handle was-empty))
     nil))
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
@@ -7612,9 +7653,7 @@ before it, so the vnodes after the stream keep their index.  Only plain
                        ;; stream region untouched; for an empty stream that
                        ;; means the first appended item (which re-renders via
                        ;; this path) would never be emitted.  Stay wholesale
-                       ;; until there is content; then patch.  A stream whose
-                       ;; only content is a row that renders nothing is not
-                       ;; such a stream: a wholesale render would lose the row.
+                       ;; until there is content; then patch.
                        (vui--stream-in-place-p h))
               ;; A child's index is a step in the path of its widgets
               ;; (`:vui-path').  Rendered as children 0, 1, ... the

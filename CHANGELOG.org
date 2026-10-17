@@ -28,6 +28,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= whose text goes empty lets go of the separator next to
+  it, and gets it back with its next text. A container drops a child
+  that writes nothing, and the separator it would have had.
+  =vui-stream-remove= laid the tree out again only when no item was
+  left, so a remove that left only items with no text (one rewritten to
+  nothing, or a component row that renders nothing) kept the separator.
+  A stream left with only such a row took the next append in place,
+  with no separator, and a render of the root put the separator back
+  after it. =vui-stream-before= and =vui-stream-after= next to an item
+  with no text wrote the stream's first text with no separator. And a
+  row that rendered the stream's only text away on its own, or brought
+  it back, did not lay the tree out again at all.
+
 - With =vui-incremental-render= set, a root that renders a flat list of
   components no longer breaks when a component writes nothing. A
   vstack puts a separator only between two children that write text,
@@ -325,9 +338,9 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   row's new text, and the next appended item landed inside the row.
 
 - A stream whose only item left is a component row that renders nothing
-  is not taken for an empty stream. Appending to it, or re-rendering the
-  content below it, laid the whole tree out again from the items, which
-  cannot bring a row back.
+  keeps that row. Appending to the stream, or re-rendering the content
+  below it, lays the tree out again, and that writes the row again at
+  its place, with its state.
 
 - =vui-stream-before= on a node that renders nothing moves that node's
   end, and the stream's end when the node is the last item, past the

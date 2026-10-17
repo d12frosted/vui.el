@@ -1052,22 +1052,21 @@ The render gets a copy of STREAM, with the same items."
                                (vui-stream-remove node)
                                (setq nodes (delq node nodes))
                                (push 'remove trace))))
-                        ;; Not to nothing: a remove that leaves only items
-                        ;; with no text keeps the separator before the
-                        ;; stream (see `vui-stream-remove')
+                        ;; also to nothing
                         (2 (when nodes
                              (vui-stream-update (nth (random (length nodes)) nodes)
-                                                (vui-text (format "u%d" step)))
+                                                (vui-text (if (zerop (random 3))
+                                                              ""
+                                                            (format "u%d" step))))
                              (push 'update trace)))
                         (3 (vui-stream-append s (vui-text (format "a%d" (cl-incf n))))
                            (push 'append trace))
-                        ;; A component row.  Not one that writes nothing:
-                        ;; a stream left with only such a row is edited in
-                        ;; place, and a remove or an append does not put
-                        ;; the separator before it where a render does.
+                        ;; a component row, which may write nothing
                         (4 (vui-stream-append
                             s (vui-component 'inc-csx-row
-                                :label (format "r%d" (cl-incf n))))
+                                :label (if (zerop (random 3))
+                                           ""
+                                         (format "r%d" (cl-incf n)))))
                            (push 'row trace))
                         (_ nil))
                       (check step nil)

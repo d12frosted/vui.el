@@ -634,9 +634,9 @@ handle and to the root instance, and the separator of the stream's items
         (expect (buffer-string)
                 :to-equal "hello\nTOOL RESULT\nworld\nstatus"))))
 
-  (it "holds the stream's place when it is the only item left"
-    ;; The stream has an item, it is not an empty stream: nothing is laid
-    ;; out again from the items, which cannot bring a row back
+  (it "keeps a row that renders nothing when it is the only item left"
+    ;; The stream has no text, so the append lays the tree out again, and
+    ;; that writes the row again at its place
     (vui-sr--with-status-stream (stream root)
       (let* ((note (vui-stream-open stream (vui-text "note")))
              (row (vui-sr--append-quiet stream "")))
