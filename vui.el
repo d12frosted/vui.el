@@ -7744,6 +7744,21 @@ container separator, which we drop if the suffix renders to nothing
       (when (= 0 (vui--render-children-as vtree suffix))
         (delete-region from (point))))))
 
+(defun vui--indent-lines (start end indent)
+  "Insert INDENT after each newline between START and END.
+END moves past each INDENT inserted before it or at it, so a newline
+right before END gets its INDENT too.  Text after END is left alone: it
+is not the layout's (the host text after an inline region, the content
+after a stream, the components after one written again).  Point ends up
+at END, after all of the indented text, where what follows the layout
+is written."
+  (let ((end (copy-marker end t)))
+    (goto-char start)
+    (while (search-forward "\n" end t)
+      (insert indent))
+    (goto-char end)
+    (set-marker end nil)))
+
 (defun vui--render-vnode (vnode)
   "Render VNODE into the current buffer at point."
   (cond
@@ -8063,13 +8078,15 @@ container separator, which we drop if the suffix renders to nothing
                ((and (vui-vnode-table-p child) (> indent 0))
                 (unless skip-this-indent
                   (insert indent-str))
-                (setq content-start (point))
-                (vui--render-vnode child)
-                ;; Add indent after each internal newline
-                (save-excursion
-                  (goto-char content-start)
-                  (while (search-forward "\n" nil t)
-                    (insert indent-str))))
+                ;; A marker: the hooks of the components in the table can
+                ;; write or delete text above it
+                (let ((table-start (point-marker)))
+                  (vui--render-vnode child)
+                  ;; Add indent after each internal newline, not after the
+                  ;; newlines of what follows in the buffer
+                  (vui--indent-lines table-start (point) indent-str)
+                  (setq content-start (marker-position table-start))
+                  (set-marker table-start nil)))
                ;; Other children: insert indent (if needed) and render
                (t
                 (when (and (> indent 0) (not skip-this-indent))
@@ -8115,8 +8132,10 @@ container separator, which we drop if the suffix renders to nothing
            (padding (max 0 (- inner-width content-width))))
       ;; Insert left padding
       (insert pad-left-str)
-      ;; Record start position for post-processing newlines
-      (let ((content-start (point)))
+      ;; Record start position for post-processing newlines.  A marker:
+      ;; the hooks of the components in the box can write or delete text
+      ;; above it.
+      (let ((content-start (point-marker)))
         ;; Render content with alignment (render properly to get widgets)
         (pcase align
           (:left
@@ -8134,10 +8153,8 @@ container separator, which we drop if the suffix renders to nothing
              (insert (vui--pad right-pad)))))
         ;; Add left padding after each newline for block indentation
         (when (> pad-left 0)
-          (save-excursion
-            (goto-char content-start)
-            (while (search-forward "\n" nil t)
-              (insert pad-left-str)))))
+          (vui--indent-lines content-start (point) pad-left-str))
+        (set-marker content-start nil))
       ;; Insert right padding
       (insert (vui--pad pad-right))
       (vui--apply-region-props box-start (point)

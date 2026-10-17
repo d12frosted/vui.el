@@ -28,6 +28,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-box= with =:padding-left=, and a table in an indented
+  =vui-vstack=, indent only their own lines. The indent went after
+  every newline up to the end of the buffer, so the text after the
+  layout got it too, and more of it on every render. That text was the
+  host lines after an inline region, the content below a stream the
+  layout was appended to, or, with =vui-incremental-render= set, the
+  components after one that was written again, where it also left
+  stray text behind. The layout also got its indent wrong when the hook
+  of a component in it wrote or deleted text above it, and signalled
+  when the hook deleted more than the layout wrote. And what follows a
+  box whose content ends with a newline now goes after the padding of
+  that last line, not in front of it.
+
 - A component mounted inline (=vui-mount-inline=, or a component row of
   a =vui-stream=) keeps its region in place when its hooks, or the hooks
   of its children, write or delete text above it, or write text after

@@ -249,6 +249,19 @@
       ;; Alignment padding (1 space) added at end of content block
       (expect (buffer-string) :to-equal "  a\n  b ")))
 
+  (it "applies padding-left after a newline that ends the content"
+    (with-temp-buffer
+      ;; No alignment padding after the newline: the content is as wide
+      ;; as the box has room for
+      (vui-render (vui-box (vui-text "a\nb\n") :width 3 :padding-left 2))
+      (expect (buffer-string) :to-equal "  a\n  b\n  ")))
+
+  (it "writes what follows it after the padding of its last line"
+    (with-temp-buffer
+      (vui-render (vui-vstack (vui-box (vui-text "a\n") :width 3 :padding-left 2)
+                              (vui-text "z")))
+      (expect (buffer-string) :to-equal "  a\n  \nz")))
+
   (it "preserves button interactivity inside box"
     (let ((clicked nil))
       (vui-defcomponent box-button-test ()
@@ -269,6 +282,70 @@
               (vui-test--click-button-at (point))
               (expect clicked :to-be-truthy))
           (kill-buffer "*test-box-btn*"))))))
+
+(vui-defcomponent layout-indent-box (label)
+  :render (vui-box (vui-vstack (vui-text label) (vui-text "two"))
+                   :width 10 :padding-left 2))
+
+(vui-defcomponent layout-indent-after ()
+  :render (vui-vstack (vui-text "after 1") (vui-text "after 2")))
+
+(vui-defcomponent layout-indent-list (label)
+  :render (vui-vstack (vui-component 'layout-indent-box :label label)
+                      (vui-component 'layout-indent-after)))
+
+(vui-defcomponent layout-indent-root (log)
+  :render (vui-vstack (vui-stream log)
+                      (vui-text "footer A")
+                      (vui-text "footer B")))
+
+(describe "indented layouts with text after them"
+  ;; An item appended to a live stream is written above the content
+  ;; after the stream, so the text after the layout is in the buffer
+  ;; while it is written.  Only the layout's own lines get its indent.
+  (dolist (layout '(box table))
+    (it (format "indents only the lines of a %s" layout)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream))
+            (buffer "*test-indent-after*"))
+        (vui-stream-append log (vui-text "l0"))
+        (vui-mount (vui-component 'layout-indent-root :log log) buffer)
+        (unwind-protect
+            (with-current-buffer buffer
+              (vui-stream-append
+               log
+               (if (eq layout 'box)
+                   (vui-box (vui-vstack (vui-text "x") (vui-text "y"))
+                            :width 6 :padding-left 2)
+                 (vui-vstack :indent 2
+                             (vui-table :columns '((:width 1))
+                                        :rows '(("x") ("y"))))))
+              (expect (buffer-string) :to-match "\nfooter A\nfooter B\\'")
+              (let ((text (buffer-string))
+                    (root (vui-get-instance)))
+                ;; The same tree rendered again into an empty buffer
+                (setf (vui-instance-render-record root) nil)
+                (vui-rerender root)
+                (expect text :to-equal (buffer-string))))
+          (kill-buffer buffer)))))
+
+  (it "indents only the lines of a box written again in front of other components"
+    ;; With `vui-incremental-render', a component that changes is
+    ;; written again in place, in front of the components after it
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t)
+          (buffer "*test-indent-patch*"))
+      (vui-mount (vui-component 'layout-indent-list :label "a") buffer)
+      (unwind-protect
+          (with-current-buffer buffer
+            (let ((root (vui-get-instance)))
+              ;; `vui-mount' leaves no render record, and this render
+              ;; does: the renders after it patch the component list
+              (vui-rerender root)
+              (vui-update root '(:label "b"))
+              (expect (buffer-string)
+                      :to-equal "  b\n  two    \nafter 1\nafter 2")))
+        (kill-buffer buffer)))))
 
 (defun vui-layout-test--faces-at (pos)
   "Return the face property at POS as a list."

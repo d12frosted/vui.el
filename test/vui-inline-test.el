@@ -948,6 +948,93 @@ of them between the region markers of its instance."
   (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
     (buffer-substring-no-properties start end)))
 
+(vui-defcomponent inline-padded-box (label)
+  "A box with left padding around two lines: LABEL in brackets, then \"two\"."
+  :render (vui-box (vui-vstack (vui-text (format "[%s]" label))
+                               (vui-text "two"))
+                   :width 10 :padding-left 2))
+
+(vui-defcomponent inline-hooked-text (text hook)
+  "TEXT as it is.  Its `:on-mount' calls HOOK."
+  :on-mount (when hook (funcall hook))
+  :render (vui-text text))
+
+(vui-defcomponent inline-hooked-box (text hook)
+  "An `inline-hooked-text' in a box with left padding."
+  :render (vui-box (vui-component 'inline-hooked-text :text text :hook hook)
+                   :width 8 :padding-left 2))
+
+(vui-defcomponent inline-hooked-table (text hook)
+  "An `inline-hooked-text' in the first row of a table, indented."
+  :render (vui-vstack
+           :indent 2
+           (vui-table :columns '((:width 6))
+                      :rows (list (list (vui-component 'inline-hooked-text
+                                                       :text text :hook hook))
+                                  '("r2")))))
+
+(describe "inline regions with indented layouts"
+  (it "leaves the host lines after the region as they are"
+    (with-temp-buffer
+      (insert "host\nline1\nline2\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-padded-box :label "a") 6)))
+        (expect (buffer-substring-no-properties
+                 (cdr (vui--inline-bounds instance)) (point-max))
+                :to-equal "line1\nline2\n")
+        (vui-update instance '(:label "b"))
+        (expect (buffer-substring-no-properties
+                 (cdr (vui--inline-bounds instance)) (point-max))
+                :to-equal "line1\nline2\n")
+        ;; What the box renders in a buffer of its own
+        (expect (vui-inline-test--region-text instance)
+                :to-equal (with-temp-buffer
+                            (vui-render (vui-component 'inline-padded-box
+                                                       :label "b"))
+                            (buffer-string))))))
+
+  ;; The hook of a component in the layout runs while the layout is
+  ;; written, before it adds its indent
+  (pcase-dolist (`(,layout ,edit ,text ,name)
+                 '((inline-hooked-box insert "a\nb"
+                    "a box whose component writes host text above it")
+                   (inline-hooked-box delete "a\nb\nc"
+                    "a box whose component deletes host text above it")
+                   (inline-hooked-box delete-more "x"
+                    "a box whose component deletes more host text above it than it writes")
+                   (inline-hooked-table insert "x"
+                    "a table whose component writes host text above it")
+                   (inline-hooked-table delete-more "x"
+                    "a table whose component deletes more host text above it than it writes")))
+    (it (format "indents %s" name)
+      (let ((host "ABCDEFGHIJ\n\nAFTER1\nAFTER2")
+            (hook (pcase edit
+                    ('insert (lambda ()
+                               (vui-inline-test--host-insert 1 "N1\n")))
+                    ;; Fewer characters than the layout writes, or more
+                    ('delete (lambda ()
+                               (let ((inhibit-read-only t))
+                                 (delete-region 1 4))))
+                    ('delete-more (lambda ()
+                                    (let ((inhibit-read-only t))
+                                      (delete-region 1 12))))))
+            (expected nil))
+        (with-temp-buffer
+          (insert host)
+          (setq expected (vui-inline-test--region-text
+                          (vui-mount-inline
+                           (vui-component layout :text text) 12))))
+        (with-temp-buffer
+          (insert host)
+          (let ((instance (vui-mount-inline
+                           (vui-component layout :text text :hook hook)
+                           12)))
+            (expect (vui-inline-test--region-text instance)
+                    :to-equal expected)
+            (expect (buffer-substring-no-properties
+                     (cdr (vui--inline-bounds instance)) (point-max))
+                    :to-equal "\nAFTER1\nAFTER2")))))))
+
 (describe "inline regions whose hooks edit the host buffer"
   ;; The hooks of a component run inside its render.  What they write or
   ;; delete outside the region belongs to the host.
