@@ -7005,9 +7005,13 @@ first item pays, as a plain child component, not a row."
          (end (vui-stream-handle-region-end handle))
          (id (vui--stream-push handle vnode)))
     (cond
-     ;; Not live yet: emitted on the next render.
+     ;; Not live yet: emitted on the next render.  A render in progress
+     ;; can be writing the stream right now, from its items as they were
+     ;; before this one (a hook of a component in the tree appends): it
+     ;; writes the stream again when it is done.
      ((not (and buf (buffer-live-p buf) end (marker-position end)))
-      nil)
+      (when (and buf (buffer-live-p buf) vui--rendering-p)
+        (vui--stream-request-rebuild handle)))
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
      ;; the whole tree once.  (Only the very first item pays this.)
      ((not (vui--stream-in-place-p handle))
@@ -7419,13 +7423,17 @@ content-only and no-op on a component node for now."
              (cell (vui-stream-handle-items-rev handle))
              (id-cell (vui-stream-handle-ids-rev handle)))
         ;; The renders the row's hooks asked for run inside the append,
-        ;; and they may have put items after the row
-        (when (vui-instance-p row)
-          (let ((c cell) (i id-cell))
-            (while (and c (not (eq (car c) row)))
-              (setq c (cdr c) i (cdr i)))
-            (when c
-              (setq cell c id-cell i))))
+        ;; and they may have put items after the row.  On an empty stream
+        ;; the component is not a row: it renders in the render of the
+        ;; tree that the append asks for, and its hooks run there, so
+        ;; they may put items after its vnode.
+        (let ((item (if (vui-instance-p row) row vnode))
+              (c cell)
+              (i id-cell))
+          (while (and c (not (eq (car c) item)))
+            (setq c (cdr c) i (cdr i)))
+          (when c
+            (setq cell c id-cell i)))
         (let ((node (vui--stream-node-create
                      :handle handle
                      :cell cell
