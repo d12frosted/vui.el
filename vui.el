@@ -8869,9 +8869,19 @@ processes, subscriptions) when the buffer is killed."
   "Tear down inline INSTANCE and remove its region from the buffer.
 Returns INSTANCE, or nil if it was already unmounted."
   (when (vui-instance-buffer instance)
-    (let ((buffer (vui-instance-buffer instance))
-          (start (vui-instance-region-start instance))
-          (end (vui-instance-region-end instance)))
+    (let* ((buffer (vui-instance-buffer instance))
+           (start (vui-instance-region-start instance))
+           (end (vui-instance-region-end instance))
+           ;; A row of a stream that is in the buffer: the stream is
+           ;; written again without it once its text is gone.  That drops
+           ;; the separator next to the row, and the stream gets an end of
+           ;; its own when the row's end was its end.  Not for the rows
+           ;; of a stream that goes with its owner: it is parked by then,
+           ;; and no longer one of the buffer's streams.
+           (stream (and (vui-instance-base-path instance)
+                        (buffer-live-p buffer)
+                        (with-current-buffer buffer
+                          (vui--stream-of-row instance)))))
       ;; Run cleanups and detach first, so the tree cannot re-render
       ;; into the region we are about to delete
       (vui--unmount-root instance)
@@ -8895,6 +8905,8 @@ Returns INSTANCE, or nil if it was already unmounted."
       (when end (set-marker end nil))
       (setf (vui-instance-region-start instance) nil)
       (setf (vui-instance-region-end instance) nil)
+      (when stream
+        (vui--stream-request-rebuild stream))
       instance)))
 
 (defun vui-unmount (&optional buffer-or-instance)
@@ -8906,6 +8918,9 @@ BUFFER-OR-INSTANCE selects what to unmount:
   content is erased, but the buffer itself is not killed.
 - an instance returned by `vui-mount-inline': its managed region is
   removed from the host buffer; the rest of the buffer is untouched.
+- a component row of a `vui-stream': its region and the separator
+  next to it go, and the root of the buffer renders again to write
+  the stream without it.
 - an instance returned by `vui-mount': same as passing its buffer.
 
 The teardown lifecycle runs for every component in the tree:
