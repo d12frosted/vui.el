@@ -964,6 +964,23 @@ of them between the region markers of its instance."
   :render (vui-box (vui-component 'inline-hooked-text :text text :hook hook)
                    :width 8 :padding-left 2))
 
+(vui-defcomponent inline-hooked-indented-box (text hook)
+  "An `inline-hooked-text' in a box, in an indented vstack."
+  :render (vui-vstack
+           :indent 2
+           (vui-box (vui-component 'inline-hooked-text :text text :hook hook)
+                    :width 6)))
+
+(vui-defcomponent inline-hooked-empty-box (hook)
+  "An empty `inline-hooked-text' in a box, between two lines of an
+indented vstack."
+  :render (vui-vstack
+           :indent 2
+           (vui-text "xx")
+           (vui-box (vui-component 'inline-hooked-text :text "" :hook hook)
+                    :width 0)
+           (vui-text "yy")))
+
 (vui-defcomponent inline-hooked-table (text hook)
   "An `inline-hooked-text' in the first row of a table, indented."
   :render (vui-vstack
@@ -1002,6 +1019,12 @@ of them between the region markers of its instance."
                     "a box whose component deletes host text above it")
                    (inline-hooked-box delete-more "x"
                     "a box whose component deletes more host text above it than it writes")
+                   (inline-hooked-indented-box insert "a\nb"
+                    "a box in a vstack whose component writes host text above it")
+                   (inline-hooked-indented-box delete "a\nb\nc"
+                    "a box in a vstack whose component deletes host text above it")
+                   (inline-hooked-indented-box delete-more "x"
+                    "a box in a vstack whose component deletes more host text above it than it writes")
                    (inline-hooked-table insert "x"
                     "a table whose component writes host text above it")
                    (inline-hooked-table delete-more "x"
@@ -1033,7 +1056,30 @@ of them between the region markers of its instance."
                     :to-equal expected)
             (expect (buffer-substring-no-properties
                      (cdr (vui--inline-bounds instance)) (point-max))
-                    :to-equal "\nAFTER1\nAFTER2")))))))
+                    :to-equal "\nAFTER1\nAFTER2"))))))
+
+  ;; The vstack drops the separator and the indent it wrote before a
+  ;; child that shows nothing
+  (pcase-dolist (`(,edit ,name)
+                 '((insert "writes host text above it")
+                   (delete "deletes host text above it")))
+    (it (format "drops the line of an empty box whose component %s" name)
+      (with-temp-buffer
+        (insert "ABCDEFGHIJ\n\nAFTER")
+        (let* ((hook (pcase edit
+                       ('insert (lambda ()
+                                  (vui-inline-test--host-insert 1 "N1\n")))
+                       ('delete (lambda ()
+                                  (let ((inhibit-read-only t))
+                                    (delete-region 1 4))))))
+               (instance (vui-mount-inline
+                          (vui-component 'inline-hooked-empty-box :hook hook)
+                          12)))
+          (expect (vui-inline-test--region-text instance)
+                  :to-equal "  xx\n  yy")
+          (expect (buffer-substring-no-properties
+                   (cdr (vui--inline-bounds instance)) (point-max))
+                  :to-equal "\nAFTER"))))))
 
 (describe "inline regions whose hooks edit the host buffer"
   ;; The hooks of a component run inside its render.  What they write or

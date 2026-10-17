@@ -262,6 +262,68 @@
                               (vui-text "z")))
       (expect (buffer-string) :to-equal "  a\n  \nz")))
 
+  (it "gets the indent of a vstack on each of its lines"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
+                             :width 4 :padding-left 2)
+                    (vui-text "y")))
+      ;; The box measures "a\nb" as 2 wide: no alignment padding
+      (expect (buffer-string) :to-equal "  x\n    a\n    b\n  y")))
+
+  (it "gets the indent of a vstack after the first line of an hstack"
+    (with-temp-buffer
+      ;; The first line goes on after "k:", as for a vstack there
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack (vui-text "k:")
+                                (vui-vstack
+                                 (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
+                                          :width 2)))))
+      (expect (buffer-string) :to-equal "  k: a\n  b")))
+
+  (it "leaves no line in an indented vstack when it shows nothing"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-box nil :width 0)
+                    (vui-text "y")))
+      (expect (buffer-string) :to-equal "  x\n  y")))
+
+  (it "gets the indent of a vstack on each line of a table in it"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-box (vui-table :columns '((:width 1) (:width 1))
+                                        :rows '(("a" "b") ("c" "d")))
+                             :width 3)))
+      (expect (buffer-string) :to-equal "  a b\n  c d")))
+
+  (it "keeps its face off the indent of a vstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
+                             :face 'shadow :width 3 :padding-left 1)))
+      (expect (buffer-string) :to-equal "   a\n   b")
+      ;; On each line the indent of the vstack has no face, as on the
+      ;; first line; the padding of the box after it has the face
+      (expect (vui-layout-test--faces-at 1) :to-equal nil)
+      (expect (vui-layout-test--faces-at 6) :to-equal nil)
+      (expect (vui-layout-test--faces-at 7) :to-equal nil)
+      (expect (vui-layout-test--faces-at 8) :to-contain 'shadow)
+      (expect (vui-layout-test--faces-at 9) :to-contain 'shadow)))
+
+  (it "keeps the indent of a vstack out of a field that starts a line"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-box (vui-vstack (vui-text "a")
+                                         (vui-field :value "f" :size 3))
+                             :width 4)))
+      (expect (buffer-string) :to-equal "  a\n  f  ")
+      (let ((field (widget-field-at 7)))
+        (expect field :to-be-truthy)
+        (expect (widget-value field) :to-equal "f")
+        (expect (widget-field-at 6) :not :to-be-truthy))))
+
   (it "preserves button interactivity inside box"
     (let ((clicked nil))
       (vui-defcomponent box-button-test ()
@@ -303,7 +365,7 @@
   ;; An item appended to a live stream is written above the content
   ;; after the stream, so the text after the layout is in the buffer
   ;; while it is written.  Only the layout's own lines get its indent.
-  (dolist (layout '(box table))
+  (dolist (layout '("box" "box in a vstack" "table"))
     (it (format "indents only the lines of a %s" layout)
       (let ((vui-render-delay nil)
             (log (vui-make-stream))
@@ -314,12 +376,18 @@
             (with-current-buffer buffer
               (vui-stream-append
                log
-               (if (eq layout 'box)
-                   (vui-box (vui-vstack (vui-text "x") (vui-text "y"))
-                            :width 6 :padding-left 2)
-                 (vui-vstack :indent 2
-                             (vui-table :columns '((:width 1))
-                                        :rows '(("x") ("y"))))))
+               (pcase layout
+                 ("box"
+                  (vui-box (vui-vstack (vui-text "x") (vui-text "y"))
+                           :width 6 :padding-left 2))
+                 ("box in a vstack"
+                  (vui-vstack :indent 2
+                              (vui-box (vui-vstack (vui-text "x") (vui-text "y"))
+                                       :width 3)))
+                 (_
+                  (vui-vstack :indent 2
+                              (vui-table :columns '((:width 1))
+                                         :rows '(("x") ("y")))))))
               (expect (buffer-string) :to-match "\nfooter A\nfooter B\\'")
               (let ((text (buffer-string))
                     (root (vui-get-instance)))

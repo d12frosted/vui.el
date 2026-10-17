@@ -8152,19 +8152,24 @@ is written."
                   :face (vui-vnode-grid-face child)
                   :keymap (vui-vnode-grid-keymap child)
                   :key (vui-vnode-grid-key child))))
-               ;; Tables: render with indent, then add indent after internal newlines
-               ((and (vui-vnode-table-p child) (> indent 0))
+               ;; Tables and boxes: render with indent, then add indent
+               ;; after internal newlines
+               ((and (or (vui-vnode-table-p child) (vui-vnode-box-p child))
+                     (> indent 0))
                 (unless skip-this-indent
                   (insert indent-str))
-                ;; A marker: the hooks of the components in the table can
-                ;; write or delete text above it
-                (let ((table-start (point-marker)))
+                ;; A marker: the hooks of the components in the layout can
+                ;; write or delete text above it.  The separator and the
+                ;; indent are right before it, LEAD characters.
+                (let ((layout-start (point-marker))
+                      (lead (- (point) sep-start)))
                   (vui--render-vnode child)
                   ;; Add indent after each internal newline, not after the
                   ;; newlines of what follows in the buffer
-                  (vui--indent-lines table-start (point) indent-str)
-                  (setq content-start (marker-position table-start))
-                  (set-marker table-start nil)))
+                  (vui--indent-lines layout-start (point) indent-str)
+                  (setq content-start (marker-position layout-start)
+                        sep-start (- content-start lead))
+                  (set-marker layout-start nil)))
                ;; Other children: insert indent (if needed) and render
                (t
                 (when (and (> indent 0) (not skip-this-indent))
