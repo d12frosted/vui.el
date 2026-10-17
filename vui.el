@@ -6808,8 +6808,11 @@ stream that is not rendered yet."
 Call it before deleting the text between START and END (the whole
 buffer when they are nil); see `vui--stream-park'.  A stream with no
 text right at START or END may belong to the text on either side, so it
-stays: it holds no row and no node, and its next append re-renders the
-tree.
+stays.  It can still hold items, also component rows and open nodes,
+but none of them has text.  Whatever gives the stream text again lays
+the tree out again: an append, a node put before or after another, an
+edit of a node or of the last item, a row that renders text (see
+`vui--stream-in-place-p' and `vui--stream-relay-empty-transition').
 
 ROW is the inline instance whose region is deleted, if any.  When it is
 the only item of a stream, the stream has the same text as ROW, and it
