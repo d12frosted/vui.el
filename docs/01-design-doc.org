@@ -233,7 +233,7 @@ An instance is a live component in the tree with actual props, state, and childr
   buffer                  ; Buffer this instance is rendered into
 
   ;; Lifecycle state
-  mounted-p               ; Has on-mount been called?
+  mounted-p               ; t after on-mount, `unmounted' after on-unmount
   mount-cleanup           ; Cleanup function returned from on-mount
 
   ;; Hook state

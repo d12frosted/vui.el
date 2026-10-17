@@ -813,5 +813,137 @@ the count as COUNT says (see `vui-lifecycle-test--mount-and-count')."
             (when (get-buffer "*test-side*")
               (kill-buffer "*test-side*"))))))))
 
+(vui-defcomponent lifecycle-unmounting-effect (go)
+  "Has an effect that unmounts *test-effect-unmount* once GO is non-nil."
+  :render (progn
+            (vui-use-effect (go)
+              (when go
+                (vui-unmount "*test-effect-unmount*"))
+              nil)
+            (vui-text "first")))
+
+(vui-defcomponent lifecycle-counting-effect (go)
+  "Has an effect that runs again when GO changes.  It counts its setups
+and cleanups in `vui-lifecycle-test--effects'."
+  :render (progn
+            (vui-use-effect (go)
+              (cl-incf (car vui-lifecycle-test--effects))
+              (lambda () (cl-incf (cdr vui-lifecycle-test--effects))))
+            (vui-text "second")))
+
+(vui-defcomponent lifecycle-effect-unmount-root ()
+  :state ((go nil))
+  :render (vui-vstack
+           (vui-component 'lifecycle-unmounting-effect :go go)
+           (vui-component 'lifecycle-counting-effect :go go)
+           (vui-button "go" :on-click (lambda () (vui-set-state :go t)))))
+
+(defvar vui-lifecycle-test--mounts 0
+  "How many times `lifecycle-mount-counter' mounted.")
+
+(vui-defcomponent lifecycle-unmounting-hook (go)
+  "Its `:on-update' unmounts *test-hook-unmount* once GO is non-nil."
+  :on-update (when go (vui-unmount "*test-hook-unmount*"))
+  :render (vui-text "killer"))
+
+(vui-defcomponent lifecycle-mount-counter (go)
+  "Counts its mounts in `vui-lifecycle-test--mounts'."
+  :on-mount (cl-incf vui-lifecycle-test--mounts)
+  :render (progn (ignore go) (vui-text "after")))
+
+(vui-defcomponent lifecycle-hook-unmount-root ()
+  :state ((go nil))
+  :render (vui-fragment
+           (vui-component 'lifecycle-unmounting-hook :go go)
+           (vui-component 'lifecycle-mount-counter :go go)
+           (vui-button "go" :on-click (lambda () (vui-set-state :go t)))))
+
+(describe "a tree unmounted by a hook of its render"
+  ;; The render goes on after the hook: the components after it render
+  ;; again, but they were mounted before, and are not mounted again
+  (it "does not mount the components after the hook again"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--mounts 0))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-hook-unmount-root)
+                   "*test-hook-unmount*"))
+      (unwind-protect
+          (with-current-buffer "*test-hook-unmount*"
+            (goto-char (point-min))
+            (search-forward "go")
+            (push-button (match-beginning 0))
+            (expect vui-lifecycle-test--mounts :to-equal 1))
+        (kill-buffer "*test-hook-unmount*")))))
+
+(vui-defcomponent lifecycle-effect-unmount-first ()
+  :render (vui-vstack
+           (vui-component 'lifecycle-unmounting-effect :go t)
+           (vui-component 'lifecycle-counting-effect :go t)))
+
+(defvar vui-lifecycle-test--log nil
+  "What `lifecycle-self-unmounting-effect' did, newest first.")
+
+(vui-defcomponent lifecycle-self-unmounting-effect ()
+  "Has an effect that logs its runs and cleanups, and that unmounts
+*test-effect-unmount* when it runs again."
+  :state ((go nil))
+  :render (progn
+            (vui-use-effect (go)
+              (let ((run (if go 'run2 'run1)))
+                (push (list 'setup run) vui-lifecycle-test--log)
+                (when go
+                  (vui-unmount "*test-effect-unmount*"))
+                (lambda () (push (list 'cleanup run) vui-lifecycle-test--log))))
+            (vui-button "go" :on-click (lambda () (vui-set-state :go t)))))
+
+(describe "a tree unmounted by one of its effects"
+  ;; The effects after that one in the same commit belong to a tree that
+  ;; is gone: its unmount ran their cleanups already
+  (it "runs none of the effects after it"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--effects (cons 0 0)))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-effect-unmount-root)
+                   "*test-effect-unmount*"))
+      (unwind-protect
+          (with-current-buffer "*test-effect-unmount*"
+            (expect vui-lifecycle-test--effects :to-equal (cons 1 0))
+            (goto-char (point-min))
+            (search-forward "go")
+            (push-button (match-beginning 0))
+            (expect (vui-get-instance) :to-be nil)
+            (expect vui-lifecycle-test--effects :to-equal (cons 1 1)))
+        (kill-buffer "*test-effect-unmount*"))))
+
+  (it "runs none of the effects after it on the first mount"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--effects (cons 0 0)))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'lifecycle-effect-unmount-first)
+                         "*test-effect-unmount*"))
+            (expect (vui-get-instance "*test-effect-unmount*") :to-be nil)
+            (expect vui-lifecycle-test--effects :to-equal (cons 0 0)))
+        (kill-buffer "*test-effect-unmount*"))))
+
+  (it "cleans up each run of that effect once"
+    ;; The cleanup of the first run runs before the second run, and the
+    ;; second run unmounts the tree: its cleanup runs when it is done
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--log nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-self-unmounting-effect)
+                   "*test-effect-unmount*"))
+      (unwind-protect
+          (with-current-buffer "*test-effect-unmount*"
+            (goto-char (point-min))
+            (search-forward "go")
+            (push-button (match-beginning 0))
+            (expect (reverse vui-lifecycle-test--log)
+                    :to-equal '((setup run1) (cleanup run1)
+                                (setup run2) (cleanup run2))))
+        (kill-buffer "*test-effect-unmount*")))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

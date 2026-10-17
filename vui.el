@@ -863,7 +863,7 @@ Maps boundary keys to caught errors.  Lazily initialized by
   children    ; Child vui-instances
   buffer      ; Buffer this instance is rendered into
   cached-vtree  ; Last rendered vtree (for should-update optimization)
-  mounted-p   ; Has this been mounted?
+  mounted-p   ; t once mounted, `unmounted' after the unmount, else nil
   mount-cleanup ; Cleanup function returned from on-mount, called during unmount
   effects     ; Alist of (effect-id . (deps . cleanup-fn)) for vui-use-effect
   refs        ; Hash table of ref-id -> (value . nil) for vui-use-ref
@@ -2306,25 +2306,36 @@ of its stream renders inside the render of another root (see
   (let ((effects (nreverse vui--pending-effects)))
     (setq vui--pending-effects nil)
     (dolist (effect effects)
-      (let* ((instance (nth 0 effect))
-             (vui--root-instance (vui--find-root instance))
-             (effect-id (nth 1 effect))
-             (deps (nth 2 effect))
-             (effect-fn (nth 3 effect))
-             (prev-cleanup (car (nth 4 effect))))
-        ;; Run cleanup from previous effect (with context for vui-set-state)
-        (when (functionp prev-cleanup)
-          (let ((vui--current-instance instance))
-            (funcall prev-cleanup)))
-        ;; Run new effect, capture cleanup
-        ;; Bind component context so vui-set-state works in effect body
-        (let* ((vui--current-instance instance)
-               (new-cleanup (funcall effect-fn)))
-          ;; Store new deps and cleanup in instance
-          (let ((effects (vui-instance-effects instance)))
-            (setf (vui-instance-effects instance)
-                  (cons (cons effect-id (list deps new-cleanup))
-                        (assq-delete-all effect-id effects)))))))))
+      ;; An effect before this one may have unmounted the instance: the
+      ;; unmount ran its cleanups, and nothing would clean up a new run
+      (unless (eq (vui-instance-mounted-p (nth 0 effect)) 'unmounted)
+        (let* ((instance (nth 0 effect))
+               (vui--root-instance (vui--find-root instance))
+               (effect-id (nth 1 effect))
+               (deps (nth 2 effect))
+               (effect-fn (nth 3 effect))
+               (prev-cleanup (car (nth 4 effect))))
+          ;; Run cleanup from previous effect (with context for vui-set-state)
+          (when (functionp prev-cleanup)
+            (let ((vui--current-instance instance))
+              (funcall prev-cleanup))
+            ;; It is the cleanup the instance holds: an unmount that the
+            ;; effect does must not call it again
+            (setcar (nth 4 effect) nil))
+          ;; Run new effect, capture cleanup
+          ;; Bind component context so vui-set-state works in effect body
+          (let* ((vui--current-instance instance)
+                 (new-cleanup (funcall effect-fn)))
+            (if (eq (vui-instance-mounted-p instance) 'unmounted)
+                ;; The effect unmounted its own tree, and the unmount
+                ;; is over: only this cleans up what the effect set up
+                (when (functionp new-cleanup)
+                  (funcall new-cleanup))
+              ;; Store new deps and cleanup in instance
+              (let ((effects (vui-instance-effects instance)))
+                (setf (vui-instance-effects instance)
+                      (cons (cons effect-id (list deps new-cleanup))
+                            (assq-delete-all effect-id effects)))))))))))
 
 (defun vui--cleanup-instance-effects (instance)
   "Run all cleanup functions for INSTANCE's effects."
@@ -4361,7 +4372,12 @@ record of the contexts its subtree read."
        (vui-component-def-on-unmount def)
        instance
        (vui-instance-props instance)
-       (vui-instance-state instance)))))
+       (vui-instance-state instance))))
+  ;; Not mounted any more, so its effects still waiting to run are
+  ;; skipped (see `vui--run-pending-effects').  Not nil: it was mounted,
+  ;; and a render that goes on after a hook unmounted the tree must not
+  ;; mount it again.
+  (setf (vui-instance-mounted-p instance) 'unmounted))
 
 (defun vui--detach-instance (instance)
   "Clear buffer references for INSTANCE and all its children, recursively.

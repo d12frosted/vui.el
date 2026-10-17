@@ -28,6 +28,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An effect that unmounts its own tree no longer lets the effects after
+  it in the same render run. They ran on the unmounted tree after its
+  cleanups, so nothing cleaned up what they set up, and an effect that
+  ran again because its deps changed called the cleanup of its last run
+  a second time. The effect that unmounts the tree no longer has the
+  cleanup of its last run called twice either, and the cleanup of the
+  run that unmounted it now runs.
+
 - =vui-mount= called from a hook or an effect of a render no longer
   runs re-renders in the middle of that render. With
   =vui-render-delay= nil, re-renders asked for during a render wait
