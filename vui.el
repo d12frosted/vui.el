@@ -6565,6 +6565,19 @@ When CELL is not in the list, PREV is its last cons."
             id-prev (cdr id-prev)))
     (cons prev id-prev)))
 
+(defun vui--stream-drop-item (handle cell)
+  "Take the item of CELL, a cons of HANDLE's items, out of the stream.
+Its id goes with it.  Nothing is written: the caller writes the stream
+again, or deletes the item's text itself."
+  (if (eq cell (vui-stream-handle-items-rev handle))
+      (progn
+        (pop (vui-stream-handle-items-rev handle))
+        (pop (vui-stream-handle-ids-rev handle)))
+    (pcase-let ((`(,prev . ,id-prev) (vui--stream-cells-before handle cell)))
+      (when (eq (cdr prev) cell)
+        (setcdr prev (cdr cell))
+        (setcdr id-prev (cddr id-prev))))))
+
 (defun vui--stream-item-path (handle id)
   "Return the render path of HANDLE's item ID.
 In the form of `vui--render-path', innermost step first: bind that
@@ -6698,8 +6711,17 @@ silently dropping every subsequent streamed append."
             (when-let* ((node (cdr (assq index nodes))))
               (vui--stream-node-bind node last-start (point)
                                      (current-buffer)))))
-         ;; A row unmounted on its own has no text any more
-         ((not (vui--stream-row-p item)))
+         ;; A row unmounted on its own has no text any more.  It is no
+         ;; longer an item of the stream either: the unmount takes it out
+         ;; of a stream in the buffer, and this one was parked then (the
+         ;; root showed another tree, or a hook of this render did it).
+         ;; The loop is over a copy of the items.
+         ((not (vui--stream-row-p item))
+          (unless vui--measuring-p
+            (when-let* ((cell (memq item (vui-stream-handle-items-rev handle))))
+              (vui--stream-drop-item handle cell))
+            (setf (vui-stream-handle-rows handle)
+                  (delq item (vui-stream-handle-rows handle)))))
          ;; Nor does a row that is being unmounted: a hook of it made
          ;; this render, and the row must not render again (see
          ;; `vui--unmounting').  The unmount still deletes the row's
@@ -7654,16 +7676,7 @@ if NODE is not live."
           ;; As in `vui-stream-update-last'
           (vui--table-restore-header-line)))
       ;; splice NODE's cell out of items-rev, and its id out of ids-rev
-      (if (eq cell head)
-          (progn
-            (setf (vui-stream-handle-items-rev handle) (cdr cell))
-            (pop (vui-stream-handle-ids-rev handle)))
-        (pcase-let ((`(,prev . ,id-prev)
-                     (vui--stream-cells-before handle cell)))
-          (when (cdr prev)
-            (setcdr prev (cdr cell))
-            (when (cdr id-prev)
-              (setcdr id-prev (cddr id-prev))))))
+      (vui--stream-drop-item handle cell)
       (vui-stream-finalize node)
       ;; If NODE was the last item, the handle's last-start now dangles in the
       ;; deleted span - re-point it at the new last item so a later content
@@ -8803,6 +8816,13 @@ Returns INSTANCE, or nil if it was already unmounted."
       (setf (vui-instance-region-start instance) nil)
       (setf (vui-instance-region-end instance) nil)
       (when stream
+        ;; It is no longer an item of the stream.  When it was the last
+        ;; item, the item before it is the last one again, for
+        ;; `vui-stream-update-last'
+        (when-let* ((cell (memq instance (vui-stream-handle-items-rev stream))))
+          (vui--stream-drop-item stream cell))
+        (setf (vui-stream-handle-rows stream)
+              (delq instance (vui-stream-handle-rows stream)))
         (vui--stream-request-rebuild stream))
       instance)))
 
