@@ -6920,12 +6920,15 @@ first item pays, as a plain child component, not a row."
     (vui--stream-append-content handle vnode))
   handle)
 
-(defun vui--stream-append-content (handle vnode)
-  "Append content VNODE (text/fragment) to HANDLE's stream."
+(defun vui--stream-append-content (handle vnode &optional pushed)
+  "Append content VNODE (text/fragment) to HANDLE's stream.
+PUSHED, when non-nil, is called with no arguments once VNODE is the
+last item of the stream, before anything is written."
   (let* ((prev-last (car (vui-stream-handle-items-rev handle)))
          (buf (vui-stream-handle-buffer handle))
          (end (vui-stream-handle-region-end handle))
-         (id (vui--stream-push handle vnode)))
+         (id (prog1 (vui--stream-push handle vnode)
+               (when pushed (funcall pushed)))))
     (cond
      ;; Not live yet: emitted on the next render.  A render in progress
      ;; can be writing the stream right now, from its items as they were
@@ -7369,20 +7372,32 @@ content-only and no-op on a component node for now."
           (push node (vui-stream-handle-nodes handle))
           node))
     ;; Content node: its own start/end markers bound around the inserted text.
-    (progn
-      (vui--stream-append-content handle (vui--stream-node-vnode vnode))
+    (let ((node nil))
+      ;; The node is one of the stream's nodes before the item is
+      ;; written: a render of the tree that the first item of an empty
+      ;; stream asks for binds it to the text of its item (see
+      ;; `vui--stream-render'), also when the hooks of that render
+      ;; append more items to the stream after it
+      (vui--stream-append-content
+       handle (vui--stream-node-vnode vnode)
+       (lambda ()
+         (setq node (vui--stream-node-create
+                     :handle handle
+                     :cell (vui-stream-handle-items-rev handle)
+                     :id-cell (vui-stream-handle-ids-rev handle)))
+         (push node (vui-stream-handle-nodes handle))))
+      ;; When its item is still the last one, the stream's last-item
+      ;; markers are around its text: it was written in place, or by
+      ;; a render that appended nothing after it
       (let ((buf (vui-stream-handle-buffer handle))
             (ls (vui-stream-handle-last-start handle))
-            (end (vui-stream-handle-region-end handle))
-            (node (vui--stream-node-create
-                   :handle handle
-                   :cell (vui-stream-handle-items-rev handle)
-                   :id-cell (vui-stream-handle-ids-rev handle))))
+            (end (vui-stream-handle-region-end handle)))
         (when (and buf (buffer-live-p buf)
+                   (eq (vui--stream-node-cell node)
+                       (vui-stream-handle-items-rev handle))
                    ls (marker-position ls) end (marker-position end))
-          (vui--stream-node-bind node (marker-position ls) (marker-position end) buf))
-        (push node (vui-stream-handle-nodes handle))
-        node))))
+          (vui--stream-node-bind node (marker-position ls) (marker-position end) buf)))
+      node)))
 
 (defun vui-stream-append-to (node vnode)
   "Append VNODE's content at the end of live NODE's region; return NODE.

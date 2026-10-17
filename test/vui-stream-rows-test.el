@@ -943,6 +943,31 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect (vui-sr-hook--text)
                     :to-equal (concat x "l0|panel|[a]|t|footer")))))
 
+      (it (format "opens a content node on its own item on an empty stream (%s)"
+                  mode)
+        ;; The first item of PANEL asks for a render of the tree, which
+        ;; renders the row of LOG again when LOG is not the first child:
+        ;; its hook appends to PANEL there, after the node's item
+        (vui-sr-hook--with mode nil
+          (let ((once t))
+            (vui-stream-append
+             log (vui-component 'vui-sr-hook-update-row
+                                :label "r"
+                                :hook (lambda ()
+                                        (when once
+                                          (setq once nil)
+                                          (vui-stream-append
+                                           panel (vui-text "t"))))))
+            (let ((node (vui-stream-open panel (vui-text "p")))
+                  (tail (if (eq mode 'first) "" "|t")))
+              (vui-stream-update node (vui-text "P"))
+              (expect (vui-sr-hook--text)
+                      :to-equal (concat x "l0|[r]|panel|P" tail "|footer"))
+              ;; With LOG first, this render is the first to render the
+              ;; row again
+              (expect (vui-sr-hook--render-whole)
+                      :to-equal (concat x "l0|[r]|panel|P|t|footer"))))))
+
       (it (format "writes what a hook appends to an empty stream in its first render (%s)"
                   mode)
         ;; The stream is being written again when the hook appends
