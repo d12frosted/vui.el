@@ -46,6 +46,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= that is the last thing in a component row of another
+  stream (a tool card with its own output, say), or in an inline
+  region, grows that row or region with what it writes at its end.
+  Before, that text went after the row, outside both streams, and the
+  next item of the outer stream went above it, in the middle of the
+  card. In an inline region the text went after the region, and a
+  render of the region wrote it a second time.
+
 - A tree that =vui-mount= mounts from a render that a layout measures
   (=vui-flex=, =vui-grid=, a table) is its own: its components measured
   as the live components of that layout, with their state, and its

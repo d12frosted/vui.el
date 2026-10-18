@@ -1532,6 +1532,336 @@ the root, SEPARATOR is the separator of the stream."
         (vui-stream-append-to node (vui-text "+more"))
         (expect (buffer-string) :to-equal "x\nl0\na+more\nfooter")))))
 
+(vui-defcomponent vui-stream-rows-test-shy (show)
+  "Nothing until SHOW, then a line."
+  :render (when show (vui-text "shy")))
+
+(vui-defcomponent vui-stream-rows-test-hook-card (inner)
+  "A card with INNER; its `:on-mount' appends a row to INNER, once."
+  :on-mount (vui-stream-append inner (vui-component 'vui-stream-rows-test-shy
+                                                    :show t))
+  :render (vui-vstack (vui-text "[h]") (vui-stream inner)))
+
+(vui-defcomponent vui-stream-rows-test-failing ()
+  "Fails to render."
+  :render (error "Boom"))
+
+(vui-defcomponent vui-stream-rows-test-given-card (inner)
+  "A card with INNER, a stream it is given, below it; no stream when nil."
+  :render (vui-vstack (vui-text "[c]") (when inner (vui-stream inner))))
+
+(vui-defcomponent vui-stream-rows-test-log-root (log)
+  "A line, then LOG, which ends the tree."
+  :render (vui-vstack (vui-text "top") (vui-stream log)))
+
+(defvar vui-stream-rows-test--inner nil
+  "The stream of the last `vui-stream-rows-test-card' rendered.")
+
+(vui-defcomponent vui-stream-rows-test-card (label)
+  "LABEL in brackets, with a stream of its own below it."
+  :render (let ((inner (vui-use-stream)))
+            (setq vui-stream-rows-test--inner inner)
+            (vui-vstack (vui-text (format "[%s]" label))
+                        (vui-stream inner))))
+
+(vui-defcomponent vui-stream-rows-test-card-root (log)
+  "LOG, then a footer."
+  :render (vui-vstack (vui-stream log) (vui-text "footer")))
+
+(describe "a stream in a stream row"
+  ;; The stream ends where the row ends: what it gets is the row's, and
+  ;; what the outer stream gets goes after the row
+  (it "grows the row with its items"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                   "*test-card*"))
+      (unwind-protect
+          (with-current-buffer "*test-card*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-stream-rows-test-card
+                                                  :label "c"))
+            (let ((row (car (vui-stream-handle-items-rev log))))
+              (vui-stream-append vui-stream-rows-test--inner (vui-text "out0"))
+              (vui-stream-append vui-stream-rows-test--inner (vui-text "out1"))
+              (expect (buffer-substring-no-properties
+                       (marker-position (vui-instance-region-start row))
+                       (marker-position (vui-instance-region-end row)))
+                      :to-equal "[c]\nout0\nout1"))
+            (vui-stream-append log (vui-text "l1"))
+            (expect (buffer-string)
+                    :to-equal "l0\n[c]\nout0\nout1\nl1\nfooter")
+            (let ((text (buffer-string))
+                  (root (vui-get-instance)))
+              (setf (vui-instance-render-record root) nil)
+              (vui-rerender root)
+              (expect (buffer-string) :to-equal text)))
+        (kill-buffer "*test-card*"))))
+
+  (it "grows the row after the tree renders again"
+    ;; A render of the tree writes the stream again and renders the row
+    ;; in its place, and the row renders its own stream there
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                   "*test-card*"))
+      (unwind-protect
+          (with-current-buffer "*test-card*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-stream-rows-test-card
+                                                  :label "c"))
+            (vui-stream-append vui-stream-rows-test--inner (vui-text "out0"))
+            (let ((root (vui-get-instance)))
+              (setf (vui-instance-render-record root) nil)
+              (vui-rerender root))
+            (vui-stream-append vui-stream-rows-test--inner (vui-text "out1"))
+            (vui-stream-append log (vui-text "l1"))
+            (expect (buffer-string)
+                    :to-equal "l0\n[c]\nout0\nout1\nl1\nfooter"))
+        (kill-buffer "*test-card*"))))
+
+  ;; Each way to write at the end of the inner stream, in place
+  (pcase-dolist (`(,name ,edit ,expected)
+                 `(("an update of its last line"
+                    ,(lambda (inner) (vui-stream-update-last inner (vui-text "out0+")))
+                    "out0+")
+                   ("an append to its open last node"
+                    ,(lambda (inner)
+                       (let ((node (vui-stream-open inner (vui-text "n"))))
+                         (vui-stream-append-to node (vui-text "+"))))
+                    "out0\nn+")
+                   ("an item put after its last node"
+                    ,(lambda (inner)
+                       (let ((node (vui-stream-open inner (vui-text "n"))))
+                         (vui-stream-after node (vui-text "a"))))
+                    "out0\nn\na")
+                   ("a row appended to it"
+                    ,(lambda (inner)
+                       (vui-stream-append inner (vui-component
+                                                 'vui-stream-rows-test-card
+                                                 :label "d"))
+                       (vui-stream-append vui-stream-rows-test--inner
+                                          (vui-text "x0"))
+                       (vui-stream-append vui-stream-rows-test--inner
+                                          (vui-text "x1")))
+                    "out0\n[d]\nx0\nx1")))
+    (it (format "grows the row with %s" name)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream)))
+        (vui-stream-append log (vui-text "l0"))
+        (save-window-excursion
+          (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                     "*test-card*"))
+        (unwind-protect
+            (with-current-buffer "*test-card*"
+              (vui-rerender (vui-get-instance))
+              (vui-stream-append log (vui-component 'vui-stream-rows-test-card
+                                                    :label "c"))
+              (let ((inner vui-stream-rows-test--inner))
+                (vui-stream-append inner (vui-text "out0"))
+                (funcall edit inner))
+              (vui-stream-append log (vui-text "l1"))
+              (expect (buffer-string)
+                      :to-equal (concat "l0\n[c]\n" expected "\nl1\nfooter"))
+              (let ((text (buffer-string))
+                    (root (vui-get-instance)))
+                (setf (vui-instance-render-record root) nil)
+                (vui-rerender root)
+                (expect (buffer-string) :to-equal text)))
+          (kill-buffer "*test-card*")))))
+
+  (it "grows every region it ends, from the first render of its row"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      ;; The stream of the row has text when the row renders first
+      (vui-stream-append inner (vui-text "x0"))
+      (with-temp-buffer
+        (insert "host\n\ntail")
+        (let ((instance (vui-mount-inline
+                         (vui-component 'vui-stream-rows-test-log-root :log log)
+                         6)))
+          (vui-stream-append log (vui-component 'vui-stream-rows-test-given-card
+                                                :inner inner))
+          (vui-stream-append inner (vui-text "x1"))
+          (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+            (expect (buffer-substring-no-properties start end)
+                    :to-equal "top\nl0\n[c]\nx0\nx1"))
+          (expect (buffer-string)
+                  :to-equal "host\ntop\nl0\n[c]\nx0\nx1\ntail")))))
+
+  ;; More ways to write at the end of the inner stream.  The outer item
+  ;; goes after the card, and the text is the one a render of the tree
+  ;; writes
+  (pcase-dolist (`(,name ,edit)
+                 `(("an update of its last node"
+                    ,(lambda (inner)
+                       (vui-stream-update (vui-stream-open inner (vui-text "n"))
+                                          (vui-text "N"))))
+                   ("an update of its last line that rewrites it"
+                    ,(lambda (inner)
+                       (vui-stream-open inner (vui-text "abc"))
+                       (vui-stream-update-last inner (vui-text "Z"))))
+                   ("a node put before its empty last node"
+                    ,(lambda (inner)
+                       (vui-stream-before (vui-stream-open inner (vui-text ""))
+                                          (vui-text "b"))))
+                   ("an empty last row that shows itself"
+                    ,(lambda (inner)
+                       (vui-stream-append inner (vui-component
+                                                 'vui-stream-rows-test-shy))
+                       (let ((row (car (vui-stream-handle-items-rev inner))))
+                         (vui-update row '(:show t)))))))
+    (it (format "grows the row with %s" name)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream)))
+        (vui-stream-append log (vui-text "l0"))
+        (save-window-excursion
+          (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                     "*test-card*"))
+        (unwind-protect
+            (with-current-buffer "*test-card*"
+              (vui-rerender (vui-get-instance))
+              (vui-stream-append log (vui-component 'vui-stream-rows-test-card
+                                                    :label "c"))
+              (let ((inner vui-stream-rows-test--inner))
+                (vui-stream-append inner (vui-text "out0"))
+                (funcall edit inner))
+              (vui-stream-append log (vui-text "l1"))
+              (expect (buffer-string) :to-match "\n\\[c]\n\\(?:.\\|\n\\)*\nl1\nfooter\\'")
+              (let ((text (buffer-string))
+                    (root (vui-get-instance)))
+                (setf (vui-instance-render-record root) nil)
+                (vui-rerender root)
+                (expect (buffer-string) :to-equal text)))
+          (kill-buffer "*test-card*")))))
+
+  (it "grows the row with a row that a hook of the row appends to it"
+    ;; The first render of that row waits for the render of the card
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-stream-append inner (vui-text "t0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                   "*test-card*"))
+      (unwind-protect
+          (with-current-buffer "*test-card*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-stream-rows-test-hook-card
+                                                  :inner inner))
+            (vui-stream-append log (vui-text "l1"))
+            (expect (buffer-string)
+                    :to-equal "l0\n[h]\nt0\nshy\nl1\nfooter")
+            (let ((text (buffer-string))
+                  (root (vui-get-instance)))
+              (setf (vui-instance-render-record root) nil)
+              (vui-rerender root)
+              (expect (buffer-string) :to-equal text)))
+        (kill-buffer "*test-card*"))))
+
+  (it "grows the row a stream moved to"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-stream-append inner (vui-text "out0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                   "*test-card*"))
+      (unwind-protect
+          (with-current-buffer "*test-card*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-stream-rows-test-given-card
+                                                  :inner inner))
+            (let ((first (car (vui-stream-handle-items-rev log))))
+              (vui-stream-append inner (vui-component 'vui-stream-rows-test-shy))
+              (let ((shy (car (vui-stream-handle-items-rev inner))))
+                ;; The stream goes from the first card to a second one
+                (vui-update first '(:inner nil))
+                (vui-stream-append log (vui-component
+                                        'vui-stream-rows-test-given-card
+                                        :inner nil))
+                (let ((second (car (vui-stream-handle-items-rev log))))
+                  (vui-update second (list :inner inner))
+                  (vui-update shy '(:show t))
+                  (vui-stream-append log (vui-text "l1"))
+                  (expect (buffer-substring-no-properties
+                           (marker-position (vui-instance-region-start second))
+                           (marker-position (vui-instance-region-end second)))
+                          :to-equal "[c]\nout0\nshy"))))
+            (let ((text (buffer-string))
+                  (root (vui-get-instance)))
+              (setf (vui-instance-render-record root) nil)
+              (vui-rerender root)
+              (expect (buffer-string) :to-equal text)))
+        (kill-buffer "*test-card*"))))
+
+  (it "puts the end of the row back as it was when an item fails"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-card-root :log log)
+                   "*test-card*"))
+      (unwind-protect
+          (with-current-buffer "*test-card*"
+            (vui-rerender (vui-get-instance))
+            (vui-stream-append log (vui-component 'vui-stream-rows-test-card
+                                                  :label "c"))
+            (let ((row (car (vui-stream-handle-items-rev log)))
+                  (inner vui-stream-rows-test--inner))
+              (vui-stream-append inner (vui-text "out0"))
+              (expect (let ((debug-on-error nil))
+                        (vui-stream-append inner (vui-component
+                                                  'vui-stream-rows-test-failing)))
+                      :to-throw 'error)
+              (expect (marker-insertion-type (vui-instance-region-end row))
+                      :to-be nil)))
+        (kill-buffer "*test-card*"))))
+
+  (it "grows the regions around a row that renders again on its own"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-stream-append inner (vui-text "x0"))
+      (with-temp-buffer
+        (insert "host\n\ntail")
+        (let ((instance (vui-mount-inline
+                         (vui-component 'vui-stream-rows-test-log-root :log log)
+                         6)))
+          (vui-stream-append log (vui-component 'vui-stream-rows-test-given-card
+                                                :inner inner))
+          ;; The row renders on its own, and the stream in it with it
+          (vui-rerender (car (vui-stream-handle-items-rev log)))
+          (vui-stream-append inner (vui-text "x1"))
+          (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+            (expect (buffer-substring-no-properties start end)
+                    :to-equal "top\nl0\n[c]\nx0\nx1"))))))
+
+  (it "grows an inline region it ends"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (with-temp-buffer
+        (insert "host\n\ntail")
+        (let ((instance (vui-mount-inline
+                         (vui-component 'vui-stream-rows-test-log-root
+                                        :log log)
+                         6)))
+          (vui-stream-append log (vui-text "l1"))
+          (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+            (expect (buffer-substring-no-properties start end)
+                    :to-equal "top\nl0\nl1"))
+          (expect (buffer-string) :to-equal "host\ntop\nl0\nl1\ntail"))))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here

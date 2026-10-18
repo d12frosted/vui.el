@@ -883,7 +883,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   consumed-contexts ; Alist (context . value) read by this instance and its subtree
   r-len        ; Rendered length in chars (component-list incremental patching)
   r-streams    ; Streams in that text, each (HANDLE . LENGTH) (see vui--instance-text-length)
-  base-path)   ; Render path an inline instance starts from (stream rows only)
+  base-path    ; Render path an inline instance starts from (stream rows only)
+  regions)     ; The inline regions around a stream row, innermost first
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -994,6 +995,12 @@ row and what it holds belong to its stream.  A render that stops
 because a hook unmounted its tree drops them all, and an error
 boundary that catches drops the ones its children created (see
 `vui--drop-created').  Nil when no render logs.")
+
+(defvar vui--enclosing-regions nil
+  "The inline regions the text being rendered is in, innermost first.
+Bound while an inline region renders (an inline mount, a stream row),
+and recorded by the streams rendered in it (see
+`vui-stream-handle-enclosing').  Nil in the render of a buffer root.")
 
 (defvar vui--stoppable-root nil
   "The root whose render stops when a hook unmounts it, or nil.
@@ -3291,6 +3298,21 @@ it drains the rest."
          (unless (or ,done (not ,top) vui--flushing-rerenders-p)
            (vui--drain-queue-after-error))))))
 
+(defmacro vui--advancing-ends (ends &rest body)
+  "Run BODY with the end markers of ENDS advancing with text written at them.
+ENDS is a list from `vui--regions-ending-at'.  Their insertion types
+are put back after BODY, also when it signals."
+  (declare (indent 1) (debug t))
+  (let ((sym (make-symbol "ends")))
+    `(let ((,sym ,ends))
+       (unwind-protect
+           (progn
+             (dolist (end ,sym)
+               (set-marker-insertion-type (car end) t))
+             ,@body)
+         (dolist (end ,sym)
+           (set-marker-insertion-type (car end) (cdr end)))))))
+
 (defmacro vui--rendering-root (root &rest body)
   "Run BODY, a render of ROOT; return nil when a hook unmounted ROOT.
 A hook in the render (`:on-mount', `:on-update', or the `:on-unmount'
@@ -3395,7 +3417,14 @@ stream does (see `vui--stream-relay-empty-transition')."
                (vui--pending-effects nil)
                ;; An error boundary of another tree does not drop what
                ;; this tree creates
-               (vui--created-instances nil))
+               (vui--created-instances nil)
+               ;; The streams it renders end where it ends, when they
+               ;; are the last thing in it; a row is in the regions of
+               ;; its stream too
+               (vui--enclosing-regions
+                (cons instance
+                      (and row-p (or (vui-instance-regions instance)
+                                     vui--enclosing-regions)))))
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
@@ -3409,8 +3438,16 @@ stream does (see `vui--stream-relay-empty-transition')."
                   ;; unmount it, which ends the render there
                   (setq done (vui--rendering-root instance
                                (setq new-bounds
-                                     (vui--inline-replace-text
-                                      instance pos end-pos))))
+                                     ;; A row with no text, at the end of
+                                     ;; the regions around it, grows them
+                                     ;; with the text it writes now
+                                     (vui--advancing-ends
+                                         (and row-p (= pos end-pos)
+                                              (vui--regions-ending-at
+                                               (cdr vui--enclosing-regions)
+                                               pos))
+                                       (vui--inline-replace-text
+                                        instance pos end-pos)))))
                   ;; The header line of a sticky table that is gone, as
                   ;; in `vui--rerender-buffer'.  Not when a hook killed
                   ;; the buffer: another one is current then
@@ -3542,7 +3579,9 @@ writes there goes into the region."
                (vui--pending-effects nil)
                ;; An error boundary of another tree does not drop what
                ;; this tree creates
-               (vui--created-instances nil))
+               (vui--created-instances nil)
+               ;; A buffer root is in no region
+               (vui--enclosing-regions nil))
           ;; Queue re-render requests (vui-set-state with nil delay)
           ;; until commit and effects are done
           (setq vui--rendering-p t)
@@ -6719,7 +6758,12 @@ render path of the stream itself as of its last render.  See
 ROWS holds the component rows of the stream, newest first, so that
 what looks for them does not walk every item.  OWNER is the instance
 whose `vui-use-stream' made the handle, or nil for a handle from
-`vui-make-stream'.  When OWNER unmounts, so do the rows."
+`vui-make-stream'.  When OWNER unmounts, so do the rows.
+
+ENCLOSING lists the inline regions the stream was last rendered in,
+innermost first: the stream rows and the inline mount around it.  When
+the stream is the last thing in them, its end is theirs too (see
+`vui--growing-excursion')."
   buffer
   region-start
   region-end
@@ -6731,7 +6775,46 @@ whose `vui-use-stream' made the handle, or nil for a handle from
   (next-id 0)
   (path nil)
   (rows nil)
-  (owner nil))
+  (owner nil)
+  (enclosing nil))
+
+(defun vui--regions-ending-at (regions pos)
+  "Return the end markers of REGIONS that end at POS, with their types.
+Each as (MARKER . TYPE), innermost first: REGIONS are inline instances,
+innermost first, and the walk stops at the first that does not end at
+POS."
+  (let ((result nil))
+    (catch 'done
+      (dolist (region regions)
+        (let ((region-end (vui-instance-region-end region)))
+          (if (and region-end (marker-position region-end)
+                   (= region-end pos))
+              (push (cons region-end (marker-insertion-type region-end))
+                    result)
+            (throw 'done nil)))))
+    (nreverse result)))
+
+(defun vui--stream-end-regions (handle)
+  "Return the end markers of the regions that end where HANDLE ends.
+See `vui--regions-ending-at': the regions of
+`vui-stream-handle-enclosing' whose end is the end of the stream."
+  (let ((end (vui-stream-handle-region-end handle)))
+    (and end (marker-position end)
+         (vui--regions-ending-at (vui-stream-handle-enclosing handle)
+                                 (marker-position end)))))
+
+(defmacro vui--growing-excursion (handle &rest body)
+  "Run BODY, an edit of HANDLE's stream in place, in `save-excursion'.
+The stream can be the last thing in inline regions, a stream row that
+holds it or an inline mount: its end is their end then.  What BODY
+writes at the end of the stream is theirs too, but the end marker of a
+region with text stays before text written at it, so that an item
+appended after a row is not the row's.  While BODY runs, the end
+markers of the regions that end with the stream advance with that text
+(see `vui--stream-end-regions' and `vui--advancing-ends')."
+  (declare (indent 1) (debug t))
+  `(vui--advancing-ends (vui--stream-end-regions ,handle)
+     (save-excursion ,@body)))
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -6898,8 +6981,11 @@ ROW as their root (see `vui--run-pending-effects')."
     (set-marker-insertion-type start nil)
     ;; The re-renders of the row start from this path too
     (setf (vui-instance-base-path row) path)
+    ;; The regions it renders in on its own later, too
+    (setf (vui-instance-regions row) vui--enclosing-regions)
     (let ((vui--root-instance row)
           (vui--render-path path)
+          (vui--enclosing-regions (cons row vui--enclosing-regions))
           (vui--context-stack nil)
           ;; The row and what it holds belong to its stream: an error
           ;; boundary around the stream does not drop them
@@ -7013,6 +7099,8 @@ silently dropping every subsequent streamed append."
     (unless vui--measuring-p
       ;; Edits to the live stream render their item under the same path
       (setf (vui-stream-handle-path handle) path)
+      ;; And the regions it is in: its edits grow the ones it ends
+      (setf (vui-stream-handle-enclosing handle) vui--enclosing-regions)
       ;; The end of the stream is the end marker of its last item when
       ;; that is a row, so it follows the row when the row grows or
       ;; shrinks on its own (see `vui--stream-append-row').  Otherwise
@@ -7262,7 +7350,7 @@ last item of the stream, before anything is written."
               ;; Stream text is ephemeral UI, not document history.
               (buffer-undo-list t)
               (vui--render-path (vui--stream-item-path handle id)))
-          (save-excursion
+          (vui--growing-excursion handle
             ;; A component row that ends here stays before the text: its
             ;; END marker does not advance, and neither does its START
             ;; marker when the row renders nothing (see
@@ -7312,7 +7400,7 @@ last item of the stream, before anything is written."
                  (let ((inhibit-read-only t)
                        (inhibit-modification-hooks t)
                        (buffer-undo-list t))
-                   (save-excursion
+                   (vui--growing-excursion handle
                      (goto-char (marker-position end))
                      (let* ((sep-end nil)
                             (row-start (+ (point) (length sep)))
@@ -7327,7 +7415,11 @@ last item of the stream, before anything is written."
                             ;; row is in the stream: a render of the tree
                             ;; before that writes the stream without the row,
                             ;; and the row's text is lost.
-                            (row (let ((vui--flushing-rerenders-p t))
+                            (row (let ((vui--flushing-rerenders-p t)
+                                       ;; Its streams are in the regions
+                                       ;; of this one
+                                       (vui--enclosing-regions
+                                        (vui-stream-handle-enclosing handle)))
                                    (vui--keeping-fields (point)
                                      (insert sep)
                                      ;; The hooks of the row can write at
@@ -7337,6 +7429,10 @@ last item of the stream, before anything is written."
                                      (vui--mount-inline
                                       vnode (point)
                                       (vui--stream-item-path handle id) t)))))
+                       ;; The regions it renders in on its own: its first
+                       ;; render can wait for the render in progress
+                       (setf (vui-instance-regions row)
+                             (vui-stream-handle-enclosing handle))
                        (prog1
                            (if (not (vui--inline-bounds row))
                                ;; It unmounted itself in its first render: it
@@ -7497,7 +7593,7 @@ keeping its state."
                         (vui--render-path
                          (vui--stream-item-path
                           handle (car (vui-stream-handle-ids-rev handle)))))
-                    (save-excursion
+                    (vui--growing-excursion handle
                       (if suffix
                           (progn
                             (goto-char (marker-position end))
@@ -7762,7 +7858,7 @@ finalized, and on a component node (append-to is content-only)."
                 (inhibit-modification-hooks t)
                 (buffer-undo-list t)
                 (vui--render-path (vui--stream-delta-path node vnode)))
-            (save-excursion
+            (vui--growing-excursion handle
               (goto-char (marker-position end))
               ;; The node may end with a field so far
               (vui--keeping-fields (point)
@@ -7815,7 +7911,7 @@ its own region, keeping its state - the out-of-order counterpart of
                     (buffer-undo-list t)
                     (vui--render-path
                      (vui--stream-item-path handle (vui--stream-node-id node))))
-                (save-excursion
+                (vui--growing-excursion handle
                   (delete-region (marker-position start) (marker-position end))
                   (goto-char (marker-position start))
                   (vui--keeping-fields (point)
@@ -7880,7 +7976,7 @@ screen.  A no-op returning nil if NODE is not live."
                 (inhibit-modification-hooks t)
                 (buffer-undo-list t)
                 (vui--render-path (vui--stream-item-path handle id)))
-            (save-excursion
+            (vui--growing-excursion handle
               (goto-char (marker-position start))
               (let ((x-start (point)))
                 ;; NODE may start with a field
@@ -7941,7 +8037,7 @@ if NODE is not live."
                 (inhibit-modification-hooks t)
                 (buffer-undo-list t)
                 (vui--render-path (vui--stream-item-path handle id)))
-            (save-excursion
+            (vui--growing-excursion handle
               (goto-char (marker-position end))
               ;; NODE may end with a field
               (vui--keeping-fields (point)
@@ -8968,6 +9064,8 @@ and do not see its context values."
          ;; An error boundary of the tree this is mounted from does not
          ;; drop what this tree creates
          (vui--created-instances nil)
+         ;; Nor is it in the regions of that tree
+         (vui--enclosing-regions nil)
          ;; The paths of this tree start here.  A mount from a hook or
          ;; an effect of another tree runs inside that tree's render.
          (vui--render-path nil)
