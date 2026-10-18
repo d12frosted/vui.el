@@ -958,6 +958,27 @@ effects again after the cleanups ran, with nothing left to clean them
 up (see `vui--rerender-instance' and `vui--stream-request-rebuild').  A
 list: a hook can unmount another tree.")
 
+(defvar vui--hook-shift 0
+  "How far the lifecycle hooks of renders moved the text before point.
+A hook (`:on-mount', `:on-update', `:on-unmount') runs while the tree
+is written, and can write or delete text above the part being written.
+A layout container keeps where each of its children starts as a
+number, taken right before the child is written, and those move with
+that text.  A number taken with this at SHIFT is at `vui--shifted' of
+it now.  Only the change matters, so it is never reset.
+
+All of the text before point is taken to move as one.  That is right
+for a number taken right before a child: whatever a hook of the child
+edits there is above it.  It is not for the start of a container, which
+its children's hooks can edit after (a stream in the container that a
+component below appends to): a container that needs its start keeps a
+marker (see `vui--container-start').  Markers are not used for every
+number because every insertion pays for each marker in the buffer, and
+the containers are on the hot path of every render.
+
+Every render binds this while it runs: the hooks of a render in another
+buffer, which a render function can start, count there only.")
+
 (defvar vui--queued-rerenders nil
   "Roots whose re-render was requested while a render was in progress.
 Drained by `vui--flush-queued-rerenders' after the in-progress render
@@ -3288,6 +3309,8 @@ stream does (see `vui--stream-relay-empty-transition')."
 (defun vui--rerender-inline-1 (instance)
   "Do the work of `vui--rerender-inline' for INSTANCE."
   (let* ((buffer (vui-instance-buffer instance))
+         ;; The hooks of this render count for it alone
+         (vui--hook-shift vui--hook-shift)
          (bounds (vui--inline-bounds instance))
          (row-p (and buffer (buffer-live-p buffer) bounds
                      (vui-instance-base-path instance)))
@@ -3430,7 +3453,9 @@ writes there goes into the region."
 
 (defun vui--rerender-buffer-1 (instance)
   "Do the work of `vui--rerender-buffer' for INSTANCE."
-  (let ((buffer (vui-instance-buffer instance)))
+  (let ((buffer (vui-instance-buffer instance))
+        ;; The hooks of this render count for it alone
+        (vui--hook-shift vui--hook-shift))
     (when (and buffer (buffer-live-p buffer))
       (with-current-buffer buffer
         (let* ((inhibit-read-only t)
@@ -4259,6 +4284,42 @@ INSTANCE is the component instance where the error occurred."
       ('ignore nil)
       ((pred functionp) (funcall handler hook-name err instance)))))
 
+(defmacro vui--shifting-point (&rest body)
+  "Run BODY, a lifecycle hook of a render, with point kept where it is.
+Add to `vui--hook-shift' how far the text before point moved: point
+moves with it.  What renders inside BODY count for themselves, in their
+own buffers, and are not added."
+  (declare (indent 0) (debug t))
+  (let ((point (make-symbol "point"))
+        (shift (make-symbol "shift")))
+    `(let ((,point (point))
+           (,shift vui--hook-shift))
+       ;; Also when the hook signals: its edits stay
+       (unwind-protect (save-excursion ,@body)
+         (setq vui--hook-shift (+ ,shift (- (point) ,point)))))))
+
+(defsubst vui--shifted (pos shift)
+  "Return where POS is now, taken when `vui--hook-shift' was SHIFT.
+Not before the start of the buffer: a hook can delete from above POS
+to past it."
+  (max (point-min) (+ pos (- vui--hook-shift shift))))
+
+(defun vui--container-start (face keymap)
+  "Return the start of a container that is written from point.
+A marker when the container has a FACE or a KEYMAP to put on its text
+once it is written: the hooks of its children can write or delete text
+above it, or in its text written before them.  Otherwise nothing reads
+the start, and it is nil.  See `vui--finish-container'."
+  (and (or face keymap) (point-marker)))
+
+(defun vui--finish-container (start face keymap)
+  "Put FACE and KEYMAP on the text from START to point; let go of START.
+START is from `vui--container-start'."
+  (when start
+    (when (marker-position start)
+      (vui--apply-region-props start (point) face keymap))
+    (set-marker start nil)))
+
 (defun vui--call-lifecycle-hook (hook-name hook-fn instance &rest args)
   "Call HOOK-FN with ARGS, catching errors according to configuration.
 HOOK-NAME is a string like \"on-mount\" for error messages.
@@ -4361,10 +4422,12 @@ record of the contexts its subtree read."
                            component-name)
                    :warning)
                 (puthash child t seen)))))
-        ;; Call on-unmount for children that were removed
+        ;; Call on-unmount for children that were removed.  Its hooks
+        ;; run inside the render, as `:on-mount' does.
         (dolist (old-child old-children)
           (unless (memq old-child new-children)
-            (vui--call-unmount-recursive old-child)))
+            (vui--shifting-point
+              (vui--call-unmount-recursive old-child))))
         (setf (vui-instance-children instance) new-children)
         ;; Record the contexts this instance's whole subtree depends on:
         ;; its own reads plus every child's recorded set.  Used only to
@@ -4391,7 +4454,7 @@ record of the contexts its subtree read."
             (setf (vui-instance-mounted-p instance) t)
             (vui--debug-log 'mount "<%s> mounted" component-name)
             (vui--with-timing 'mount component-name
-              (let ((result (save-excursion
+              (let ((result (vui--shifting-point
                               (vui--call-lifecycle-hook
                                "on-mount"
                                (vui-component-def-on-mount def)
@@ -4404,7 +4467,7 @@ record of the contexts its subtree read."
         (when should-render-p
           (vui--debug-log 'update "<%s> updated" component-name)
           (vui--with-timing 'update component-name
-            (save-excursion
+            (vui--shifting-point
               (vui--call-lifecycle-hook
                "on-update"
                (vui-component-def-on-update def)
@@ -5576,7 +5639,8 @@ and `window'."
          (justify (or (vui-vnode-flex-justify vnode) :start))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
                           indent)))
-         (flex-start (point))
+         (flex-start (vui--container-start (vui-vnode-flex-face vnode)
+                                           (vui-vnode-flex-keymap vnode)))
          ;; Classify children: growers carry a weight, the rest are
          ;; measured at natural width.  The measure runs under a
          ;; reconciliation cursor so a mounted component child measures
@@ -5655,6 +5719,7 @@ and `window'."
       (dolist (spec specs)
         (let ((sep-start (point))
               (content-start nil)
+              (shift vui--hook-shift)
               (vui--render-path (cons child-idx vui--render-path)))
           ;; Separator (plus space-between padding) if previous child rendered
           (when prev-rendered-p
@@ -5700,14 +5765,14 @@ and `window'."
              (t
               (vui--render-vnode child))))
           ;; Check if child actually rendered anything
-          (if (> (point) content-start)
+          (if (> (point) (vui--shifted content-start shift))
               (setq prev-rendered-p t)
             ;; Child rendered nothing - remove the separator we added
-            (delete-region sep-start (point))))
+            (delete-region (vui--shifted sep-start shift) (point))))
         (cl-incf child-idx)))
-    (vui--apply-region-props flex-start (point)
-                             (vui-vnode-flex-face vnode)
-                             (vui-vnode-flex-keymap vnode))))
+    (vui--finish-container flex-start
+                           (vui-vnode-flex-face vnode)
+                           (vui-vnode-flex-keymap vnode))))
 
 (defun vui--flex-wrap-specs (children)
   "Measure CHILDREN of a wrapping flex into layout specs.
@@ -5787,6 +5852,8 @@ path, the step its measure ran under."
              (child (plist-get spec :child))
              (sep-start (point))
              (content-start nil)
+             ;; The hooks of the components in the row can move its text
+             (shift vui--hook-shift)
              (vui--render-path (cons (plist-get spec :index)
                                      vui--render-path)))
         (when prev-rendered-p
@@ -5803,10 +5870,10 @@ path, the step its measure ran under."
          (t
           (vui--render-vnode child)
           (insert (vui--pad (max 0 (- width (plist-get spec :natural)))))))
-        (if (> (point) content-start)
+        (if (> (point) (vui--shifted content-start shift))
             (setq prev-rendered-p t)
           ;; Child rendered nothing - remove the separator we added
-          (delete-region sep-start (point)))))))
+          (delete-region (vui--shifted sep-start shift) (point)))))))
 
 (defun vui--flex-render-composed-row (row spacing indent)
   "Insert ROW of (SPEC . WIDTH) cells composed side by side as text.
@@ -5843,7 +5910,8 @@ new line, indented by the flex's :indent."
          (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
                           indent)))
-         (flex-start (point))
+         (flex-start (vui--container-start (vui-vnode-flex-face vnode)
+                                           (vui-vnode-flex-keymap vnode)))
          ;; A child that renders nothing is dropped, like the
          ;; non-wrapped flex removing its separator: it must not eat a
          ;; gap or a column.  (Growers and function children stay -
@@ -5890,9 +5958,9 @@ new line, indented by the flex's :indent."
                    row)
           (vui--flex-render-composed-row row spacing indent)
         (vui--flex-render-inline-row row spacing)))
-    (vui--apply-region-props flex-start (point)
-                             (vui-vnode-flex-face vnode)
-                             (vui-vnode-flex-keymap vnode))))
+    (vui--finish-container flex-start
+                           (vui-vnode-flex-face vnode)
+                           (vui-vnode-flex-keymap vnode))))
 
 (defun vui--render-grid (vnode)
   "Render a `vui-grid' VNODE: cells on equal tracks, rows in source order.
@@ -5914,7 +5982,8 @@ in place, rows containing a multi-line cell composed as text."
                  columns (and min-chars (vui--width min-chars))
                  total spacing))
          (tracks (vui-layout-grid-tracks count total spacing))
-         (grid-start (point))
+         (grid-start (vui--container-start (vui-vnode-grid-face vnode)
+                                           (vui-vnode-grid-keymap vnode)))
          ;; Measure every cell once, under a reconciliation cursor so
          ;; mounted components measure at current state.  Unlike flex,
          ;; the tracks are known before anything renders, so function
@@ -5994,9 +6063,9 @@ in place, rows containing a multi-line cell composed as text."
               (insert (vui--pad (max 0 (- (nth col widths)
                                           (plist-get cell :natural))))))
             (cl-incf col)))))
-    (vui--apply-region-props grid-start (point)
-                             (vui-vnode-grid-face vnode)
-                             (vui-vnode-grid-keymap vnode))))
+    (vui--finish-container grid-start
+                           (vui-vnode-grid-face vnode)
+                           (vui-vnode-grid-keymap vnode))))
 
 ;;; Incremental rendering (issue #82)
 
@@ -6772,9 +6841,13 @@ measure renders into a throwaway temp buffer, and binding the live
 region there would leave the handle pointing at a killed buffer,
 silently dropping every subsequent streamed append."
   (let* ((sep (vui-stream-handle-separator handle))
-         (start (point))
+         ;; A marker: the hooks of the rows can write or delete text
+         ;; above the stream, or in the items written before them (see
+         ;; `vui--hook-shift')
+         (start (point-marker))
          (first t)
          (last-start nil)
+         (last-shift nil)
          ;; The last item written, when it is a row
          (last-row nil)
          (path vui--render-path)
@@ -6802,12 +6875,13 @@ silently dropping every subsequent streamed append."
           (unless first (insert sep))
           (setq first nil
                 last-start (point)
+                last-shift vui--hook-shift
                 last-row nil)
           (vui--render-vnode item)
           (when nodes
             (when-let* ((node (cdr (assq index nodes))))
-              (vui--stream-node-bind node last-start (point)
-                                     (current-buffer)))))
+              (vui--stream-node-bind node (vui--shifted last-start last-shift)
+                                     (point) (current-buffer)))))
          ;; A row unmounted on its own has no text any more.  It is no
          ;; longer an item of the stream either: the unmount takes it out
          ;; of a stream in the buffer, and this one was parked then (the
@@ -6830,6 +6904,7 @@ silently dropping every subsequent streamed append."
           (unless first (insert sep))
           (setq first nil
                 last-start (point)
+                last-shift vui--hook-shift
                 last-row item)
           (if vui--measuring-p
               (vui--stream-measure-row item)
@@ -6854,14 +6929,17 @@ silently dropping every subsequent streamed append."
         (setf (vui-stream-handle-region-end handle) nil)))
       (vui--stream-bind-region handle (current-buffer) start (point))
       (when last-start
-        (vui--stream-set-last-start handle last-start (current-buffer)))
+        (vui--stream-set-last-start handle
+                                    (vui--shifted last-start last-shift)
+                                    (current-buffer)))
       (unless (memq handle vui--streams)
         (push handle vui--streams))
       ;; The component that placed the stream records it: the stream's
       ;; text grows without a render of the component, and the
       ;; component-list patcher has to know (see `vui--instance-streams')
       (when (and vui-incremental-render vui--current-instance)
-        (push handle vui--rendered-streams)))))
+        (push handle vui--rendered-streams)))
+    (set-marker start nil)))
 
 (defun vui--stream-park (handle)
   "Leave the markers of HANDLE pointing nowhere: its text is gone.
@@ -7919,7 +7997,9 @@ before it, so the vnodes after the stream keep their index.  Only plain
   "Render CHILDREN as a container shaped like VTREE; return chars written.
 Reuses the real renderer so inter-child separators, empty-drop, and
 component reconciliation all match a wholesale render exactly."
-  (let ((start (point)))
+  (let ((start (point))
+        ;; The hooks of the children can write or delete text above
+        (shift vui--hook-shift))
     (vui--render-vnode
      (if (vui-vnode-fragment-p vtree)
          (vui-vnode-fragment--create :children children)
@@ -7927,7 +8007,7 @@ component reconciliation all match a wholesale render exactly."
         :children children
         :spacing (vui-vnode-vstack-spacing vtree)
         :indent 0)))
-    (- (point) start)))
+    (- (point) (vui--shifted start shift))))
 
 (defun vui--patch-stream-tail (vtree handle suffix)
   "Re-render only the content after HANDLE's region, leaving the region.
@@ -7945,9 +8025,12 @@ container separator, which we drop if the suffix renders to nothing
     (goto-char from)
     ;; The last item of the stream may end with a field
     (vui--keeping-fields from
-      (insert sep)
-      (when (= 0 (vui--render-children-as vtree suffix))
-        (delete-region from (point))))))
+      (let ((shift vui--hook-shift))
+        (insert sep)
+        (when (= 0 (vui--render-children-as vtree suffix))
+          ;; A hook of the suffix can have appended to the stream: the
+          ;; separator is after its new end
+          (delete-region (vui--shifted from shift) (point)))))))
 
 (defun vui--indent-lines (start end indent)
   "Insert INDENT after each newline between START and END.
@@ -8144,7 +8227,9 @@ is written."
           ;; character-unit slot that accumulates through nesting.
           (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
-          (container-start (point))
+          (container-start (vui--container-start
+                            (vui-vnode-hstack-face vnode)
+                            (vui-vnode-hstack-keymap vnode)))
           (space-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
@@ -8152,6 +8237,7 @@ is written."
       (dolist (child children)
         (let ((sep-start (point))
               (content-start nil)
+              (shift vui--hook-shift)
               (vui--render-path (cons child-idx vui--render-path)))
           ;; Only insert separator if previous child actually rendered something
           (when prev-rendered-p
@@ -8171,14 +8257,14 @@ is written."
                 :key (vui-vnode-vstack-key child)))
             (vui--render-vnode child))
           ;; Check if child actually rendered anything
-          (if (> (point) content-start)
+          (if (> (point) (vui--shifted content-start shift))
               (setq prev-rendered-p t)
             ;; Child rendered nothing - remove the separator we added
-            (delete-region sep-start (point))))
+            (delete-region (vui--shifted sep-start shift) (point))))
         (cl-incf child-idx))
-      (vui--apply-region-props container-start (point)
-                               (vui-vnode-hstack-face vnode)
-                               (vui-vnode-hstack-keymap vnode))))
+      (vui--finish-container container-start
+                             (vui-vnode-hstack-face vnode)
+                             (vui-vnode-hstack-keymap vnode))))
 
    ;; Vertical stack
    ;; Joins children with \n. newline children render as empty string,
@@ -8190,7 +8276,9 @@ is written."
           (indent (or (vui-vnode-vstack-indent vnode) 0))
           (skip-first-indent (vui-vnode-vstack-skip-first-indent vnode))
           (children (vui-vnode-vstack-children vnode))
-          (container-start (point))
+          (container-start (vui--container-start
+                            (vui-vnode-vstack-face vnode)
+                            (vui-vnode-vstack-keymap vnode)))
           (indent-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
@@ -8211,7 +8299,8 @@ is written."
             ;; Non-newline children: track if they produce output
             (let* ((skip-this-indent (and (not prev-rendered-p) skip-first-indent))
                    (sep-start (point))
-                   (content-start nil))
+                   (content-start nil)
+                   (shift vui--hook-shift))
               ;; Add separator newline (plus spacing) before child if prev rendered
               (when prev-rendered-p
                 (insert "\n")
@@ -8285,17 +8374,14 @@ is written."
                      (> indent 0))
                 (unless skip-this-indent
                   (insert indent-str))
+                (setq content-start (point))
                 ;; A marker: the hooks of the components in the layout can
-                ;; write or delete text above it.  The separator and the
-                ;; indent are right before it, LEAD characters.
-                (let ((layout-start (point-marker))
-                      (lead (- (point) sep-start)))
+                ;; write or delete text above it
+                (let ((layout-start (point-marker)))
                   (vui--render-vnode child)
                   ;; Add indent after each internal newline, not after the
                   ;; newlines of what follows in the buffer
                   (vui--indent-lines layout-start (point) indent-str)
-                  (setq content-start (marker-position layout-start)
-                        sep-start (- content-start lead))
                   (set-marker layout-start nil)))
                ;; Other children: insert indent (if needed) and render
                (t
@@ -8305,14 +8391,14 @@ is written."
                 (setq content-start (point))
                 (vui--render-vnode child)))
               ;; Check if child actually rendered anything
-              (if (> (point) content-start)
+              (if (> (point) (vui--shifted content-start shift))
                   (setq prev-rendered-p t)
                 ;; Child rendered nothing - remove separator and any indent we added
-                (delete-region sep-start (point))))))
+                (delete-region (vui--shifted sep-start shift) (point))))))
         (cl-incf child-idx))
-      (vui--apply-region-props container-start (point)
-                               (vui-vnode-vstack-face vnode)
-                               (vui-vnode-vstack-keymap vnode))))
+      (vui--finish-container container-start
+                             (vui-vnode-vstack-face vnode)
+                             (vui-vnode-vstack-keymap vnode))))
 
    ;; Fixed-width box
    ((vui-vnode-box-p vnode)
@@ -8321,7 +8407,8 @@ is written."
            (pad-left (vui--width (or (vui-vnode-box-padding-left vnode) 0)))
            (pad-right (vui--width (or (vui-vnode-box-padding-right vnode) 0)))
            (child (vui-vnode-box-child vnode))
-           (box-start (point))
+           (box-start (vui--container-start (vui-vnode-box-face vnode)
+                                            (vui-vnode-box-keymap vnode)))
            (pad-left-str (vui--pad pad-left))
            ;; First render to temp buffer to measure width: that of its
            ;; widest line, as pixel mode measures it.
@@ -8368,9 +8455,9 @@ is written."
         (set-marker content-start nil))
       ;; Insert right padding
       (insert (vui--pad pad-right))
-      (vui--apply-region-props box-start (point)
-                               (vui-vnode-box-face vnode)
-                               (vui-vnode-box-keymap vnode))))
+      (vui--finish-container box-start
+                             (vui-vnode-box-face vnode)
+                             (vui-vnode-box-keymap vnode))))
 
    ;; Table layout
    ((vui-vnode-table-p vnode)
@@ -8409,10 +8496,17 @@ is written."
           (when border
             (vui--render-table-border col-widths border 'top cell-padding
                                       border-face))
-          (setq header-row-start (point))
+          ;; A marker for a sticky header: the hooks of the components in
+          ;; the rows can write or delete text above the table, or in the
+          ;; rows written before them (a stream in a cell)
+          (when (and sticky (not vui--measuring-p))
+            (setq header-row-start (point-marker)))
           (vui--render-table-row
            (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
            col-widths columns border 'header nil header-face border-face)
+          ;; From here on, text written right at its start is above it
+          (when header-row-start
+            (set-marker-insertion-type header-row-start t))
           (when border
             (vui--render-table-border col-widths border 'separator cell-padding
                                       border-face)))
@@ -8443,8 +8537,9 @@ is written."
         ;; body.  Skipped during measure passes, which run in a temp
         ;; buffer: only the real render may touch the target buffer's
         ;; header line.
-        (when (and sticky header-row-start (not vui--measuring-p))
-          (vui--table-register-sticky header-row-start (point)))
+        (when header-row-start
+          (vui--table-register-sticky header-row-start (point))
+          (set-marker header-row-start nil))
         (set-marker table-start nil))))
 
    ;; Field (editable text input)
@@ -8525,16 +8620,17 @@ is written."
 
    ;; Styled region - render children, then apply face/keymap on top
    ((vui-vnode-region-p vnode)
-    (let ((start (point))
+    (let ((start (vui--container-start (vui-vnode-region-face vnode)
+                                       (vui-vnode-region-keymap vnode)))
           (children (vui-vnode-region-children vnode))
           (idx 0))
       (dolist (child children)
         (let ((vui--render-path (cons idx vui--render-path)))
           (vui--render-vnode child))
         (cl-incf idx))
-      (vui--apply-region-props start (point)
-                               (vui-vnode-region-face vnode)
-                               (vui-vnode-region-keymap vnode))))
+      (vui--finish-container start
+                             (vui-vnode-region-face vnode)
+                             (vui-vnode-region-keymap vnode))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
@@ -8697,6 +8793,8 @@ VNODE to give it one.  Use `vui-mount' for a tree that lives."
           ;; The paths of this tree start here, also when it is rendered
           ;; from a hook or an effect of a tree that is being rendered
           (vui--render-path nil)
+          ;; The hooks of this render count for it alone
+          (vui--hook-shift vui--hook-shift)
           ;; The tree is not part of the one this is called from, as in
           ;; a measure pass (see `vui--measure-render-to-string'): from
           ;; a hook or an effect of a tree, its components would
@@ -8776,6 +8874,8 @@ returns, the tree may not show those changes yet."
          ;; The paths of this tree start here.  A mount from a hook or
          ;; an effect of another tree runs inside that tree's render.
          (vui--render-path nil)
+         ;; The hooks of this render count for it alone
+         (vui--hook-shift vui--hook-shift)
          ;; It does not see the context values of that tree either:
          ;; its re-renders render it on its own and would not
          (vui--context-stack nil))

@@ -990,6 +990,269 @@ indented vstack."
                                                        :text text :hook hook))
                                   '("r2")))))
 
+(vui-defcomponent inline-host-editor (edit text)
+  "TEXT, or nothing when TEXT is nil.  Its `:on-mount' writes a line at
+the start of the buffer when EDIT is `insert', and deletes the first
+line of the buffer when EDIT is `delete'."
+  :on-mount (let ((inhibit-read-only t))
+              (pcase edit
+                ('insert (save-excursion
+                           (goto-char (point-min))
+                           (insert "N1\n")))
+                ('delete (delete-region (point-min)
+                                        (save-excursion
+                                          (goto-char (point-min))
+                                          (line-beginning-position 2))))))
+  :render (and text (vui-text text)))
+
+(defvar vui-inline-test--keymap (make-sparse-keymap)
+  "The keymap `inline-faced-layout' puts on its layout.")
+
+(vui-defcomponent inline-faced-layout (layout edit prop)
+  "A LAYOUT around an `inline-host-editor', with the face `bold' when
+PROP is face, or `vui-inline-test--keymap' when PROP is keymap."
+  :render (let ((child (vui-component 'inline-host-editor
+                                      :edit edit :text "x"))
+                (face (and (eq prop 'face) 'bold))
+                (keymap (and (eq prop 'keymap) vui-inline-test--keymap)))
+            (pcase layout
+              ('box (vui-box child :width 4 :face face :keymap keymap))
+              ('vstack (vui-vstack :face face :keymap keymap child))
+              ('hstack (vui-hstack :face face :keymap keymap child))
+              ('flex (vui-flex :width 4 :face face :keymap keymap child))
+              ('flex-wrap (vui-flex :width 4 :wrap t :face face :keymap keymap
+                                    child))
+              ('grid (vui-grid :width 4 :columns 1 :face face :keymap keymap
+                               child))
+              ('region (vui-region :face face :keymap keymap child)))))
+
+(vui-defcomponent inline-gapped-layout (layout edit)
+  "A LAYOUT of aa, an `inline-host-editor' with no text, and bb."
+  :render (let ((children (list (vui-text "aa")
+                                (vui-component 'inline-host-editor
+                                               :edit edit)
+                                (vui-text "bb"))))
+            (pcase layout
+              ('vstack (apply #'vui-vstack children))
+              ('hstack (apply #'vui-hstack children))
+              ('flex (apply #'vui-flex :width 5 children))
+              ;; A wrapping flex drops a child that measures as nothing:
+              ;; a grower with no width of its own is written all the same
+              ('flex-wrap (vui-flex :width 6 :wrap t
+                                    (vui-text "aa")
+                                    (vui-flex-item
+                                     :grow 1
+                                     (lambda (_width)
+                                       (vui-component 'inline-host-editor
+                                                      :edit edit)))
+                                    (vui-text "bb"))))))
+
+(vui-defcomponent inline-sticky-table ()
+  "A table with a sticky header, and an `inline-host-editor' in its row."
+  :render (vui-table :columns '((:header "H1" :min-width 4))
+                     :rows (list (list (vui-component 'inline-host-editor
+                                                      :edit 'insert
+                                                      :text "x")))
+                     :sticky-header t))
+
+(vui-defcomponent inline-sticky-stream-table ()
+  "A sticky table: `vui-inline-test--stream' in its first row, and an
+`inline-stream-appender' in its second."
+  :render (vui-table :columns '((:header "H1" :min-width 8))
+                     :rows (list (list (vui-stream vui-inline-test--stream))
+                                 (list (vui-component 'inline-stream-appender)))
+                     :sticky-header t))
+
+(describe "inline layouts whose components edit the host buffer"
+  ;; The hook of a component in the layout runs while the layout is
+  ;; written: the layout has to find its own text again after that
+  (it "pins the header row of a sticky table whose rows edit each other"
+    ;; The edit is in the table, after its header row
+    (let ((vui-inline-test--stream (vui-make-stream " ")))
+      (vui-stream-append vui-inline-test--stream (vui-text "s1"))
+      (with-temp-buffer
+        (insert "HOST\n")
+        (vui-mount-inline (vui-component 'inline-sticky-stream-table))
+        (let ((header (caar vui--table-sticky-registry)))
+          (expect (buffer-substring-no-properties
+                   header (save-excursion (goto-char header)
+                                          (line-end-position)))
+                  :to-match "\\`H1")))))
+
+  (it "pins the header row of a sticky table, not the line above it"
+    (with-temp-buffer
+      (insert "HOST\n")
+      (vui-mount-inline (vui-component 'inline-sticky-table))
+      (let ((header (caar vui--table-sticky-registry)))
+        (expect (buffer-substring-no-properties
+                 header (save-excursion (goto-char header) (line-end-position)))
+                :to-match "\\`H1"))))
+
+  (dolist (prop '(face keymap))
+    (dolist (layout '(box vstack hstack flex flex-wrap grid region))
+      (dolist (edit '(insert delete))
+        (it (format "puts the %s of the %s on its own text only (%s above)"
+                    prop layout edit)
+          (with-temp-buffer
+            (insert "HOST\n")
+            (let ((instance (vui-mount-inline
+                             (vui-component 'inline-faced-layout
+                                            :layout layout :edit edit
+                                            :prop prop)))
+                  (value (if (eq prop 'face) 'bold vui-inline-test--keymap)))
+              (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+                (expect (text-property-not-all (point-min) start prop nil)
+                        :to-be nil)
+                (expect (text-property-not-all start end prop value)
+                        :to-be nil)
+                ;; All of the layout's text, kept
+                (expect (buffer-substring-no-properties start end)
+                        :to-equal (if (memq layout '(box grid)) "x   " "x")))))))))
+
+  (dolist (layout '(vstack hstack flex flex-wrap))
+    (dolist (edit '(insert delete))
+      (it (format "drops the gap before a child with no text in the %s (%s above)"
+                  layout edit)
+        (with-temp-buffer
+          (insert "HOST\n")
+          (let ((instance (vui-mount-inline
+                           (vui-component 'inline-gapped-layout
+                                          :layout layout :edit edit)))
+                (expected (with-temp-buffer
+                            (vui-render (vui-component 'inline-gapped-layout
+                                                       :layout layout))
+                            (buffer-string))))
+            (expect (vui-inline-test--region-text instance)
+                    :to-equal expected)))))))
+
+(defvar vui-inline-test--stream nil
+  "A stream for `inline-faced-stream-stack'.")
+
+(vui-defcomponent inline-stream-appender ()
+  "Its `:on-mount' appends s2 to `vui-inline-test--stream'."
+  :on-mount (vui-stream-append vui-inline-test--stream (vui-text "s2"))
+  :render (vui-text "c"))
+
+(vui-defcomponent inline-faced-stream-stack ()
+  "A bold stack: a line, `vui-inline-test--stream', an appender to it."
+  :render (vui-vstack :face 'bold
+                      (vui-text "top")
+                      (vui-stream vui-inline-test--stream)
+                      (vui-component 'inline-stream-appender)))
+
+(vui-defcomponent inline-failing-editor ()
+  "Nothing.  Its `:on-mount' writes a line at the start of the buffer and
+signals."
+  :on-mount (progn (vui-inline-test--host-insert (point-min) "N1\n")
+                   (error "Boom"))
+  :render (ignore))
+
+(vui-defcomponent inline-bounded-stack ()
+  "A stack with an `inline-failing-editor' in an error boundary that
+shows nothing for the error."
+  :render (vui-vstack (vui-text "aa")
+                      (vui-error-boundary
+                       :fallback (lambda (_error) nil)
+                       :children (list (vui-component 'inline-failing-editor)))
+                      (vui-text "bb")))
+
+(vui-defcomponent inline-unmount-editor ()
+  "Its `:on-unmount' writes a line at the start of the buffer."
+  :on-unmount (vui-inline-test--host-insert (point-min) "N1\n")
+  :render (vui-text "u"))
+
+(vui-defcomponent inline-toggler (show)
+  "An `inline-unmount-editor' while SHOW, and nothing after."
+  :render (and show (vui-component 'inline-unmount-editor)))
+
+(vui-defcomponent inline-toggled-stack (show)
+  "A bold stack with an `inline-toggler' in it."
+  :render (vui-vstack :face 'bold
+                      (vui-text "aa")
+                      (vui-component 'inline-toggler :show show)
+                      (vui-text "bb")))
+
+(vui-defcomponent inline-other-editor ()
+  "Its `:on-mount' writes a line at the start of its own buffer."
+  :on-mount (let ((inhibit-read-only t))
+              (save-excursion (goto-char (point-min)) (insert "OTHER\n")))
+  :render (vui-text "o"))
+
+(vui-defcomponent inline-renders-other (text)
+  "Mounts an `inline-other-editor' in another buffer from its render,
+and shows TEXT, or nothing when TEXT is nil."
+  :render (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'inline-other-editor)
+                         " *test-other-tree*"))
+            (and text (vui-text text))))
+
+(vui-defcomponent inline-other-stack (text)
+  "A bold stack with an `inline-renders-other' showing TEXT."
+  :render (vui-vstack :face 'bold
+                      (vui-text "aa")
+                      (vui-component 'inline-renders-other :text text)
+                      (vui-text "bb")))
+
+(defun vui-inline-test--faced-only (instance)
+  "Return non-nil when the face of INSTANCE's region is on it alone."
+  (pcase-let ((`(,start . ,end) (vui--inline-bounds instance)))
+    (and (null (text-property-not-all (point-min) start 'face nil))
+         (null (text-property-not-all start end 'face 'bold))
+         (null (text-property-not-all end (point-max) 'face nil)))))
+
+(describe "inline layouts that are edited while they are written"
+  (it "keeps the face on all of a stack whose component appends to a stream in it"
+    ;; The edit is in the text the stack wrote before the component
+    (let ((vui-inline-test--stream (vui-make-stream)))
+      (vui-stream-append vui-inline-test--stream (vui-text "s1"))
+      (with-temp-buffer
+        (insert "HOST\n")
+        (let ((instance (vui-mount-inline
+                         (vui-component 'inline-faced-stream-stack))))
+          (expect (vui-inline-test--region-text instance)
+                  :to-equal "top\ns1\ns2\nc")
+          (expect (vui-inline-test--faced-only instance) :to-be t)))))
+
+  (it "drops the gap of a child whose hook edits above and signals"
+    (let ((vui-lifecycle-error-handler 'signal))
+      (with-temp-buffer
+        (insert "HOST\n")
+        (let ((instance (vui-mount-inline
+                         (vui-component 'inline-bounded-stack))))
+          (expect (buffer-substring-no-properties 1 9) :to-equal "N1\nHOST\n")
+          (expect (vui-inline-test--region-text instance)
+                  :to-equal "aa\nbb")))))
+
+  (it "keeps the face on its own text when the hook of a removed component edits above"
+    (with-temp-buffer
+      (insert "HOST\n")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-toggled-stack :show t))))
+        ;; The removed component's hook runs while the stack is written
+        (vui-update instance '(:show nil))
+        (expect (buffer-substring-no-properties 1 9) :to-equal "N1\nHOST\n")
+        (expect (vui-inline-test--region-text instance) :to-equal "aa\nbb")
+        (expect (vui-inline-test--faced-only instance) :to-be t))))
+
+  (dolist (text '("x" nil))
+    (it (format "is not moved by the hooks of a render in another buffer (%s)"
+                (if text "a child with text" "a child with none"))
+      (unwind-protect
+          (with-temp-buffer
+            (insert "HOST\n\nTAIL")
+            (let ((instance (vui-mount-inline
+                             (vui-component 'inline-other-stack :text text)
+                             6)))
+              (expect (buffer-substring-no-properties
+                       (cdr (vui--inline-bounds instance)) (point-max))
+                      :to-equal "\nTAIL")
+              (expect (vui-inline-test--region-text instance)
+                      :to-equal (if text "aa\nx\nbb" "aa\nbb"))
+              (expect (vui-inline-test--faced-only instance) :to-be t)))
+        (when (get-buffer " *test-other-tree*")
+          (kill-buffer " *test-other-tree*"))))))
+
 (describe "inline regions with indented layouts"
   (it "leaves the host lines after the region as they are"
     (with-temp-buffer

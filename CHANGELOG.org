@@ -28,6 +28,20 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- The layout containers (=vui-vstack=, =vui-hstack=, =vui-box=,
+  =vui-flex=, =vui-grid=, =vui-region=) find their own text when the
+  hook of a component in them writes or deletes text above them. They
+  kept where they and their children started as numbers, so after such
+  an edit a =:face= or =:keymap= went over host text or missed part of
+  the layout, the gap before a child with no text stayed as an empty
+  line or a space, and a deletion could delete host text after the
+  layout or signal =args-out-of-range=. A table with a sticky header
+  pinned the line above its header row the same way, a =vui-stream= took
+  host text into its region, and the content after a stream left its
+  separator when it wrote nothing and a hook of it appended to the
+  stream. The =:on-unmount= of a component removed while the tree is
+  written counts as such a hook too.
+
 - A component appended to a =vui-stream= that unmounts itself in its
   first render (from =:on-mount= or an effect, say) no longer breaks the
   stream. The separator written for it stayed (an empty line with the

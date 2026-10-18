@@ -840,5 +840,42 @@ leading separator), matching what a plain declarative list renders."
         (vui-stream-append s (vui-text "b"))
         (expect (vui-st-empty--text) :to-equal "r|b|footer")))))
 
+(defvar vui-st-hook-tail--stream nil
+  "The stream of `vui-st-hook-tail-root'.")
+
+(defvar vui-st-hook-tail--count 1
+  "The number of the last item `vui-st-hook-tail-appender' appended.")
+
+(vui-defcomponent vui-st-hook-tail-appender (text)
+  "TEXT, or nothing when TEXT is nil.  Its `:on-update' appends an item
+to `vui-st-hook-tail--stream'."
+  :on-update (vui-stream-append
+              vui-st-hook-tail--stream
+              (vui-text (format "s%d" (cl-incf vui-st-hook-tail--count))))
+  :render (and text (vui-text text)))
+
+(vui-defcomponent vui-st-hook-tail-root (text)
+  :render (vui-vstack (vui-stream vui-st-hook-tail--stream)
+                      (vui-component 'vui-st-hook-tail-appender :text text)))
+
+(describe "vui-stream: content after it whose hook appends to it"
+  ;; The render of the root writes the content after the stream again:
+  ;; the hook adds to the stream, above that content
+  (it "drops the separator of the content when it writes nothing"
+    (let ((vui-render-delay nil)
+          (vui-st-hook-tail--stream (vui-make-stream))
+          (vui-st-hook-tail--count 1))
+      (vui-stream-append vui-st-hook-tail--stream (vui-text "s1"))
+      (vui-mount (vui-component 'vui-st-hook-tail-root :text "c") "*vui-st-hook-tail*")
+      (unwind-protect
+          (with-current-buffer "*vui-st-hook-tail*"
+            ;; The renders after this one patch around the stream
+            (vui-rerender (vui-get-instance))
+            (vui-update (vui-get-instance) '(:text "c2"))
+            (expect (buffer-string) :to-equal "s1\ns2\ns3\nc2")
+            (vui-update (vui-get-instance) '(:text nil))
+            (expect (buffer-string) :to-equal "s1\ns2\ns3\ns4"))
+        (kill-buffer "*vui-st-hook-tail*")))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
