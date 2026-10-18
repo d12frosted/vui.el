@@ -337,6 +337,9 @@ nested components overlap and the totals count them more than once."
     (when props
       (let ((display-props (copy-sequence props)))
         (cl-remf display-props :children)
+        ;; The whole tree that `vui-render' renders, shown below anyway
+        (when (eq name 'vui--rendered)
+          (cl-remf display-props :vnode))
         (when display-props
           (setq result (concat result
                                (format "%s  Props:\n" indent)
@@ -830,9 +833,9 @@ vnode (re-)emits the items and binds the region around them."
 
 ;; Error boundary state lives on the root instance of a mounted tree
 ;; (see `vui-instance-boundary-errors').  This buffer-local table is
-;; the fallback for static `vui-render' trees, which have no instance.
+;; the fallback for a render with no root, as a measure pass.
 (defvar-local vui--error-boundary-errors nil
-  "Buffer-local error boundary table for static `vui-render' trees.
+  "Buffer-local error boundary table for a render with no root.
 Maps boundary keys to caught errors.  Lazily initialized by
 `vui--error-boundary-table'.")
 
@@ -1802,9 +1805,9 @@ across re-renders as long as the tree shape around it does not
 change.  Provide an explicit ID when the boundary moves around the
 tree or when you need to reset it by name.
 
-Error state is scoped to the mounted tree (or to the buffer for
-static `vui-render' trees), so two apps using the same ID do not
-interfere, and a fresh mount starts with a clean slate.
+Error state is scoped to the mounted tree (also one that `vui-render'
+mounts), so two apps using the same ID do not interfere, and a fresh
+mount starts with a clean slate.
 
 CHILDREN are the vnodes to render normally when no error.
 
@@ -1829,8 +1832,8 @@ Example:
 (defun vui--error-boundary-table ()
   "Return the error boundary table for the current render context.
 Uses the root instance's table when a mounted tree is in scope, or
-a buffer-local table for static `vui-render' trees.  The table is
-created lazily."
+a buffer-local table for a render with no root, as a measure pass.
+The table is created lazily."
   (if-let* ((root (vui--get-root-instance)))
       (or (vui-instance-boundary-errors root)
           (setf (vui-instance-boundary-errors root)
@@ -8887,6 +8890,13 @@ is written."
 
 ;;; Public API
 
+(vui-defcomponent vui--rendered (vnode)
+  "The root of a tree that `vui-render' mounts: VNODE as it is.
+A shallow copy of it on each render: a render that returns the vnode
+of the render before is taken to be unchanged, and its children would
+not render again (see `vui--commit-root')."
+  :render (copy-sequence vnode))
+
 (defun vui-render (vnode &optional buffer)
   "Render VNODE tree into BUFFER (default: current buffer).
 Clears the buffer before rendering.  A component tree previously
@@ -8894,79 +8904,20 @@ mounted in BUFFER is unmounted first: erasing destroys its output,
 and a live instance left behind would re-render the old UI over this
 one from a timer, an async callback, or a window resize.
 
-The components in VNODE render once.  Their `:on-mount' runs, but
-nothing else of their lifecycle does: a state change does not render
-them again, their effects do not run, and nothing unmounts them (but
-for the ones an error boundary drops when it catches an error), so a
-cleanup that `:on-mount' returns is never called otherwise.  The tree is its own
-also when this is called from a hook or an effect of another tree: it
-does not see the context values of that tree, so put a provider in
-VNODE to give it one.  Use `vui-mount' for a tree that lives."
-  (with-current-buffer (or buffer (current-buffer))
-    ;; TODO: Implement cursor preservation across re-renders.
-    ;; Should track position relative to logical elements (keys/components),
-    ;; not buffer positions. Will be part of component instance system.
-    (let ((inhibit-read-only t)
-          ;; The paths of this tree start here, also when it is rendered
-          ;; from a hook or an effect of a tree that is being rendered
-          (vui--render-path nil)
-          ;; The hooks of this render count for it alone
-          (vui--hook-shift vui--hook-shift)
-          ;; The tree is not part of the one this is called from, as in
-          ;; a measure pass (see `vui--measure-render-to-string'): from
-          ;; a hook or an effect of a tree, its components would
-          ;; otherwise reconcile against the instance of that hook or
-          ;; effect, take over its children, and render that tree on a
-          ;; state change.  Unlike a measure pass, it does not see the
-          ;; context values of that tree either.
-          (vui--current-instance nil)
-          (vui--root-instance nil)
-          (vui--new-children nil)
-          (vui--child-index 0)
-          (vui--reconcile-lookup nil)
-          (vui--context-stack nil)
-          (vui--measure-reconcile nil)
-          (vui--measure-live-parent nil)
-          ;; The effects of this tree are dropped, as nothing would clean
-          ;; up after them.  Without this binding they would wait in the
-          ;; global list, or, called from a hook of a tree being
-          ;; rendered, run with the effects of that tree, in its buffer.
-          (vui--pending-effects nil)
-          (vui--created-instances nil)
-          ;; Its hooks do not stop the render of the tree it is called
-          ;; from: the hook that called it does, when it is done
-          (vui--stoppable-root nil))
-      ;; Enable vui-mode (this also sets up the keymap hierarchy)
-      (unless (derived-mode-p 'vui-mode)
-        (vui-mode))
-      ;; Tear down a previously mounted tree, as `vui-mount' does when
-      ;; it takes over a buffer.
-      (when vui--mounted-root
-        (vui--unmount-root vui--mounted-root)
-        (kill-local-variable 'vui--mounted-root))
-      (when vui--inline-instances
-        (dolist (inline-instance vui--inline-instances)
-          (vui--unmount-root inline-instance))
-        (kill-local-variable 'vui--inline-instances))
-      ;; Drop stale field bookkeeping before erasing.  A `vui-field'
-      ;; from a previous render installs `widget-after-change' on
-      ;; `after-change-functions' and lingers in `widget-field-list';
-      ;; the `erase-buffer' below would otherwise fire that hook against
-      ;; the just-deleted field and signal (number-or-marker-p nil).
-      ;; Clearing the lists (as the component re-render path does) also
-      ;; keeps dead widgets from piling up across renders.
-      (setq widget-field-list nil widget-field-new nil)
-      (remove-overlays)
-      (vui--park-streams)
-      (erase-buffer)
-      ;; A previous render's sticky table header must not outlive it;
-      ;; rendering a sticky table below installs a fresh one
-      (vui--table-restore-header-line)
-      (vui--render-vnode vnode)
-      ;; Setup widgets for keyboard navigation
-      (widget-setup)
-      (vui--setup-field-placeholders)
-      (goto-char (point-min)))))
+The tree is mounted, as with `vui-mount', under a root that renders
+VNODE: a state change in its components renders them again, their
+effects run, and the tree is unmounted by the next `vui-render' or
+`vui-mount' in BUFFER, or when BUFFER is killed.  Unlike `vui-mount',
+this does not show BUFFER, and does not install
+`vui-rerender-on-resize'.  The tree is its own also when this is called
+from a hook or an effect of another tree: it does not see the context
+values of that tree, so put a provider in VNODE to give it one.  As
+for `vui-mount' there, the re-renders the tree asks for while it mounts
+wait for the render of that tree to be done.  Return the root
+instance."
+  (vui--mount-root (vui-component 'vui--rendered :vnode vnode)
+                   (or buffer (current-buffer))
+                   nil))
 
 (defun vui-render-to-buffer (buffer-name vnode)
   "Render VNODE into a buffer named BUFFER-NAME.
@@ -8987,9 +8938,31 @@ renders the tree once, and the re-renders the tree asks for while it
 mounts (state set from its own hooks, say) wait for that render to be
 done, like every re-render asked for during it.  Right after this
 returns, the tree may not show those changes yet."
-  (let* ((buf-name (or buffer-name "*vui*"))
-         (buf (get-buffer-create buf-name))
-         (instance (vui--create-instance component-vnode nil))
+  (let* ((buf (get-buffer-create (or buffer-name "*vui*")))
+         (instance (vui--mount-root component-vnode buf
+                                    vui-rerender-on-resize-default)))
+    ;; A hook of the tree can kill BUF
+    (when (buffer-live-p buf)
+      (switch-to-buffer buf))
+    instance))
+
+(defun vui--mount-root (component-vnode buf resize)
+  "Mount COMPONENT-VNODE as the root of BUF, render it, and return it.
+The work of `vui-mount' and `vui-render', which shows BUF only for the
+first.  RESIZE non-nil installs `vui-rerender-on-resize' in BUF.  The
+tree is its own, also when this runs from a hook or an effect of a
+tree being rendered: its components do not reconcile against that tree,
+and do not see its context values."
+  (let* ((instance (vui--create-instance component-vnode nil))
+         ;; Mounted for real also from a render that a layout measures:
+         ;; its hooks run, and a later mount there unmounts it
+         (vui--measuring-p nil)
+         (vui--current-instance nil)
+         (vui--new-children nil)
+         (vui--child-index 0)
+         (vui--reconcile-lookup nil)
+         (vui--measure-reconcile nil)
+         (vui--measure-live-parent nil)
          ;; Clear pending effects before initial render
          (vui--pending-effects nil)
          ;; An error boundary of the tree this is mounted from does not
@@ -9028,8 +9001,8 @@ returns, the tree may not show those changes yet."
         ;; Enable vui-mode (this also sets up the keymap hierarchy)
         (unless (derived-mode-p 'vui-mode)
           (vui-mode))
-        ;; Drop stale field bookkeeping before erasing, as `vui-render'
-        ;; does: a `vui-field' from the previous mount lingers in
+        ;; Drop stale field bookkeeping before erasing: a `vui-field'
+        ;; from the previous mount lingers in
         ;; `widget-field-list' with `widget-after-change' still on
         ;; `after-change-functions'; `remove-overlays' deletes its
         ;; overlay, so the `erase-buffer' below would fire that hook
@@ -9047,7 +9020,7 @@ returns, the tree may not show those changes yet."
         (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
         ;; Reflow window-width-dependent layouts on resize (see
         ;; `vui-rerender-on-resize-default')
-        (when vui-rerender-on-resize-default
+        (when resize
           (vui-rerender-on-resize))
         (let ((vui--root-instance instance)
               ;; A mount from a hook or an effect runs inside the render
@@ -9081,8 +9054,6 @@ returns, the tree may not show those changes yet."
       ;; `widget-setup' did before the render stopped recording.
       (when (buffer-live-p buf)
         (setq buffer-undo-list nil)))
-    (when (buffer-live-p buf)
-      (switch-to-buffer buf))
     instance))
 
 (defun vui-mount-inline (component-vnode &optional position)
@@ -9189,7 +9160,8 @@ Use this together with `vui-rerender', `vui-update', and
     (vui-update instance (list :note note)))
 
 The instance returned is the root - the component passed to
-`vui-mount'.  Note that updating its props does not reach state a
+`vui-mount', or the root that `vui-render' mounts around its
+vnode.  Note that updating its props does not reach state a
 component seeded from those props (see `vui-update'); to push data
 into a nested component, use `vui-with-async-context' instead.  See
 the External Updates guide."
@@ -9199,9 +9171,10 @@ the External Updates guide."
 
 (defun vui--teardown-on-kill ()
   "Run the unmount lifecycle for this buffer's mounted instances.
-Installed buffer-locally on `kill-buffer-hook' by `vui-mount' and
-`vui-mount-inline' so components release their resources (timers,
-processes, subscriptions) when the buffer is killed."
+Installed buffer-locally on `kill-buffer-hook' by `vui-mount',
+`vui-render' and `vui-mount-inline' so components release their
+resources (timers, processes, subscriptions) when the buffer is
+killed."
   (when vui--mounted-root
     (vui--unmount-root vui--mounted-root)
     (kill-local-variable 'vui--mounted-root))

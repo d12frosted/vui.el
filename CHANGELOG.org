@@ -9,6 +9,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- =vui-render= mounts the tree it renders, as =vui-mount= does, without
+  showing the buffer: a state change in its components renders them
+  again, their effects run, and the tree is unmounted by the next
+  =vui-render= or =vui-mount= in the buffer, or when the buffer is
+  killed. Before, its components rendered once: their =:on-mount= ran,
+  but nothing else of their lifecycle did. It returns the root instance
+  of the tree now.
+
 - An error boundary that catches an error now drops all its children,
   as React does: the components in them that mounted are unmounted,
   and all of them lose their state. A reset of the boundary renders them from scratch. Before,
@@ -37,6 +45,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   resize.
 
 ** Fixed
+
+- A tree that =vui-mount= mounts from a render that a layout measures
+  (=vui-flex=, =vui-grid=, a table) is its own: its components measured
+  as the live components of that layout, with their state, and its
+  =:on-mount= was skipped in the measure.
 
 - A render stops when a hook in it (=:on-mount=, =:on-update=)
   unmounts the tree it renders, or mounts another tree in its place.
@@ -112,17 +125,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   a hook or an effect of a mounted tree. Its components reconciled
   against the component of that hook or effect: they could take over
   its children, and a state change in them rendered that tree. Their
-  effects are dropped, as nothing would clean up after them. At top
-  level they never ran either, but they stayed in a global list for as
-  long as Emacs ran, and so did the instances. From a hook they ran
-  with the effects of the tree, in its buffer. It no longer sees the
+  effects did not run at top level, but stayed in a global list for as
+  long as Emacs ran, and so did the instances; from a hook they ran
+  with the effects of that tree, in its buffer. It no longer sees the
   context values of the tree either: from a hook it saw the providers
   above it, from an effect it did not. And an error that an error
   boundary in it catches no longer goes to that tree, where a boundary
-  at the same place showed its fallback. The docstring of =vui-render=
-  now says what it does with components: their =:on-mount= runs, but a
-  state change does not render them again, their effects do not run,
-  and nothing unmounts them.
+  at the same place showed its fallback.
 
 - A =vui-box= measures content with more than one line by its widest
   line, as it does with =vui-width-mode= set to =pixel=. In char mode it

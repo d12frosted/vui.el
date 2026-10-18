@@ -35,9 +35,9 @@ as the tree shape around it does not change. Provide an explicit =:id=
 when the boundary moves around the tree, or when you want to reset it by
 name with =vui-reset-error-boundary=.
 
-Error state is scoped to the mounted tree (or to the buffer for static
-=vui-render= trees): two apps using the same =:id= do not interfere, and
-a fresh =vui-mount= always starts with a clean slate.
+Error state is scoped to the mounted tree (also one that =vui-render=
+mounts): two apps using the same =:id= do not interfere, and a fresh
+=vui-mount= or =vui-render= always starts with a clean slate.
 
 ** Displaying Error Details
 

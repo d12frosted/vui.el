@@ -442,27 +442,32 @@ the same place around a failing component into SIDE."
   "The text of the buffer `vui-test-render-in-render' renders into,
 after each of its renders, newest first.")
 
-(vui-defcomponent vui-test-render-in-render (side)
-  "Renders a `vui-test-render-sibling' into SIDE from its render."
+(vui-defcomponent vui-test-render-in-render (side mount)
+  "Renders a `vui-test-render-sibling' into SIDE from its render, with
+`vui-mount' when MOUNT, or else with `vui-render'."
   :render (progn
-            (vui-render (vui-component 'vui-test-render-sibling) side)
+            (if mount
+                (save-window-excursion
+                  (vui-mount (vui-component 'vui-test-render-sibling) side))
+              (vui-render (vui-component 'vui-test-render-sibling) side))
             (push (with-current-buffer side (buffer-string))
                   vui-test--render-side-texts)
             (vui-text "caller")))
 
-(vui-defcomponent vui-test-render-measured (side)
+(vui-defcomponent vui-test-render-measured (side mount)
   "A flex row, which measures its children: a `vui-test-render-sibling'
-and a `vui-test-render-in-render'."
+and a `vui-test-render-in-render' (with MOUNT)."
   :render (vui-flex (vui-component 'vui-test-render-sibling)
-                    (vui-component 'vui-test-render-in-render :side side)))
+                    (vui-component 'vui-test-render-in-render
+                                   :side side :mount mount)))
 
 (describe "vui-render of components"
-  ;; `vui-render' does not mount what it renders: the tree is its own,
-  ;; and nothing would clean up after an effect
+  ;; `vui-render' mounts what it renders, as `vui-mount' does, without
+  ;; showing the buffer; the tree is its own
   (before-each (setq vui-test--render-effects nil
                      vui-test--render-host-renders 0))
 
-  (it "leaves no effect and no child waiting for another render"
+  (it "runs the effects of its components and leaves nothing waiting"
     (let ((vui--pending-effects nil)
           (vui--new-children nil))
       (with-temp-buffer
@@ -470,9 +475,79 @@ and a `vui-test-render-in-render'."
         (expect (buffer-string) :to-equal "top 0 [click]")
         (expect (length vui--pending-effects) :to-equal 0)
         (expect (length vui--new-children) :to-equal 0)
-        (expect vui-test--render-effects :to-be nil))))
+        (expect vui-test--render-effects
+                :to-equal (list (list 'top (buffer-name)))))))
 
-  (it "does not run its effects with those of the render it is called from"
+  (it "renders its components again when their state changes"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (vui-render (vui-component 'vui-test-render-effect :tag 'top))
+        (vui-test--click-button-at (1- (point-max)))
+        (expect (buffer-string) :to-equal "top 1 [click]")
+        ;; And on every change after it
+        (vui-test--click-button-at (1- (point-max)))
+        (expect (buffer-string) :to-equal "top 2 [click]"))))
+
+  (it "does not reflow on window resize, unlike vui-mount"
+    (with-temp-buffer
+      (vui-render (vui-text "x"))
+      (expect (memq #'vui--on-window-size-change window-size-change-functions)
+              :to-be nil)))
+
+  (it "mounts what it renders from a render that a layout measures once"
+    (let ((vui-render-delay nil)
+          (log nil))
+      (vui-defcomponent vui-test-render-measured-part ()
+        :on-mount (push 'mount log)
+        :on-unmount (push 'unmount log)
+        :render (vui-text "part"))
+      (vui-defcomponent vui-test-render-measured-caller ()
+        :render (progn
+                  (vui-render (vui-component 'vui-test-render-measured-part)
+                              (get-buffer-create "*test-render-measured*"))
+                  (vui-text "caller")))
+      (vui-defcomponent vui-test-render-measuring-root ()
+        :render (vui-flex (vui-component 'vui-test-render-measured-caller)))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-test-render-measuring-root)
+                         "*test-render-measuring*"))
+            ;; Each tree it mounted mounted and goes: the measure of the
+            ;; flex renders the caller too
+            (expect (cl-count 'mount log)
+                    :to-equal (1+ (cl-count 'unmount log)))
+            (expect (car log) :to-be 'mount))
+        (dolist (buffer '("*test-render-measuring*" "*test-render-measured*"))
+          (when (get-buffer buffer)
+            (kill-buffer buffer))))))
+
+  (it "unmounts the tree it rendered when it renders another one there"
+    (let ((log nil))
+      (vui-defcomponent vui-test-render-lifecycle (name)
+        :on-mount (progn (push (list 'mount name) log)
+                         (lambda () (push (list 'cleanup name) log)))
+        :on-unmount (push (list 'unmount name) log)
+        :render (vui-text name))
+      ;; A buffer of its own: a temporary buffer runs no `kill-buffer-hook'
+      (with-current-buffer (get-buffer-create "*test-render-lifecycle*")
+        (vui-render (vui-component 'vui-test-render-lifecycle :name "a"))
+        (vui-render (vui-text "plain"))
+        (expect (buffer-string) :to-equal "plain")
+        (vui-render (vui-component 'vui-test-render-lifecycle :name "b"))
+        (kill-buffer))
+      ;; Killing the buffer unmounts the last one
+      (expect (reverse log)
+              :to-equal '((mount "a") (cleanup "a") (unmount "a")
+                          (mount "b") (cleanup "b") (unmount "b")))))
+
+  (it "returns the root of the tree it mounted"
+    (with-temp-buffer
+      (let ((root (vui-render (vui-text "x"))))
+        (expect (vui-instance-p root) :to-be-truthy)
+        (expect (vui-get-instance) :to-be root))))
+
+  (it "runs its effects in its own buffer when it is called from a hook"
     (let ((vui-render-delay nil)
           (side (get-buffer-create "*test-render-side*")))
       (unwind-protect
@@ -483,7 +558,8 @@ and a `vui-test-render-in-render'."
             (expect (with-current-buffer side (buffer-string))
                     :to-equal "side 0 [click]")
             (expect vui-test--render-effects
-                    :to-equal '((host "*test-render-host*"))))
+                    :to-equal '((host "*test-render-host*")
+                                (side "*test-render-side*"))))
         (kill-buffer side)
         (when (get-buffer "*test-render-host*")
           (kill-buffer "*test-render-host*")))))
@@ -568,13 +644,15 @@ and a `vui-test-render-in-render'."
         (when (get-buffer "*test-render-host*")
           (kill-buffer "*test-render-host*")))))
 
-  (it "renders a tree of its own from a render that a layout measures"
+  (dolist (mount '(nil t))
+   (it (format "renders a tree of its own from a render that a layout measures (%s)"
+               (if mount "vui-mount" "vui-render"))
     (let ((vui-render-delay nil)
           (side (get-buffer-create "*test-render-side*")))
       (unwind-protect
           (let* ((root (save-window-excursion
                          (vui-mount (vui-component 'vui-test-render-measured
-                                                   :side side)
+                                                   :side side :mount mount)
                                     "*test-render-host*")))
                  (sibling (car (vui-instance-children root)))
                  (caller (cadr (vui-instance-children root))))
@@ -590,7 +668,7 @@ and a `vui-test-render-in-render'."
             (expect (vui-instance-children caller) :to-be nil))
         (kill-buffer side)
         (when (get-buffer "*test-render-host*")
-          (kill-buffer "*test-render-host*"))))))
+          (kill-buffer "*test-render-host*")))))))
 
 (describe "vui-render re-render on the same buffer"
   ;; Regression: calling the low-level `vui-render' twice on the same

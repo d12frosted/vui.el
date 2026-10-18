@@ -567,9 +567,10 @@ Return what ACTION returned."
           (with-current-buffer "*test-resize-stale-root*"
             (vui-render (vui-text "PLAIN"))
             (expect unmounted :to-be t)
-            (expect vui--mounted-root :to-be nil)
-            ;; The resize hook is inert without a root: the plain
-            ;; render must survive a window size change.
+            ;; The root is the one of the tree `vui-render' mounted
+            (expect (vui-component-def-name (vui-instance-def vui--mounted-root))
+                    :to-be 'vui--rendered)
+            ;; A window size change renders that tree, not the old one
             (vui--on-window-size-change nil)
             (expect (buffer-substring-no-properties (point-min) (point-max))
                     :to-equal "PLAIN"))
