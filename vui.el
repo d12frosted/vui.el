@@ -979,6 +979,16 @@ the containers are on the hot path of every render.
 Every render binds this while it runs: the hooks of a render in another
 buffer, which a render function can start, count there only.")
 
+(defvar vui--created-instances nil
+  "The components created while an error boundary renders its children.
+A cons whose car lists the instances `vui--reconcile-component' created
+since the outermost boundary started, less those a boundary in it
+dropped already, newest first, so the components in a component come
+before it.  Nested boundaries share it, so one that fails can drop
+what a boundary in it created.  Nil when no boundary is
+rendering its children, and in the render of another tree (a tree
+mounted from a hook logs nothing here).")
+
 (defvar vui--queued-rerenders nil
   "Roots whose re-render was requested while a render was in progress.
 Drained by `vui--flush-queued-rerenders' after the in-progress render
@@ -3345,7 +3355,10 @@ stream does (see `vui--stream-relay-empty-transition')."
                ;; has none, also when this runs from a hook of a tree
                ;; under one
                (vui--context-stack nil)
-               (vui--pending-effects nil))
+               (vui--pending-effects nil)
+               ;; An error boundary of another tree does not drop what
+               ;; this tree creates
+               (vui--created-instances nil))
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
@@ -3482,7 +3495,10 @@ writes there goes into the region."
                ;; from a hook of a tree under one
                (vui--context-stack nil)
                ;; Clear pending effects before render
-               (vui--pending-effects nil))
+               (vui--pending-effects nil)
+               ;; An error boundary of another tree does not drop what
+               ;; this tree creates
+               (vui--created-instances nil))
           ;; Queue re-render requests (vui-set-state with nil delay)
           ;; until commit and effects are done
           (setq vui--rendering-p t)
@@ -4498,7 +4514,15 @@ the render that removed INSTANCE to that buffer."
     (vui--call-unmount-recursive-1 instance)))
 
 (defun vui--call-unmount-recursive-1 (instance)
-  "Do the work of `vui--call-unmount-recursive' for INSTANCE."
+  "Do the work of `vui--call-unmount-recursive' for INSTANCE.
+An instance unmounted already is left alone: an error boundary drops a
+component that mounted in a child, and then the child goes with that
+component in it (see `vui--drop-created')."
+  (unless (eq (vui-instance-mounted-p instance) 'unmounted)
+    (vui--call-unmount-recursive-2 instance)))
+
+(defun vui--call-unmount-recursive-2 (instance)
+  "Unmount INSTANCE and its children; see `vui--call-unmount-recursive-1'."
   ;; First unmount children (depth-first)
   (vui--with-debug-indent
    (dolist (child (vui-instance-children instance))
@@ -4631,6 +4655,20 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
      :buffer (when parent (vui-instance-buffer parent))
      :mounted-p nil)))
 
+(defun vui--drop-created (created upto)
+  "Drop the instances of CREATED before its tail UPTO, newest first.
+CREATED is a list from `vui--created-instances'.  One that mounted is
+unmounted, with its children.  One that never mounted (its render, or
+the render of a component in it, failed) has no hooks to run, but the
+async work its render started is cancelled.  Newest first, so the
+components in a component go before it."
+  (while (not (eq created upto))
+    (let ((instance (pop created)))
+      (pcase (vui-instance-mounted-p instance)
+        ('t (vui--call-unmount-recursive instance))
+        ('nil (vui--cleanup-instance-asyncs instance)
+              (setf (vui-instance-mounted-p instance) 'unmounted))))))
+
 (defun vui--reconcile-component (vnode parent)
   "Reconcile VNODE with existing child of PARENT, or create new instance."
   (let* ((type (vui-vnode-component-type vnode))
@@ -4650,7 +4688,10 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
           (setf (vui-instance-vnode existing) vnode)
           existing)
       ;; Create new instance
-      (vui--create-instance vnode parent))))
+      (let ((instance (vui--create-instance vnode parent)))
+        (when (and vui--created-instances (not vui--measuring-p))
+          (push instance (car vui--created-instances)))
+        instance))))
 
 ;;; Rendering
 
@@ -6804,7 +6845,10 @@ ROW as their root (see `vui--run-pending-effects')."
     (setf (vui-instance-base-path row) path)
     (let ((vui--root-instance row)
           (vui--render-path path)
-          (vui--context-stack nil))
+          (vui--context-stack nil)
+          ;; The row and what it holds belong to its stream: an error
+          ;; boundary around the stream does not drop them
+          (vui--created-instances nil))
       (vui--render-instance row))
     ;; Around what the row wrote, with the insertion types of a region
     ;; with text or of an empty one (see `vui--inline-set-bounds').  The
@@ -8720,8 +8764,17 @@ is written."
         ;; error goes, and so do the effects they asked for, which
         ;; would run for components that are not shown.  The start is
         ;; a marker, as their hooks can write or delete text above it.
-        (let ((start (point-marker))
-              (effects vui--pending-effects))
+        (let* ((start (point-marker))
+               (effects vui--pending-effects)
+               ;; The children of the component the boundary is in: the
+               ;; children that failed go, as on the renders after this
+               ;; one.  The index of the next child stays where they took
+               ;; it: when the last child is the one that failed, the
+               ;; siblings after the boundary match the children of the
+               ;; render before this one.
+               (new-children vui--new-children)
+               (vui--created-instances (or vui--created-instances (list nil)))
+               (created (car vui--created-instances)))
           (condition-case err
               (let ((idx 0))
                 (dolist (child children)
@@ -8745,7 +8798,16 @@ is written."
              (goto-char start)
              ;; A sticky table in that text goes too
              (vui--table-restore-header-line)
-             (setq vui--pending-effects effects)
+             (setq vui--pending-effects effects
+                   vui--new-children new-children)
+             ;; The components that existed before are not children any
+             ;; more, so the component the boundary is in unmounts them
+             ;; when it is done.  Those created here go now.  Their hooks
+             ;; run as the hooks of a render do (see `vui--shifting-point').
+             (let ((failed (car vui--created-instances)))
+               (setcar vui--created-instances created)
+               (vui--shifting-point
+                 (vui--drop-created failed created)))
              ;; Store the error for this boundary
              (puthash boundary-key err table)
              ;; Call on-error callback if provided
@@ -8780,8 +8842,9 @@ one from a timer, an async callback, or a window resize.
 
 The components in VNODE render once.  Their `:on-mount' runs, but
 nothing else of their lifecycle does: a state change does not render
-them again, their effects do not run, and nothing unmounts them, so a
-cleanup that `:on-mount' returns is never called.  The tree is its own
+them again, their effects do not run, and nothing unmounts them (but
+for the ones an error boundary drops when it catches an error), so a
+cleanup that `:on-mount' returns is never called otherwise.  The tree is its own
 also when this is called from a hook or an effect of another tree: it
 does not see the context values of that tree, so put a provider in
 VNODE to give it one.  Use `vui-mount' for a tree that lives."
@@ -8814,7 +8877,8 @@ VNODE to give it one.  Use `vui-mount' for a tree that lives."
           ;; up after them.  Without this binding they would wait in the
           ;; global list, or, called from a hook of a tree being
           ;; rendered, run with the effects of that tree, in its buffer.
-          (vui--pending-effects nil))
+          (vui--pending-effects nil)
+          (vui--created-instances nil))
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))
@@ -8871,6 +8935,9 @@ returns, the tree may not show those changes yet."
          (instance (vui--create-instance component-vnode nil))
          ;; Clear pending effects before initial render
          (vui--pending-effects nil)
+         ;; An error boundary of the tree this is mounted from does not
+         ;; drop what this tree creates
+         (vui--created-instances nil)
          ;; The paths of this tree start here.  A mount from a hook or
          ;; an effect of another tree runs inside that tree's render.
          (vui--render-path nil)

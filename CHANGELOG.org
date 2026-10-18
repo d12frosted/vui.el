@@ -9,6 +9,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- An error boundary that catches an error now drops all its children,
+  as React does: the components in them that mounted are unmounted,
+  and all of them lose their state. A reset of the boundary renders them from scratch. Before,
+  they stayed children of the component around the boundary: one that
+  failed on its first render, and so never mounted, got =:on-unmount=
+  on the next render of that component; one that mounted inside a
+  component whose render failed was never unmounted; and the others
+  kept their state for a reset. The async work of a component that
+  never mounted is cancelled too.
+
 - Mounted buffers reflow on window resize by default: =vui-mount= and
   =vui-mount-inline= now install =vui-rerender-on-resize= themselves,
   so =vui-flex= and =vui-grid= layouts whose :width follows the window

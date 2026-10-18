@@ -297,6 +297,327 @@
       (expect (buffer-string) :to-equal "fallback")
       (expect header-line-format :to-be nil)))
 
+  (it "unmounts a child whose render fails, and starts it again on a reset"
+    (let ((should-error nil)
+          (log nil))
+      (vui-defcomponent drop-failing-child ()
+        :state ((n 0))
+        :on-mount (push 'mount log)
+        :on-unmount (push 'unmount log)
+        :render (if should-error
+                    (error "Boom")
+                  (vui-button (format "n=%d" n)
+                    :on-click (lambda () (vui-set-state :n (1+ n))))))
+      (vui-defcomponent drop-failing-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-failing-child))))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-failing-app) "*test-drop*"))
+        (unwind-protect
+            (with-current-buffer "*test-drop*"
+              (vui-test--click-button-at (point-min))
+              (expect (buffer-string) :to-equal "[n=1]")
+              ;; It fails: it is not shown, and it is gone
+              (setq should-error t)
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback")
+              (expect (reverse log) :to-equal '(mount unmount))
+              ;; A reset renders it from scratch
+              (setq should-error nil)
+              (vui-reset-error-boundary 'test-drop)
+              (expect (buffer-string) :to-equal "[n=0]")
+              (expect (reverse log) :to-equal '(mount unmount mount)))
+          (kill-buffer "*test-drop*")))))
+
+  (it "unmounts the children that mounted before another one failed"
+    (let ((log nil))
+      (vui-defcomponent drop-mounted-sibling (name)
+        :on-mount (push (list 'mount name) log)
+        :on-unmount (push (list 'unmount name) log)
+        :render (vui-text name))
+      (vui-defcomponent drop-sibling-bomb ()
+        :render (error "Boom"))
+      (vui-defcomponent drop-sibling-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-sibling
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-vstack (vui-component 'drop-mounted-sibling
+                                                    :name "outer")
+                                     ;; One in a boundary of its own that
+                                     ;; renders fine
+                                     (vui-error-boundary
+                                      :id 'test-drop-inner
+                                      :fallback (lambda (_) (vui-text "inner"))
+                                      :children
+                                      (list (vui-component 'drop-mounted-sibling
+                                                           :name "inner")))
+                                     (vui-component 'drop-sibling-bomb)))))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-sibling-app) "*test-drop-sibling*"))
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*test-drop-sibling*" (buffer-string))
+                      :to-equal "fallback")
+              (expect (seq-filter (lambda (e) (eq (car e) 'unmount)) log)
+                      :to-have-same-items-as
+                      '((unmount "outer") (unmount "inner"))))
+          (kill-buffer "*test-drop-sibling*")))))
+
+  (it "keeps a sibling after it across the render that catches and the next"
+    (let ((mounts 0)
+          (should-error nil))
+      (vui-defcomponent drop-index-child ()
+        :render (if should-error (error "Boom") (vui-text "child ")))
+      (vui-defcomponent drop-index-sibling ()
+        :state ((n 0))
+        :on-mount (cl-incf mounts)
+        :render (vui-button (format "n=%d" n)
+                  :on-click (lambda () (vui-set-state :n (1+ n)))))
+      (vui-defcomponent drop-index-app ()
+        ;; Keyless siblings: they match by their place among the children
+        :render (vui-fragment
+                 (vui-error-boundary
+                  :id 'test-drop-index
+                  :fallback (lambda (_) (vui-text "fallback "))
+                  :children (list (vui-component 'drop-index-child)))
+                 (vui-component 'drop-index-sibling)))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-index-app) "*test-drop-index*"))
+        (unwind-protect
+            (with-current-buffer "*test-drop-index*"
+              (goto-char (point-min))
+              (search-forward "[")
+              (vui-test--click-button-at (match-beginning 0))
+              (expect (buffer-string) :to-equal "child [n=1]")
+              ;; The render that catches the error
+              (setq should-error t)
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback [n=1]")
+              ;; And the next one
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback [n=1]")
+              (expect mounts :to-equal 1))
+          (kill-buffer "*test-drop-index*")))))
+
+  (it "unmounts a component that mounted in a child it drops once"
+    (let ((log nil)
+          (grow nil)
+          (fail nil))
+      (vui-defcomponent drop-once-leaf ()
+        :on-mount (progn (push 'mount log)
+                         (lambda () (push 'cleanup log)))
+        :on-unmount (push 'unmount log)
+        :render (vui-text "leaf"))
+      (vui-defcomponent drop-once-child ()
+        :render (vui-fragment (vui-text "child ")
+                              (when grow (vui-component 'drop-once-leaf))))
+      (vui-defcomponent drop-once-bomb ()
+        :render (if fail (error "Boom") (vui-text "")))
+      (vui-defcomponent drop-once-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-once
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-once-child)
+                         (vui-component 'drop-once-bomb))))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-once-app) "*test-drop-once*"))
+        (unwind-protect
+            (with-current-buffer "*test-drop-once*"
+              ;; The child that is there renders a new one, then the
+              ;; next child fails
+              (setq grow t fail t)
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback")
+              (expect (reverse log) :to-equal '(mount cleanup unmount)))
+          (kill-buffer "*test-drop-once*")))))
+
+  (it "leaves a tree that a child mounted from a hook alone"
+    (let ((panel-unmounted nil))
+      (vui-defcomponent drop-panel-part ()
+        :on-unmount (setq panel-unmounted t)
+        :render (vui-text "panel"))
+      (vui-defcomponent drop-panel ()
+        :render (vui-component 'drop-panel-part))
+      (vui-defcomponent drop-panel-opener ()
+        :on-mount (save-window-excursion
+                    (vui-mount (vui-component 'drop-panel) "*test-drop-panel*"))
+        :render (vui-text "opener"))
+      (vui-defcomponent drop-panel-bomb ()
+        :render (error "Boom"))
+      (vui-defcomponent drop-panel-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-panel
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-panel-opener)
+                         (vui-component 'drop-panel-bomb))))
+      (let ((vui-render-delay nil))
+        (unwind-protect
+            (progn
+              (save-window-excursion
+                (vui-mount (vui-component 'drop-panel-app) "*test-drop-opener*"))
+              (expect panel-unmounted :to-be nil)
+              (expect (vui-instance-mounted-p (vui-get-instance "*test-drop-panel*"))
+                      :to-be t))
+          (dolist (buffer '("*test-drop-opener*" "*test-drop-panel*"))
+            (when (get-buffer buffer)
+              (kill-buffer buffer)))))))
+
+  (it "cancels the async work of a child it drops before it mounted"
+    (let ((process nil))
+      (vui-defcomponent drop-async-bomb ()
+        :render (error "Boom"))
+      (vui-defcomponent drop-async-loader ()
+        :render (progn
+                  (vui-use-async 'data
+                    (lambda (_resolve _reject)
+                      (setq process (make-process :name "vui-test-drop-async"
+                                                  :command '("cat")
+                                                  :noquery t))))
+                  (vui-component 'drop-async-bomb)))
+      (vui-defcomponent drop-async-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-async
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-async-loader))))
+      (let ((vui-render-delay nil))
+        (unwind-protect
+            (progn
+              (save-window-excursion
+                (vui-mount (vui-component 'drop-async-app) "*test-drop-async*"))
+              (expect process :to-be-truthy)
+              (expect (process-live-p process) :not :to-be-truthy))
+          (when (and process (process-live-p process))
+            (delete-process process))
+          (kill-buffer "*test-drop-async*")))))
+
+  (it "writes its fallback in place when a child it drops moves point"
+    (vui-defcomponent drop-point-mover ()
+      :on-unmount (goto-char (point-min))
+      :render (vui-text "mover"))
+    (vui-defcomponent drop-point-bomb ()
+      :render (error "Boom"))
+    (vui-defcomponent drop-point-app ()
+      :render
+      (vui-vstack
+       (vui-text "top")
+       (vui-error-boundary
+        :id 'test-drop-point
+        :fallback (lambda (_) (vui-text "fallback"))
+        :children (list (vui-component 'drop-point-mover)
+                        (vui-component 'drop-point-bomb)))))
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'drop-point-app) "*test-drop-point*"))
+      (unwind-protect
+          (expect (with-current-buffer "*test-drop-point*" (buffer-string))
+                  :to-equal "top\nfallback")
+        (kill-buffer "*test-drop-point*"))))
+
+  (it "keeps what a stream row in it creates when it renders the row again"
+    (let ((log nil)
+          (handle nil)
+          (show nil)
+          (fail nil))
+      (vui-defcomponent drop-row-leaf ()
+        :on-mount (push 'leaf-mount log)
+        :on-unmount (push 'leaf-unmount log)
+        :render (vui-text "leaf"))
+      (vui-defcomponent drop-row ()
+        :render (vui-fragment (vui-text "row ")
+                              (when show (vui-component 'drop-row-leaf))))
+      (vui-defcomponent drop-row-bomb ()
+        :render (if fail (error "Boom") (vui-text "ok")))
+      (vui-defcomponent drop-row-app ()
+        :render (let ((stream (vui-use-stream)))
+                  (setq handle stream)
+                  (vui-error-boundary
+                   :id 'test-drop-row
+                   :fallback (lambda (_) (vui-text "fallback"))
+                   :children (list (vui-stream stream)
+                                   (vui-component 'drop-row-bomb)))))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-row-app) "*test-drop-row*"))
+        (unwind-protect
+            (with-current-buffer "*test-drop-row*"
+              (vui-stream-append handle (vui-text "head"))
+              (vui-stream-append handle (vui-component 'drop-row))
+              ;; The row shows a leaf in the next render of the tree, and
+              ;; the child after the stream fails in that render.  The
+              ;; row and what it holds belong to the stream, not to the
+              ;; children of the boundary
+              (setq show t fail t)
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback")
+              (expect log :to-equal '(leaf-mount))
+              (let ((row (car (vui-stream-handle-rows handle))))
+                (expect (mapcar #'vui-instance-mounted-p
+                                (vui-instance-children row))
+                        :to-equal '(t))))
+          (kill-buffer "*test-drop-row*")))))
+
+  (it "keeps a tree that a child renders from a hook with vui-render"
+    (let ((part-unmounted nil))
+      (vui-defcomponent drop-rendered-part ()
+        :on-unmount (setq part-unmounted t)
+        :render (vui-text "part"))
+      (vui-defcomponent drop-rendering-child ()
+        :on-mount (vui-render (vui-component 'drop-rendered-part)
+                              (get-buffer-create "*test-drop-rendered*"))
+        :render (vui-text "child"))
+      (vui-defcomponent drop-rendered-bomb ()
+        :render (error "Boom"))
+      (vui-defcomponent drop-rendered-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-rendered
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-rendering-child)
+                         (vui-component 'drop-rendered-bomb))))
+      (let ((vui-render-delay nil))
+        (unwind-protect
+            (progn
+              (save-window-excursion
+                (vui-mount (vui-component 'drop-rendered-app)
+                           "*test-drop-rendering*"))
+              (expect part-unmounted :to-be nil))
+          (dolist (buffer '("*test-drop-rendering*" "*test-drop-rendered*"))
+            (when (get-buffer buffer)
+              (kill-buffer buffer)))))))
+
+  (it "does not unmount a child that failed on its first render"
+    (let ((unmounted nil))
+      (vui-defcomponent drop-never-mounted ()
+        :on-unmount (setq unmounted t)
+        :render (error "Boom"))
+      (vui-defcomponent drop-never-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-drop-never
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (list (vui-component 'drop-never-mounted))))
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'drop-never-app) "*test-drop-never*"))
+        (unwind-protect
+            (with-current-buffer "*test-drop-never*"
+              (vui-rerender (vui-get-instance))
+              (expect (buffer-string) :to-equal "fallback")
+              (expect unmounted :to-be nil)
+              (expect (vui-instance-children (vui-get-instance)) :to-be nil))
+          (kill-buffer "*test-drop-never*")))))
+
   (it "does not run the effects of the children that failed"
     (let ((should-error t)
           (effects 0))
