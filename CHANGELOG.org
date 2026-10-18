@@ -9,6 +9,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- The items of a =vui-stream= see the context providers around the
+  stream, as if they were written in its place. Before, a component row
+  rendered with no provider at all, and content written in place (an
+  append, an update of the last item, an edit of a live node) used the
+  providers of the code that wrote it: those of a hook, or none from a
+  timer. Such content showed a wrong value until the stream was written
+  again.
+
 - A component in an indented =vui-vstack= renders as its tree would
   if it were written in the component's place: each line of it gets
   the indent, a layout in it adds the indent to its own, and a =vui-flex=
@@ -163,7 +171,8 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the value of the provider, so its text changed on its first
   re-render. That was a tree that =vui-mount= mounts from a hook, and,
   from a hook of a tree that =vui-render= renders, also a re-render
-  (=vui-rerender=, =vui-update=, a stream row) or an inline mount.
+  (=vui-rerender=, =vui-update=) or an inline mount. A stream row sees
+  the providers of its stream instead (see above).
 
 - =vui-render= renders a tree of its own, also when it is called from
   a hook or an effect of a mounted tree. Its components reconciled

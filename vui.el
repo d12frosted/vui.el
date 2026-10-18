@@ -884,7 +884,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   r-len        ; Rendered length in chars (component-list incremental patching)
   r-streams    ; Streams in that text, each (HANDLE . LENGTH) (see vui--instance-text-length)
   base-path    ; Render path an inline instance starts from (stream rows only)
-  regions)     ; The inline regions around a stream row, innermost first
+  regions      ; The inline regions around a stream row, innermost first
+  providers)   ; The context stack a stream row renders with (that of its stream)
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -3424,11 +3425,12 @@ stream does (see `vui--stream-relay-empty-transition')."
                (vui--root-instance instance)
                ;; Nil but for a stream row, which is one step of its stream
                (vui--render-path (vui-instance-base-path instance))
-               ;; No provider above it either: a row of a stream renders
-               ;; on its own (see `vui--stream-reseat-row'), and a root
-               ;; has none, also when this runs from a hook of a tree
-               ;; under one
-               (vui--context-stack nil)
+               ;; A row of a stream renders with the providers at the
+               ;; place of its stream (see `vui-stream-handle-context').
+               ;; Another root has none, also when this runs from a hook
+               ;; of a tree under one
+               (vui--context-stack (and row-p
+                                        (vui-instance-providers instance)))
                (vui--pending-effects nil)
                ;; An error boundary of another tree does not drop what
                ;; this tree creates
@@ -4677,7 +4679,9 @@ component in it (see `vui--drop-created')."
 A detached instance can no longer be re-rendered: `vui--rerender-instance'
 becomes a no-op for it, and async callbacks created via
 `vui-with-async-context' that captured it do nothing."
-  (setf (vui-instance-buffer instance) nil)
+  (setf (vui-instance-buffer instance) nil
+        ;; Nor does it hold the providers of the tree it was in
+        (vui-instance-providers instance) nil)
   (dolist (child (vui-instance-children instance))
     (vui--detach-instance child)))
 
@@ -6792,7 +6796,12 @@ whose `vui-use-stream' made the handle, or nil for a handle from
 ENCLOSING lists the inline regions the stream was last rendered in,
 innermost first: the stream rows and the inline mount around it.  When
 the stream is the last thing in them, its end is theirs too (see
-`vui--growing-excursion')."
+`vui--growing-excursion').
+
+CONTEXT is the value of `vui--context-stack' at the place of the stream
+in its last render (a measure pass does not set it).  What the stream
+writes in place, and its component rows, render with it: the items see
+the providers around the stream, as if they were its children."
   buffer
   region-start
   region-end
@@ -6805,7 +6814,8 @@ the stream is the last thing in them, its end is theirs too (see
   (path nil)
   (rows nil)
   (owner nil)
-  (enclosing nil))
+  (enclosing nil)
+  (context nil))
 
 (defun vui--regions-ending-at (regions pos)
   "Return the end markers of REGIONS that end at POS, with their types.
@@ -6834,6 +6844,8 @@ See `vui--regions-ending-at': the regions of
 
 (defmacro vui--growing-excursion (handle &rest body)
   "Run BODY, an edit of HANDLE's stream in place, in `save-excursion'.
+BODY renders with the providers at the place of the stream (see
+`vui-stream-handle-context'), not with those of the code that edits it.
 The stream can be the last thing in inline regions, a stream row that
 holds it or an inline mount: its end is their end then.  What BODY
 writes at the end of the stream is theirs too, but the end marker of a
@@ -6842,8 +6854,10 @@ appended after a row is not the row's.  While BODY runs, the end
 markers of the regions that end with the stream advance with that text
 (see `vui--stream-end-regions' and `vui--advancing-ends')."
   (declare (indent 1) (debug t))
-  `(vui--advancing-ends (vui--stream-end-regions ,handle)
-     (save-excursion ,@body)))
+  (macroexp-let2 nil handle handle
+    `(vui--advancing-ends (vui--stream-end-regions ,handle)
+       (let ((vui--context-stack (vui-stream-handle-context ,handle)))
+         (save-excursion ,@body)))))
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -6866,7 +6880,11 @@ The component rows of the stream unmount with the component."
 
 (defun vui-stream (handle &rest props)
   "Create a stream vnode that anchors HANDLE's region in the render tree.
-PROPS may carry :key for reconciliation."
+PROPS may carry :key for reconciliation.  The items of the stream see
+the context providers around the stream, as if they were its children.
+This is also true for an item written in place by code under other
+providers (or under none), and for a component row that renders again
+on its own."
   (vui-vnode-stream--create :handle handle :key (plist-get props :key)))
 
 (defun vui--stream-bind-region (handle buffer start end)
@@ -6996,7 +7014,8 @@ A row unmounted on its own (with `vui-unmount') has no text any more."
 The rebuild of the stream erased what ROW wrote, so ROW gets its region
 again at point and renders there the way it renders on its own (see
 `vui--rerender-inline'): as the root of its tree, starting at PATH, the
-path of its item, and with no context from the tree around the stream.
+path of its item, and with the providers at the place of the stream,
+which are those around this render.
 It keeps its state, and its buttons re-render ROW, not the tree around
 it.  Its effects run after the commit of the render that got here, with
 ROW as their root (see `vui--run-pending-effects')."
@@ -7010,12 +7029,13 @@ ROW as their root (see `vui--run-pending-effects')."
     (set-marker-insertion-type start nil)
     ;; The re-renders of the row start from this path too
     (setf (vui-instance-base-path row) path)
-    ;; The regions it renders in on its own later, too
-    (setf (vui-instance-regions row) vui--enclosing-regions)
+    ;; The regions it renders in on its own later, too, and the
+    ;; providers
+    (setf (vui-instance-regions row) vui--enclosing-regions
+          (vui-instance-providers row) vui--context-stack)
     (let ((vui--root-instance row)
           (vui--render-path path)
           (vui--enclosing-regions (cons row vui--enclosing-regions))
-          (vui--context-stack nil)
           ;; The row and what it holds belong to its stream: an error
           ;; boundary around the stream does not drop them
           (vui--created-instances nil))
@@ -7031,8 +7051,7 @@ ROW as their root (see `vui--run-pending-effects')."
 ROW is not touched: this renders the tree a render of ROW would commit,
 as a measure pass does for any mounted component (see
 `vui--measure-instance-vtree')."
-  (let* ((vui--context-stack nil)
-         (vnode (vui-vnode-component--create
+  (let* ((vnode (vui-vnode-component--create
                  :type (vui-component-def-name (vui-instance-def row))
                  :props (vui-instance-props row)))
          (vtree (vui--measure-instance-vtree row vnode))
@@ -7130,6 +7149,9 @@ silently dropping every subsequent streamed append."
       (setf (vui-stream-handle-path handle) path)
       ;; And the regions it is in: its edits grow the ones it ends
       (setf (vui-stream-handle-enclosing handle) vui--enclosing-regions)
+      ;; And the providers around it: its edits and its rows render
+      ;; with them
+      (setf (vui-stream-handle-context handle) vui--context-stack)
       ;; The end of the stream is the end marker of its last item when
       ;; that is a row, so it follows the row when the row grows or
       ;; shrinks on its own (see `vui--stream-append-row').  Otherwise
@@ -7169,6 +7191,8 @@ stream that is not rendered yet."
                         (vui-stream-handle-last-start handle)))
     (when marker
       (set-marker marker nil)))
+  ;; Nor the providers of a place it is not at any more
+  (setf (vui-stream-handle-context handle) nil)
   (dolist (row (vui-stream-handle-rows handle))
     (when (vui--stream-row-p row)
       (set-marker (vui-instance-region-start row) nil)
@@ -9352,6 +9376,10 @@ whatever they render (see `vui--stream-append-row')."
   (let ((instance (vui--create-instance component-vnode nil)))
     (setf (vui-instance-buffer instance) (current-buffer))
     (setf (vui-instance-base-path instance) base-path)
+    ;; A stream row renders with the providers of its stream, which are
+    ;; those of the edit that mounts it (see `vui--growing-excursion')
+    (when base-path
+      (setf (vui-instance-providers instance) vui--context-stack))
     ;; An empty region until the first render, which may be queued:
     ;; both markers stay before text inserted at POS.  Every render
     ;; puts them around what it wrote (see `vui--inline-set-bounds').
@@ -9411,6 +9439,10 @@ Installed buffer-locally on `kill-buffer-hook' by `vui-mount',
 `vui-render' and `vui-mount-inline' so components release their
 resources (timers, processes, subscriptions) when the buffer is
 killed."
+  ;; The handles of the streams can outlive the buffer, but not the
+  ;; providers of the tree they were in
+  (dolist (handle vui--streams)
+    (setf (vui-stream-handle-context handle) nil))
   (when vui--mounted-root
     (vui--unmount-root vui--mounted-root)
     (kill-local-variable 'vui--mounted-root))
