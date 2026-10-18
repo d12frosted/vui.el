@@ -714,7 +714,7 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   children   ; List of child vnodes
   spacing    ; Blank lines between children (default 0)
   indent     ; Left indent for all children (default 0)
-  skip-first-indent  ; When t, skip indent for first child (used inside hstack)
+  skip-first-indent  ; Nil, or the indent of the first line (inside an hstack)
   face       ; Face applied beneath the children's own faces
   keymap)    ; Keymap cascading beneath the children's own keymaps
 
@@ -961,6 +961,21 @@ trees must not render again then: the render would set up their
 effects again after the cleanups ran, with nothing left to clean them
 up (see `vui--rerender-instance' and `vui--stream-request-rebuild').  A
 list: a hook can unmount another tree.")
+
+(defvar vui--children-layout nil
+  "The indent a region or an error boundary gives its children, or nil.
+Bound by `vui--render-in-vstack' around a region or a boundary in an
+indented vstack, to (INDENT INDENT-STR FIRST); see
+`vui--render-children'.  The region or the boundary takes it at once,
+so that nothing under it sees it.")
+
+(defvar vui--outer-indent 0
+  "The indent added before the lines of a box, in characters.
+A vstack writes a box in it as it is, then puts its indent after each
+newline in its text (see `vui--indent-lines').  A flex or a grid in that
+text cannot see it, and subtracts this from its width as it does its
+own :indent.  The cells of a flex, a grid or a table have their own
+widths, and do not subtract it again.")
 
 (defvar vui--hook-shift 0
   "How far the lifecycle hooks of renders moved the text before point.
@@ -4444,7 +4459,7 @@ INSTANCE is the component instance."
         (error
          (vui--handle-error 'event callback-name err instance))))))
 
-(defun vui--render-instance (instance &optional commit-fn)
+(defun vui--render-instance (instance &optional commit-fn in-layout)
   "Render a component INSTANCE into the current buffer.
 When COMMIT-FN is non-nil it is called with the computed vtree to write
 it to the buffer, instead of the default `vui--render-vnode'.  This lets
@@ -4452,7 +4467,9 @@ the root re-render commit incrementally (see `vui--commit-root').
 COMMIT-FN is called with a nil vtree too, so it can clear what the last
 commit wrote.  When COMMIT-FN returns `unchanged' it left the buffer as
 it was and rendered nothing, so INSTANCE keeps its children and the
-record of the contexts its subtree read."
+record of the contexts its subtree read.
+IN-LAYOUT, when non-nil, is the indent of the vstack INSTANCE is in:
+its tree renders with it.  See `vui--render-component'."
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
@@ -4505,7 +4522,10 @@ record of the contexts its subtree read."
       (vui--with-timing 'commit component-name
         (if commit-fn
             (setq unchanged (eq (funcall commit-fn vtree) 'unchanged))
-          (vui--render-vnode vtree))))
+          (if in-layout
+              (vui--render-in-vstack vtree (nth 0 in-layout)
+                                     (nth 1 in-layout) (nth 2 in-layout))
+            (vui--render-vnode vtree)))))
     ;; Update children list for next reconciliation.  Not when the commit
     ;; rendered nothing: no child was reconciled, yet the old children
     ;; are still on screen, so they must not be unmounted or dropped.
@@ -5773,7 +5793,10 @@ and `window'."
          (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (justify (or (vui-vnode-flex-justify vnode) :start))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
-                          indent)))
+                          indent
+                          (vui--width vui--outer-indent))))
+         ;; Taken from the width: the cells are not at that indent
+         (vui--outer-indent 0)
          (flex-start (vui--container-start (vui-vnode-flex-face vnode)
                                            (vui-vnode-flex-keymap vnode)))
          ;; Classify children: growers carry a weight, the rest are
@@ -6044,7 +6067,10 @@ new line, indented by the flex's :indent."
          (spacing (vui--width (or (vui-vnode-flex-spacing vnode) 1)))
          (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
-                          indent)))
+                          indent
+                          (vui--width vui--outer-indent))))
+         ;; Taken from the width: the cells are not at that indent
+         (vui--outer-indent 0)
          (flex-start (vui--container-start (vui-vnode-flex-face vnode)
                                            (vui-vnode-flex-keymap vnode)))
          ;; A child that renders nothing is dropped, like the
@@ -6110,7 +6136,10 @@ in place, rows containing a multi-line cell composed as text."
          (row-spacing (or (vui-vnode-grid-row-spacing vnode) 0))
          (indent (vui--width (or (vui-vnode-grid-indent vnode) 0)))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-grid-width vnode))
-                          indent)))
+                          indent
+                          (vui--width vui--outer-indent))))
+         ;; Taken from the width: the cells are not at that indent
+         (vui--outer-indent 0)
          (columns (max 1 (or (vui-vnode-grid-columns vnode) 2)))
          (min-chars (vui-vnode-grid-min-column-width vnode))
          (count (vui-layout-grid-columns
@@ -8227,6 +8256,245 @@ container separator, which we drop if the suffix renders to nothing
           ;; separator is after its new end
           (delete-region (vui--shifted from shift) (point)))))))
 
+(defun vui--vstack-indented (vstack indent first)
+  "Return a copy of VSTACK with INDENT added to its own indent.
+FIRST is nil, or the indent of its first line instead of INDENT, in
+characters (see `vui--render-in-vstack'): the vstack's own indent is
+added to it too."
+  (let ((own (or (vui-vnode-vstack-indent vstack) 0)))
+    (vui-vnode-vstack--create
+     :children (vui-vnode-vstack-children vstack)
+     :spacing (vui-vnode-vstack-spacing vstack)
+     :indent (+ indent own)
+     :skip-first-indent (and first (+ first own))
+     :face (vui-vnode-vstack-face vstack)
+     :keymap (vui-vnode-vstack-keymap vstack)
+     :key (vui-vnode-vstack-key vstack))))
+
+(defun vui--provider-context-stack (provider)
+  "Return the context stack the children of PROVIDER render with."
+  (cons (vui-context-binding--create
+         :context (vui-vnode-provider-context provider)
+         :value (vui-vnode-provider-value provider))
+        vui--context-stack))
+
+(defsubst vui--render-component (vnode &optional in-layout)
+  "Reconcile the component VNODE and render it at point.
+IN-LAYOUT, when non-nil, is (INDENT INDENT-STR FIRST): the indent of the
+vstack VNODE is in.  The component's tree renders with it, as it would
+if it were written in VNODE's place (see `vui--render-in-vstack').  Nil
+renders the tree as it is."
+  (let ((live (and vui--measuring-p
+                   vui--measure-live-parent
+                   (vui--measure-live-match vnode))))
+    (if live
+        ;; Measure pass over a mounted component: render what the
+        ;; instance will render - its render function over current
+        ;; state - instead of a throwaway initial-state instance.
+        ;; The live instance is only read, never touched; the real
+        ;; render still reconciles and re-renders it.  The descent
+        ;; rebinds the live parent so nested components match the
+        ;; instance's own children the same way.
+        (progn
+          (cl-incf vui--child-index)
+          (let ((vtree (vui--measure-instance-vtree live vnode)))
+            (let ((vui--measure-live-parent live)
+                  (vui--child-index 0))
+              (if in-layout
+                  (vui--render-in-vstack vtree (nth 0 in-layout)
+                                         (nth 1 in-layout) (nth 2 in-layout))
+                (vui--render-vnode vtree)))))
+      ;; No live counterpart (real render, or measuring a component
+      ;; that is not mounted here): reconcile and render.  A
+      ;; throwaway subtree has no live children to match below it.
+      (let* ((vui--measure-live-parent nil)
+             (instance (vui--reconcile-component vnode vui--current-instance)))
+        ;; Track this child for future reconciliation
+        (push instance vui--new-children)
+        ;; Record the instance's rendered length so the component-list
+        ;; incremental patcher can skip or replace it by position - only
+        ;; needed (and only paid for) when the flag is on.
+        (if vui-incremental-render
+            (let ((start (point)))
+              (vui--render-instance instance nil in-layout)
+              (setf (vui-instance-r-len instance) (- (point) start)))
+          (vui--render-instance instance nil in-layout))))))
+
+(defsubst vui--render-vstack-child (child indent indent-str first shift)
+  "Render CHILD at point as `vui--render-in-vstack' does.
+SHIFT is `vui--hook-shift' as the layout took it for CHILD.  An
+unindented child, a text and a component render here, with one call
+less: deep trees go through this for each of their levels, and wide
+ones for each of their lines."
+  (let ((start (point)))
+    (cond ((not (> indent 0))
+           (vui--render-vnode child)
+           (> (point) (vui--shifted start shift)))
+          ((vui-vnode-text-p child)
+           (cond ((null first) (insert indent-str))
+                 ((> first 0) (insert (vui--pad (vui--width first)))))
+           (if (string-empty-p (vui-vnode-text-content child))
+               ;; Nothing to write, so no indent either
+               (progn (delete-region start (point)) nil)
+             (vui--render-vnode child)
+             t))
+          ((vui-vnode-component-p child)
+           (vui--render-component child (list indent indent-str first))
+           (> (point) (vui--shifted start shift)))
+          ;; A nested vstack handles its own indent
+          ((vui-vnode-vstack-p child)
+           (vui--render-vnode (vui--vstack-indented child indent first))
+           (> (point) (vui--shifted start shift)))
+          (t
+           (vui--render-in-vstack child indent indent-str first)))))
+
+(defun vui--render-children (children layout)
+  "Render CHILDREN at point one after another, each a step in the path.
+LAYOUT nil renders them as they are.  Otherwise it is (INDENT INDENT-STR
+FIRST), the indent of the vstack they are in: each one renders through
+`vui--render-in-vstack'.  Until one of them writes text, they get FIRST
+for their first line; after that, a child that starts a line gets the
+indent on it, and one that goes on from a line gets none.  Return
+non-nil when they wrote text."
+  (let ((idx 0)
+        (wrote nil))
+    (dolist (child children)
+      (let ((vui--render-path (cons idx vui--render-path)))
+        (if layout
+            (when (vui--render-vstack-child child (nth 0 layout) (nth 1 layout)
+                                            (if wrote
+                                                (if (bolp) nil 0)
+                                              (nth 2 layout))
+                                            vui--hook-shift)
+              (setq wrote t))
+          (vui--render-vnode child)))
+      (cl-incf idx))
+    wrote))
+
+(defun vui--render-children-1 (vnode layout)
+  "Render VNODE at point, with LAYOUT as in `vui--render-children'."
+  (if layout
+      (vui--render-in-vstack vnode (nth 0 layout) (nth 1 layout) (nth 2 layout))
+    (vui--render-vnode vnode)))
+
+(defun vui--render-in-vstack (child indent indent-str first)
+  "Render CHILD at point as a child of a vstack indented by INDENT.
+INDENT is in characters and INDENT-STR is the text that indents a line
+by it.  FIRST is nil, or the indent of the first line of CHILD instead
+of INDENT, in characters: 0 leaves that line as it is, as it goes on
+from the text before it.  An indented hstack renders its children with
+this too, with 0: they go on from the line the hstack is on.
+
+A nested layout adds the indent to its own, and a flex or a grid
+subtracts it from its width.  A component gives it to
+its tree, which renders as it would if it were written in the
+component's place.  A fragment, a provider, a region or an error
+boundary gives it to each of its children, and a child that starts a
+line gets it on that line.  Anything else gets the indent before its
+first line only.  A newline gets none: it ends a line, it does not
+start one.
+
+Return non-nil when CHILD wrote text.  When it wrote none, the indent
+it got is gone too, and nothing is left."
+  (let ((start (point))
+        (shift vui--hook-shift)
+        (content-start nil))
+    (cond
+     ((not (> indent 0))
+      (setq content-start start)
+      (vui--render-vnode child))
+     ;; Nested vstacks handle their own indent, measure from here
+     ((vui-vnode-vstack-p child)
+      (setq content-start start)
+      (vui--render-vnode (vui--vstack-indented child indent first)))
+     ((vui-vnode-component-p child)
+      (setq content-start start)
+      (vui--render-component child (list indent indent-str first)))
+     ;; The children of these follow each other
+     ((or (vui-vnode-fragment-p child) (vui-vnode-provider-p child))
+      (setq content-start start)
+      (let ((vui--context-stack (if (vui-vnode-provider-p child)
+                                    (vui--provider-context-stack child)
+                                  vui--context-stack)))
+        (vui--render-children (if (vui-vnode-provider-p child)
+                                  (vui-vnode-provider-children child)
+                                (vui-vnode-fragment-children child))
+                              (list indent indent-str first))))
+     (t
+      ;; The indent of the first line
+      (cond ((vui-vnode-newline-p child))
+            ((null first) (insert indent-str))
+            ((> first 0) (insert (vui--pad (vui--width first)))))
+      ;; Measure after indent insertion
+      (setq content-start (point))
+      (cond
+       ;; Propagate indent to hstacks (for multi-line children inside
+       ;; hstack)
+       ((vui-vnode-hstack-p child)
+        (vui--render-vnode
+         (vui-vnode-hstack--create
+          :children (vui-vnode-hstack-children child)
+          :spacing (vui-vnode-hstack-spacing child)
+          :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
+          :face (vui-vnode-hstack-face child)
+          :keymap (vui-vnode-hstack-keymap child)
+          :key (vui-vnode-hstack-key child))))
+       ;; Propagate indent to flex rows so they subtract it from their
+       ;; available width
+       ((vui-vnode-flex-p child)
+        (vui--render-vnode
+         (vui-vnode-flex--create
+          :children (vui-vnode-flex-children child)
+          :spacing (vui-vnode-flex-spacing child)
+          :width (vui-vnode-flex-width child)
+          :justify (vui-vnode-flex-justify child)
+          :indent (+ indent (or (vui-vnode-flex-indent child) 0))
+          :wrap (vui-vnode-flex-wrap child)
+          :face (vui-vnode-flex-face child)
+          :keymap (vui-vnode-flex-keymap child)
+          :key (vui-vnode-flex-key child))))
+       ;; Propagate indent to grids the same way
+       ((vui-vnode-grid-p child)
+        (vui--render-vnode
+         (vui-vnode-grid--create
+          :children (vui-vnode-grid-children child)
+          :columns (vui-vnode-grid-columns child)
+          :min-column-width (vui-vnode-grid-min-column-width child)
+          :width (vui-vnode-grid-width child)
+          :spacing (vui-vnode-grid-spacing child)
+          :row-spacing (vui-vnode-grid-row-spacing child)
+          :indent (+ indent (or (vui-vnode-grid-indent child) 0))
+          :face (vui-vnode-grid-face child)
+          :keymap (vui-vnode-grid-keymap child)
+          :key (vui-vnode-grid-key child))))
+       ;; These render their children with `vui--render-children' too,
+       ;; and take the indent from `vui--children-layout'.  The indent
+       ;; of their first line is written before them, as for a box: the
+       ;; face of a region is not on it, and the fallback of a boundary
+       ;; that caught an error goes after it.
+       ((or (vui-vnode-region-p child) (vui-vnode-error-boundary-p child))
+        (let ((vui--children-layout (list indent indent-str 0)))
+          (vui--render-vnode child)))
+       ;; Tables and boxes: render with indent, then add indent after
+       ;; internal newlines.  A flex or a grid in a box subtracts that
+       ;; indent from its width as well.
+       ((or (vui-vnode-table-p child) (vui-vnode-box-p child))
+        ;; A marker: the hooks of the components in the layout can
+        ;; write or delete text above it
+        (let ((layout-start (point-marker)))
+          (let ((vui--outer-indent (+ vui--outer-indent indent)))
+            (vui--render-vnode child))
+          ;; Add indent after each internal newline, not after the
+          ;; newlines of what follows in the buffer
+          (vui--indent-lines layout-start (point) indent-str)
+          (set-marker layout-start nil)))
+       (t
+        (vui--render-vnode child)))))
+    (or (> (point) (vui--shifted content-start shift))
+        ;; Nothing rendered - remove any indent added
+        (progn (delete-region (vui--shifted start shift) (point))
+               nil))))
+
 (defun vui--indent-lines (start end indent)
   "Insert INDENT after each newline between START and END.
 END moves past each INDENT inserted before it or at it, so a newline
@@ -8417,42 +8685,31 @@ is written."
    ;; are skipped and don't affect spacing.
    ((vui-vnode-hstack-p vnode)
     (let ((spacing (vui--width (or (vui-vnode-hstack-spacing vnode) 1)))
-          ;; Stays in characters: an hstack never inserts its own indent,
-          ;; it only hands it down to nested vstacks, and :indent is a
-          ;; character-unit slot that accumulates through nesting.
+          ;; Stays in characters: an hstack hands it down to its
+          ;; children, where :indent is a character-unit slot that
+          ;; accumulates through nesting.  It does not write it on its
+          ;; own line: its children go on from it.
           (indent (or (vui-vnode-hstack-indent vnode) 0))
           (children (vui-vnode-hstack-children vnode))
           (container-start (vui--container-start
                             (vui-vnode-hstack-face vnode)
                             (vui-vnode-hstack-keymap vnode)))
           (space-str nil)
+          (indent-str nil)
           (prev-rendered-p nil)
           (child-idx 0))
-      (setq space-str (vui--pad spacing))
+      (setq space-str (vui--pad spacing)
+            indent-str (vui--pad (vui--width indent)))
       (dolist (child children)
         (let ((sep-start (point))
-              (content-start nil)
               (shift vui--hook-shift)
               (vui--render-path (cons child-idx vui--render-path)))
           ;; Only insert separator if previous child actually rendered something
           (when prev-rendered-p
             (insert space-str))
-          (setq content-start (point))
-          ;; Propagate indent to child vstacks (for multi-line content)
-          ;; Set skip-first-indent because the first line continues horizontally
-          (if (and (vui-vnode-vstack-p child) (> indent 0))
-              (vui--render-vnode
-               (vui-vnode-vstack--create
-                :children (vui-vnode-vstack-children child)
-                :spacing (vui-vnode-vstack-spacing child)
-                :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
-                :skip-first-indent t
-                :face (vui-vnode-vstack-face child)
-                :keymap (vui-vnode-vstack-keymap child)
-                :key (vui-vnode-vstack-key child)))
-            (vui--render-vnode child))
-          ;; Check if child actually rendered anything
-          (if (> (point) (vui--shifted content-start shift))
+          ;; A child goes on from the line of the hstack, and gets the
+          ;; indent on the lines it starts (see `vui--render-in-vstack')
+          (if (vui--render-vstack-child child indent indent-str 0 shift)
               (setq prev-rendered-p t)
             ;; Child rendered nothing - remove the separator we added
             (delete-region (vui--shifted sep-start shift) (point))))
@@ -8492,103 +8749,17 @@ is written."
                 ;; newline itself doesn't insert anything, but counts as rendered
                 (setq prev-rendered-p t))
             ;; Non-newline children: track if they produce output
-            (let* ((skip-this-indent (and (not prev-rendered-p) skip-first-indent))
+            (let* ((first-indent (and (not prev-rendered-p) skip-first-indent))
                    (sep-start (point))
-                   (content-start nil)
                    (shift vui--hook-shift))
               ;; Add separator newline (plus spacing) before child if prev rendered
               (when prev-rendered-p
                 (insert "\n")
                 (dotimes (_ spacing) (insert "\n")))
-              (cond
-               ;; Propagate indent to nested vstacks (they handle their own indentation)
-               ;; Also propagate skip-first-indent if this is the first child we're skipping
-               ((and (vui-vnode-vstack-p child) (> indent 0))
-                ;; Nested vstacks handle their own indent, measure from here
-                (setq content-start (point))
-                (vui--render-vnode
-                 (vui-vnode-vstack--create
-                  :children (vui-vnode-vstack-children child)
-                  :spacing (vui-vnode-vstack-spacing child)
-                  :indent (+ indent (or (vui-vnode-vstack-indent child) 0))
-                  :skip-first-indent skip-this-indent
-                  :face (vui-vnode-vstack-face child)
-                  :keymap (vui-vnode-vstack-keymap child)
-                  :key (vui-vnode-vstack-key child))))
-               ;; Propagate indent to hstacks (for multi-line children inside hstack)
-               ((and (vui-vnode-hstack-p child) (> indent 0))
-                (unless skip-this-indent
-                  (insert indent-str))
-                ;; Measure after indent insertion
-                (setq content-start (point))
-                (vui--render-vnode
-                 (vui-vnode-hstack--create
-                  :children (vui-vnode-hstack-children child)
-                  :spacing (vui-vnode-hstack-spacing child)
-                  :indent (+ indent (or (vui-vnode-hstack-indent child) 0))
-                  :face (vui-vnode-hstack-face child)
-                  :keymap (vui-vnode-hstack-keymap child)
-                  :key (vui-vnode-hstack-key child))))
-               ;; Propagate indent to flex rows so they subtract it
-               ;; from their available width
-               ((and (vui-vnode-flex-p child) (> indent 0))
-                (unless skip-this-indent
-                  (insert indent-str))
-                (setq content-start (point))
-                (vui--render-vnode
-                 (vui-vnode-flex--create
-                  :children (vui-vnode-flex-children child)
-                  :spacing (vui-vnode-flex-spacing child)
-                  :width (vui-vnode-flex-width child)
-                  :justify (vui-vnode-flex-justify child)
-                  :indent (+ indent (or (vui-vnode-flex-indent child) 0))
-                  :wrap (vui-vnode-flex-wrap child)
-                  :face (vui-vnode-flex-face child)
-                  :keymap (vui-vnode-flex-keymap child)
-                  :key (vui-vnode-flex-key child))))
-               ;; Propagate indent to grids the same way
-               ((and (vui-vnode-grid-p child) (> indent 0))
-                (unless skip-this-indent
-                  (insert indent-str))
-                (setq content-start (point))
-                (vui--render-vnode
-                 (vui-vnode-grid--create
-                  :children (vui-vnode-grid-children child)
-                  :columns (vui-vnode-grid-columns child)
-                  :min-column-width (vui-vnode-grid-min-column-width child)
-                  :width (vui-vnode-grid-width child)
-                  :spacing (vui-vnode-grid-spacing child)
-                  :row-spacing (vui-vnode-grid-row-spacing child)
-                  :indent (+ indent (or (vui-vnode-grid-indent child) 0))
-                  :face (vui-vnode-grid-face child)
-                  :keymap (vui-vnode-grid-keymap child)
-                  :key (vui-vnode-grid-key child))))
-               ;; Tables and boxes: render with indent, then add indent
-               ;; after internal newlines
-               ((and (or (vui-vnode-table-p child) (vui-vnode-box-p child))
-                     (> indent 0))
-                (unless skip-this-indent
-                  (insert indent-str))
-                (setq content-start (point))
-                ;; A marker: the hooks of the components in the layout can
-                ;; write or delete text above it
-                (let ((layout-start (point-marker)))
-                  (vui--render-vnode child)
-                  ;; Add indent after each internal newline, not after the
-                  ;; newlines of what follows in the buffer
-                  (vui--indent-lines layout-start (point) indent-str)
-                  (set-marker layout-start nil)))
-               ;; Other children: insert indent (if needed) and render
-               (t
-                (when (and (> indent 0) (not skip-this-indent))
-                  (insert indent-str))
-                ;; Measure after indent insertion
-                (setq content-start (point))
-                (vui--render-vnode child)))
-              ;; Check if child actually rendered anything
-              (if (> (point) (vui--shifted content-start shift))
+              (if (vui--render-vstack-child child indent indent-str
+                                            first-indent shift)
                   (setq prev-rendered-p t)
-                ;; Child rendered nothing - remove separator and any indent we added
+                ;; Child rendered nothing - remove the separator
                 (delete-region (vui--shifted sep-start shift) (point))))))
         (cl-incf child-idx))
       (vui--finish-container container-start
@@ -8656,7 +8827,10 @@ is written."
 
    ;; Table layout
    ((vui-vnode-table-p vnode)
-    (let* (;; Where the table starts: a marker, as the hooks of the
+    (let* (;; A cell has its own width: a flex in it does not subtract
+           ;; the indent of the lines of the table
+           (vui--outer-indent 0)
+           ;; Where the table starts: a marker, as the hooks of the
            ;; components in its cells can write or delete text above it
            (table-start (point-marker))
            (columns (vui-vnode-table-columns vnode))
@@ -8815,52 +8989,24 @@ is written."
 
    ;; Styled region - render children, then apply face/keymap on top
    ((vui-vnode-region-p vnode)
-    (let ((start (vui--container-start (vui-vnode-region-face vnode)
-                                       (vui-vnode-region-keymap vnode)))
-          (children (vui-vnode-region-children vnode))
-          (idx 0))
-      (dolist (child children)
-        (let ((vui--render-path (cons idx vui--render-path)))
-          (vui--render-vnode child))
-        (cl-incf idx))
+    (let* ((layout vui--children-layout)
+           (vui--children-layout nil)
+           (start (vui--container-start (vui-vnode-region-face vnode)
+                                        (vui-vnode-region-keymap vnode))))
+      (if layout
+          (vui--render-children (vui-vnode-region-children vnode) layout)
+        (let ((idx 0))
+          (dolist (child (vui-vnode-region-children vnode))
+            (let ((vui--render-path (cons idx vui--render-path)))
+              (vui--render-vnode child))
+            (cl-incf idx))))
       (vui--finish-container start
                              (vui-vnode-region-face vnode)
                              (vui-vnode-region-keymap vnode))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
-    (let ((live (and vui--measuring-p
-                     vui--measure-live-parent
-                     (vui--measure-live-match vnode))))
-      (if live
-          ;; Measure pass over a mounted component: render what the
-          ;; instance will render - its render function over current
-          ;; state - instead of a throwaway initial-state instance.
-          ;; The live instance is only read, never touched; the real
-          ;; render still reconciles and re-renders it.  The descent
-          ;; rebinds the live parent so nested components match the
-          ;; instance's own children the same way.
-          (progn
-            (cl-incf vui--child-index)
-            (let ((vtree (vui--measure-instance-vtree live vnode)))
-              (let ((vui--measure-live-parent live)
-                    (vui--child-index 0))
-                (vui--render-vnode vtree))))
-        ;; No live counterpart (real render, or measuring a component
-        ;; that is not mounted here): reconcile and render.  A
-        ;; throwaway subtree has no live children to match below it.
-        (let* ((vui--measure-live-parent nil)
-               (instance (vui--reconcile-component vnode vui--current-instance)))
-          ;; Track this child for future reconciliation
-          (push instance vui--new-children)
-          ;; Record the instance's rendered length so the component-list
-          ;; incremental patcher can skip or replace it by position - only
-          ;; needed (and only paid for) when the flag is on.
-          (if vui-incremental-render
-              (let ((start (point)))
-                (vui--render-instance instance)
-                (setf (vui-instance-r-len instance) (- (point) start)))
-            (vui--render-instance instance))))))
+    (vui--render-component vnode))
 
    ;; Stream - (re-)emit the handle's items and bind its region
    ((vui-vnode-stream-p vnode)
@@ -8868,15 +9014,9 @@ is written."
 
    ;; Context provider - push context and render children
    ((vui-vnode-provider-p vnode)
-    (let* ((context (vui-vnode-provider-context vnode))
-           (value (vui-vnode-provider-value vnode))
-           (children (vui-vnode-provider-children vnode))
+    (let* ((children (vui-vnode-provider-children vnode))
            ;; Push new binding onto context stack
-           (vui--context-stack
-            (cons (vui-context-binding--create
-                   :context context
-                   :value value)
-                  vui--context-stack)))
+           (vui--context-stack (vui--provider-context-stack vnode)))
       ;; Render all children with the new context.  Each one is a step
       ;; in the render path, like the children of a fragment: without it
       ;; the widgets of two children share their `:vui-path'.
@@ -8888,7 +9028,9 @@ is written."
 
    ;; Error boundary - catch errors from children
    ((vui-vnode-error-boundary-p vnode)
-    (let* ((boundary-key (or (vui-vnode-error-boundary-id vnode)
+    (let* ((layout vui--children-layout)
+           (vui--children-layout nil)
+           (boundary-key (or (vui-vnode-error-boundary-id vnode)
                              ;; No explicit id: derive a stable identity
                              ;; from the boundary's position in the tree
                              (cons :vui-path (reverse vui--render-path))))
@@ -8907,7 +9049,7 @@ is written."
           (when fallback
             (let ((fallback-vnode (funcall fallback existing-error))
                   (vui--render-path fallback-path))
-              (vui--render-vnode fallback-vnode)))
+              (vui--render-children-1 fallback-vnode layout)))
         ;; No error yet - try to render children, each one a step in
         ;; the render path (see the provider above).  When one fails,
         ;; the boundary shows what the renders after this one show:
@@ -8927,11 +9069,7 @@ is written."
                (vui--created-instances (or vui--created-instances (list nil)))
                (created (car vui--created-instances)))
           (condition-case err
-              (let ((idx 0))
-                (dolist (child children)
-                  (let ((vui--render-path (cons idx vui--render-path)))
-                    (vui--render-vnode child))
-                  (cl-incf idx)))
+              (vui--render-children children layout)
             (error
              (let ((end (max start (point))))
                ;; The fields in that text are not set up yet: they wait
@@ -8970,7 +9108,7 @@ is written."
              (when fallback
                (let ((fallback-vnode (funcall fallback err))
                      (vui--render-path fallback-path))
-                 (vui--render-vnode fallback-vnode)))))
+                 (vui--render-children-1 fallback-vnode layout)))))
           (set-marker start nil)))))
 
    ;; String shorthand

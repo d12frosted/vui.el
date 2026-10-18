@@ -176,7 +176,10 @@ Returns nil if valid, or an error message string if invalid."
 
 ;;; Indentation Context
 
-;; Context to propagate accumulated indentation through nested collapsibles
+;; The sum of the indents of the collapsibles around a place in the
+;; tree.  A collapsible does not use it to place its content: the layout
+;; it is in gives the content its indent.  It is still provided, for
+;; code that reads it.
 (vui-defcontext vui-collapsible-indent 0
   "Current accumulated indentation level for nested collapsibles.")
 
@@ -218,10 +221,11 @@ default `fill-column'); it only matters when HEADER-RIGHT is set."
          (exp-ind (or expanded-indicator "▼"))
          (col-ind (or collapsed-indicator "▶"))
          (indicator (if is-expanded exp-ind col-ind))
-         ;; Indentation: own indent + accumulated from parent
+         ;; Indentation: the content goes OWN-INDENT deeper than the
+         ;; header.  The layout the collapsible is in indents both.
          (own-indent (or indent 2))
-         (parent-indent (vui-use-context vui-collapsible-indent-context))
-         (total-indent (+ parent-indent own-indent))
+         (total-indent (+ (vui-use-context vui-collapsible-indent-context)
+                          own-indent))
          ;; The toggle - plain clickable text (no indent - inherits from
          ;; parent).  The ▶/▼ indicator is baked into the label, so the
          ;; label changes on every toggle.  Give the button a stable :key
@@ -243,29 +247,25 @@ default `fill-column'); it only matters when HEADER-RIGHT is set."
                                    (funcall on-toggle new-state))))))
          ;; With :header-right, the header is a space-between flex (toggle
          ;; on the left, adornment on the right); without it, the header is
-         ;; exactly the toggle button, unchanged from before.  The header
-         ;; sits at PARENT-INDENT (the body goes deeper, at TOTAL-INDENT),
-         ;; so tell the flex to subtract PARENT-INDENT from its width: the
-         ;; right edge then lands at HEADER-WIDTH no matter how deeply the
-         ;; collapsible is nested, instead of drifting past it by the
-         ;; indent.
+         ;; exactly the toggle button, unchanged from before.  The layout
+         ;; the collapsible is in gives the flex its indent, and the flex
+         ;; subtracts it from its width: the right edge lands at
+         ;; HEADER-WIDTH however deeply the collapsible is nested.  Text
+         ;; before it on its line, as in an hstack, moves it further.
          (header (if header-right
                      (vui-flex :width (or header-width 'fill-column)
                                :justify :space-between
-                               :indent parent-indent
                        toggle
                        header-right)
                    toggle)))
     (vui-fragment
      header
      ;; Content (indented, only when expanded)
-     ;; Use total-indent directly so nested collapsibles render at correct level
-     ;; Provide accumulated indent to nested collapsibles via context
      (when is-expanded
        (vui-fragment
         (vui-newline)
         (vui-collapsible-indent-provider total-indent
-          (vui-vstack :indent total-indent
+          (vui-vstack :indent own-indent
             children)))))))
 
 ;;;###autoload
@@ -282,7 +282,7 @@ Options:
   :title-face FACE - face for header
   :expanded-indicator STRING - shown when expanded (default \"▼\")
   :collapsed-indicator STRING - shown when collapsed (default \"▶\")
-  :indent N - content indentation (default 2)
+  :indent N - how far the content goes in from the header (default 2)
   :key KEY - reconciliation key.  It also becomes the header toggle's
              cursor identity, so point rides the toggle across
              expand/collapse.  When omitted, only that toggle identity

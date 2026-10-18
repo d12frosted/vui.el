@@ -431,6 +431,274 @@
                       :to-equal "  b\n  two     \nafter 1\nafter 2")))
         (kill-buffer buffer)))))
 
+(vui-defcomponent layout-lines (lines)
+  :render (vui-vstack (mapcar #'vui-text lines)))
+
+(vui-defcomponent layout-wrap (child)
+  :render child)
+
+(vui-defcomponent layout-counter ()
+  :state ((n 1))
+  :render (vui-vstack (vui-text (format "n%d" n))
+                      (vui-button "more" :on-click (lambda () (vui-set-state :n (1+ n))))))
+
+(vui-defcomponent layout-fails ()
+  :render (error "Layout test failure"))
+
+(vui-defcontext layout-test-ctx 'none)
+
+(vui-defcomponent layout-show-ctx ()
+  :render (vui-text (format "%S" (vui-use-context layout-test-ctx-context))))
+
+(describe "components in indented layouts"
+  ;; A component renders as its tree would if it were written in the
+  ;; component's place
+  (it "get the indent of a vstack on each line"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-component 'layout-lines :lines '("a" "b"))
+                    (vui-text "y")))
+      (expect (buffer-string) :to-equal "  x\n  a\n  b\n  y")))
+
+  (it "leave the first line as it is when the vstack skips it"
+    (with-temp-buffer
+      ;; The first line of a vstack in an hstack goes on after "k:"
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack (vui-text "k:")
+                                (vui-vstack
+                                 (vui-component 'layout-lines :lines '("a" "b"))
+                                 (vui-text "y")))))
+      (expect (buffer-string) :to-equal "  k: a\n  b\n  y")))
+
+  (it "pass the indent through a component they render"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-component 'layout-wrap
+                                   :child (vui-component 'layout-lines
+                                                         :lines '("a" "b")))))
+      (expect (buffer-string) :to-equal "  a\n  b")))
+
+  (it "add the indent to that of a vstack they render"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-component 'layout-wrap
+                                   :child (vui-vstack :indent 1
+                                            (vui-text "a") (vui-text "b")))))
+      (expect (buffer-string) :to-equal "   a\n   b")))
+
+  (it "give the indent to each line of a box they render"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-component 'layout-wrap
+                                   :child (vui-box (vui-vstack (vui-text "a")
+                                                               (vui-text "b"))
+                                                   :width 2))))
+      ;; One column of alignment padding, after the last line
+      (expect (buffer-string) :to-equal "  a\n  b ")))
+
+  (it "leave no line when they show nothing"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-component 'layout-wrap :child nil)
+                    (vui-component 'layout-wrap :child (vui-text ""))
+                    (vui-text "y")))
+      (expect (buffer-string) :to-equal "  x\n  y")))
+
+  (it "keep the own indent of a vstack they render in an hstack"
+    (with-temp-buffer
+      ;; As with no indent around: "*   a"
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack (vui-text "*")
+                                (vui-component 'layout-wrap
+                                               :child (vui-vstack :indent 2
+                                                        (vui-text "a"))))))
+      (expect (buffer-string) :to-equal "  *   a")))
+
+  (it "get the indent of a vstack after the first line of an hstack"
+    (with-temp-buffer
+      ;; As for a vstack written there
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack (vui-text "k:")
+                                (vui-component 'layout-lines
+                                               :lines '("a" "b")))))
+      (expect (buffer-string) :to-equal "  k: a\n  b")))
+
+  (it "keep the indent when they render again"
+    (let ((vui-render-delay nil)
+          (buffer "*test-indent-component*"))
+      (vui-mount (vui-component 'layout-wrap
+                                :child (vui-vstack :indent 2
+                                         (vui-component 'layout-counter)))
+                 buffer)
+      (unwind-protect
+          (with-current-buffer buffer
+            (expect (substring-no-properties (buffer-string))
+                    :to-equal "  n1\n  [more]")
+            (goto-char (point-min))
+            (search-forward "more")
+            (vui-test--click-button-at (match-beginning 0))
+            (vui-flush-sync)
+            (expect (substring-no-properties (buffer-string))
+                    :to-equal "  n2\n  [more]"))
+        (kill-buffer buffer))))
+
+  (it "keep the width a flex measures for them"
+    (let ((vui-render-delay nil)
+          (buffer "*test-indent-measure*"))
+      ;; Rendered again, the flex measures the mounted component
+      (vui-mount (vui-component 'layout-wrap
+                                :child (vui-flex :width 10 :justify :space-between
+                                         (vui-vstack :indent 2
+                                           (vui-component 'layout-lines
+                                                          :lines '("a" "bb")))
+                                         (vui-text "R")))
+                 buffer)
+      (unwind-protect
+          (with-current-buffer buffer
+            (expect (buffer-string) :to-equal "  a\n  bb     R")
+            (vui-rerender (vui-get-instance))
+            (expect (buffer-string) :to-equal "  a\n  bb     R"))
+        (kill-buffer buffer)))))
+
+(describe "fragments and providers in indented layouts"
+  (it "give the indent of a vstack to each line a child starts"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-fragment (vui-text "a") (vui-text "b")
+                                  (vui-newline)
+                                  (vui-vstack (vui-text "c") (vui-text "d")))))
+      (expect (buffer-string) :to-equal "  ab\n  c\n  d")))
+
+  (it "pass the indent of a vstack to the children of a provider"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (layout-test-ctx-provider 'set
+                      (vui-vstack (vui-text "a") (vui-text "b")))))
+      (expect (buffer-string) :to-equal "  a\n  b")))
+
+  (it "leave no line when they show nothing"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-fragment nil (vui-text ""))
+                    (vui-text "y")))
+      (expect (buffer-string) :to-equal "  x\n  y")))
+
+  (it "leave a newline that starts a line without the indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-fragment (vui-text "a") (vui-newline) (vui-newline)
+                                  (vui-text "b"))))
+      (expect (buffer-string) :to-equal "  a\n\n  b")))
+
+  (it "indent their first child as the first child of the vstack"
+    (with-temp-buffer
+      (vui-render (vui-fragment (vui-text "k:")
+                                (vui-vstack :indent 2
+                                  (vui-fragment (vui-text "a") (vui-text "b")))))
+      ;; As (vui-vstack :indent 2 (vui-text "ab")) after "k:"
+      (expect (buffer-string) :to-equal "k:  ab")))
+
+  (it "pass the indent of an hstack to a vstack in them"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-hstack (vui-text "k:")
+                                (vui-fragment (vui-vstack (vui-text "a")
+                                                          (vui-text "b"))))))
+      (expect (buffer-string) :to-equal "  k: a\n  b")))
+
+  (it "keep the value a provider gives"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (layout-test-ctx-provider 'set
+                      (vui-component 'layout-show-ctx))
+                    (vui-hstack (vui-text "k:")
+                                (layout-test-ctx-provider 'set
+                                  (vui-component 'layout-show-ctx)))))
+      (expect (buffer-string) :to-equal "  set\n  k: set")))
+
+  (it "give the widgets in them the paths they have with no indent"
+    (cl-flet ((paths (indent)
+                (with-temp-buffer
+                  (vui-render
+                   (vui-vstack :indent indent
+                     (vui-fragment (vui-button "a") (vui-button "b"))
+                     (vui-hstack (vui-text "k:")
+                                 (vui-fragment (vui-button "c") (vui-button "d")))))
+                  (mapcar (lambda (w) (vui--elt-get w :vui-path))
+                          (vui--collect-widgets)))))
+      (expect (length (delete-dups (paths 2))) :to-equal 4)
+      (expect (paths 2) :to-equal (paths 0))))
+
+  (it "keep the own indent of a vstack in them after text"
+    (with-temp-buffer
+      ;; As with no indent around, "Label:  a\n  b", with 2 more on
+      ;; each line
+      (vui-render (vui-vstack :indent 2
+                    (vui-fragment (vui-text "Label:")
+                                  (vui-vstack :indent 2
+                                    (vui-text "a") (vui-text "b")))))
+      (expect (buffer-string) :to-equal "  Label:  a\n    b"))))
+
+(describe "regions and error boundaries in indented layouts"
+  (it "give the indent of a vstack to each line of their children"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-region (vui-component 'layout-lines :lines '("a" "b")))
+                    (vui-error-boundary
+                     :id 'layout-indent-boundary
+                     :children (list (vui-component 'layout-lines
+                                                    :lines '("c" "d"))))))
+      (expect (buffer-string) :to-equal "  a\n  b\n  c\n  d")))
+
+  (it "give it to the fallback of a boundary that caught an error"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-text "x")
+                    (vui-error-boundary
+                     :id 'layout-indent-fallback
+                     :fallback (lambda (_)
+                                 (vui-vstack (vui-text "f1") (vui-text "f2")))
+                     :children (list (vui-text "lost")
+                                     (vui-component 'layout-fails)))))
+      (expect (buffer-string) :to-equal "  x\n  f1\n  f2"))))
+
+(describe "a flex in a box in an indented vstack"
+  (it "ends at its width"
+    (with-temp-buffer
+      ;; The vstack puts its indent before the lines of the box, so the
+      ;; flex is 8 wide
+      (vui-render (vui-vstack :indent 2
+                    (vui-box (vui-flex :width 10 :justify :space-between
+                               (vui-text "a") (vui-text "b"))
+                             :width 8)))
+      (expect (buffer-string) :to-equal "  a      b")))
+
+  (it "takes the indent once with a flex in a cell of it"
+    (with-temp-buffer
+      (let ((inner (vui-flex :width 10 :justify :end (vui-text "b"))))
+        (vui-render (vui-vstack :indent 4
+                      (vui-flex :width 20 (vui-text "a") inner)
+                      (vui-box (vui-flex :width 20 (vui-text "a") inner)
+                               :width 16)))
+        ;; The same line in the box as right in the vstack, then the
+        ;; padding of the box to its width
+        (expect (buffer-string)
+                :to-equal "    a          b\n    a          b    ")))))
+
+(describe "a flex in a table cell in an indented vstack"
+  (it "does not subtract the indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 4
+                    (vui-table :columns '((:width 11))
+                               :rows (list (list (vui-flex :width 11
+                                                           (vui-text "a")
+                                                           (vui-flex :width 10 :justify :end
+                                                                     (vui-text "b"))))))))
+      (expect (buffer-string) :to-equal "    a          b"))))
+
 (defun vui-layout-test--faces-at (pos)
   "Return the face property at POS as a list."
   (let ((face (get-text-property pos 'face)))
@@ -1157,8 +1425,10 @@
 
   (it "accumulates indent through multiple nesting levels"
     (with-temp-buffer
-      ;; When vstack is inside hstack, first child has no indent (continues horizontally)
-      ;; Subsequent children get the accumulated indent (inherited + own)
+      ;; When vstack is inside hstack, the first line continues
+      ;; horizontally: it gets the vstack's own indent only, as with no
+      ;; indent around.  Subsequent children get the accumulated indent
+      ;; (inherited + own)
       (vui-render (vui-vstack
                    :indent 2
                    (vui-text "outer")
@@ -1169,7 +1439,26 @@
                      :indent 2
                      (vui-text "inner1")
                      (vui-text "inner2")))))
-      (expect (buffer-string) :to-equal "  outer\n  h:inner1\n    inner2"))))
+      (expect (buffer-string) :to-equal "  outer\n  h:  inner1\n    inner2")))
+
+  (it "gives the indent to the lines after the first of a box in an hstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-hstack (vui-text "k:")
+                               (vui-box (vui-vstack (vui-text "a") (vui-text "b"))
+                                        :width 2))))
+      (expect (buffer-string) :to-equal "  k: a\n  b ")))
+
+  (it "passes the indent through an hstack in an hstack"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   :indent 2
+                   (vui-hstack (vui-text "k:")
+                               (vui-hstack (vui-text "j:")
+                                           (vui-vstack (vui-text "a")
+                                                       (vui-text "b"))))))
+      (expect (buffer-string) :to-equal "  k: j: a\n  b"))))
 
 (describe "vstack/hstack with empty-rendering children"
   ;; Components that render to nil should not affect spacing

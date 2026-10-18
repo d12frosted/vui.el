@@ -535,7 +535,168 @@
               (forward-line 1)
               ;; Line 4: "    Inner content" at column 4 (accumulated indent)
               (expect (looking-at "    Inner content") :to-be-truthy))
-          (kill-buffer "*test-collapsible-16*")))))
+          (kill-buffer "*test-collapsible-16*"))))
+
+    (it "indents a collapsible inside a component once"
+      (vui-defcomponent collapsible-test-16b ()
+        :render
+        (vui-collapsible :title "Inner" :initially-expanded t
+          (vui-text "Inner content")))
+      (vui-defcomponent collapsible-test-16c ()
+        :render
+        (vui-collapsible :title "Outer" :initially-expanded t
+          (vui-component 'collapsible-test-16b)))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-16c)
+                                 "*test-collapsible-16c*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-16c*"
+              (expect (substring-no-properties (buffer-string))
+                      :to-equal "▼ Outer\n  ▼ Inner\n    Inner content"))
+          (kill-buffer "*test-collapsible-16c*"))))
+
+    (it "indents a collapsible inside a box once"
+      (vui-defcomponent collapsible-test-16d ()
+        :render
+        (vui-collapsible :title "Outer" :initially-expanded t
+          (vui-box (vui-collapsible :title "Inner" :initially-expanded t
+                     (vui-text "deep"))
+                   :width 8)))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-16d)
+                                 "*test-collapsible-16d*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-16d*"
+              ;; One column of alignment padding in the box: its widest
+              ;; line is 7 wide
+              (expect (substring-no-properties (buffer-string))
+                      :to-equal "▼ Outer\n  ▼ Inner\n    deep "))
+          (kill-buffer "*test-collapsible-16d*"))))
+
+    (it "indents a collapsible inside a table once"
+      (vui-defcomponent collapsible-test-16e ()
+        :render
+        (vui-collapsible :title "Outer" :initially-expanded t
+          (vui-table :columns '((:width 10))
+                     :rows (list (list (vui-collapsible :title "Inner"
+                                         :initially-expanded t
+                                         (vui-text "deep")))))))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-16e)
+                                 "*test-collapsible-16e*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-16e*"
+              (expect (substring-no-properties (buffer-string))
+                      :to-match "\\`▼ Outer\n  ▼ Inner *\n    deep"))
+          (kill-buffer "*test-collapsible-16e*"))))
+
+    (it "provides the sum of the indents of the collapsibles around"
+      (vui-defcomponent collapsible-test-16f-show ()
+        :render (vui-text (format "%d" (vui-use-context
+                                        vui-collapsible-indent-context))))
+      (vui-defcomponent collapsible-test-16f ()
+        :render
+        (vui-collapsible :title "O" :initially-expanded t
+          (vui-collapsible :title "I" :initially-expanded t :indent 3
+            (vui-component 'collapsible-test-16f-show))))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-16f)
+                                 "*test-collapsible-16f*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-16f*"
+              (expect (substring-no-properties (buffer-string))
+                      :to-equal "▼ O\n  ▼ I\n     5"))
+          (kill-buffer "*test-collapsible-16f*")))))
+
+  (describe "inside an indented layout"
+    (it "indents its content once in an hstack inside a collapsible"
+      (vui-defcomponent collapsible-test-20 ()
+        :render
+        (vui-collapsible :title "Outer" :initially-expanded t
+          (vui-hstack (vui-text "-")
+                      (vui-collapsible :title "Inner" :initially-expanded t
+                        (vui-text "d1") (vui-text "d2")))))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-20)
+                                 "*test-collapsible-20*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-20*"
+              (expect (substring-no-properties (buffer-string))
+                      :to-equal "▼ Outer\n  - ▼ Inner\n    d1\n    d2"))
+          (kill-buffer "*test-collapsible-20*"))))
+
+    (dolist (wrapper '(region boundary))
+      (it (format "indents its content once in a %s inside a collapsible" wrapper)
+        (let ((inner (vui-collapsible :title "Inner" :initially-expanded t
+                       (vui-text "deep"))))
+          (with-temp-buffer
+            (vui-render
+             (vui-collapsible :title "Outer" :initially-expanded t
+               (if (eq wrapper 'region)
+                   (vui-region :face 'bold inner)
+                 (vui-error-boundary :id 'collapsible-test-21
+                                     :children (list inner)))))
+            (expect (substring-no-properties (buffer-string))
+                    :to-equal "▼ Outer\n  ▼ Inner\n    deep")))))
+
+    (dolist (wrapper '(box region boundary))
+      (it (format "ends a rich header at its width in a %s inside a collapsible"
+                  wrapper)
+        (let ((inner (vui-collapsible :title "Inner" :header-width 20
+                                      :header-right (vui-text "9")
+                       (vui-text "deep"))))
+          (with-temp-buffer
+            (vui-render
+             (vui-collapsible :title "Outer" :initially-expanded t
+               (pcase wrapper
+                 ('box (vui-box inner :width 30))
+                 ('region (vui-region inner))
+                 (_ (vui-error-boundary :id 'collapsible-test-22
+                                        :children (list inner))))))
+            (goto-char (point-min))
+            (forward-line 1)
+            (let ((line (string-trim-right
+                         (buffer-substring-no-properties (point)
+                                                         (line-end-position)))))
+              (expect line :to-match "\\`  ▶ Inner")
+              (expect (string-width line) :to-equal 20))))))
+
+    (it "indents its content from where it is"
+      (vui-defcomponent collapsible-test-17 ()
+        :render
+        (vui-vstack :indent 4
+          (vui-text "top")
+          (vui-collapsible :title "Section" :initially-expanded t
+            (vui-text "a")
+            (vui-text "b"))))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-17)
+                                 "*test-collapsible-17*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-17*"
+              (expect (substring-no-properties (buffer-string))
+                      :to-equal "    top\n    ▼ Section\n      a\n      b"))
+          (kill-buffer "*test-collapsible-17*"))))
+
+    (it "ends a rich header at its width"
+      (vui-defcomponent collapsible-test-18 ()
+        :render
+        (vui-vstack :indent 4
+          (vui-collapsible :title "Section"
+                           :header-width 20
+                           :header-right (vui-text "9")
+            (vui-text "a"))))
+      (let ((instance (vui-mount (vui-component 'collapsible-test-18)
+                                 "*test-collapsible-18*")))
+        (ignore instance)
+        (unwind-protect
+            (with-current-buffer "*test-collapsible-18*"
+              (let ((line (buffer-substring-no-properties
+                           (point-min) (line-end-position))))
+                (expect line :to-match "\\`    ▶ Section")
+                (expect line :to-match "9\\'")
+                (expect (string-width line) :to-equal 20)))
+          (kill-buffer "*test-collapsible-18*")))))
 
   (describe "cursor identity across expand and collapse"
     ;; The header toggle bakes the ▶/▼ indicator into its label, so the

@@ -9,6 +9,42 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- A component in an indented =vui-vstack= renders as its tree would
+  if it were written in the component's place: each line of it gets
+  the indent, a layout in it adds the indent to its own, and a =vui-flex=
+  in it subtracts the indent from its width. Before, only its first line
+  was indented, and a =vui-flex= in it ran past its width by the indent.
+  The children of a =vui-fragment=, a context provider, a =vui-region=
+  or a =vui-error-boundary= (its fallback too) get the indent the same
+  way: each line that one of them starts is indented.
+
+- An indented =vui-hstack= gives its indent to all its children as a
+  vstack does, except on their first line, which goes on from the line
+  of the hstack. Before, only a =vui-vstack= right in it got the indent:
+  the lines after the first of a nested hstack, a box, a table or a
+  component were not indented, and a =vui-flex= in it did not subtract
+  the indent from its width.
+
+- A vstack in an indented hstack keeps its own =:indent= on its first
+  line, as it does when nothing around it is indented. Before, its first
+  line lost it.
+
+- A =vui-flex= or a =vui-grid= in a box in an indented vstack subtracts
+  the indent from its width, as it does right in the vstack: the vstack
+  puts its indent before each line of the box. Before, it ran past its
+  width by the indent. One in a cell of a flex, a grid or a table does
+  not subtract it again.
+
+- =vui-collapsible= indents its content by its =:indent= from where its
+  header is, so the content lines up wherever the collapsible is: in an
+  indented vstack, or in a box or a table inside another collapsible.
+  Before, the content went at the sum of the =:indent= of this
+  collapsible and the collapsibles around it, from the left edge: in a
+  vstack indented by 4 the content was at column 2, left of the header,
+  and in a box or a table inside a collapsible it got the indent of the
+  outer collapsible twice. A header with =:header-right= in an indented
+  vstack also ran past =:header-width= by the indent.
+
 - =vui-render= mounts the tree it renders, as =vui-mount= does, without
   showing the buffer: a state change in its components renders them
   again, their effects run, and the tree is unmounted by the next

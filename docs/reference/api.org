@@ -564,6 +564,10 @@ are their own label.
 
 Horizontal layout. ARGS can start with options, then children.
 
+In an indented =vui-vstack=, the children of an hstack go on from the
+line of the hstack, and the lines they start get the indent of the
+vstack.
+
 | Option     | Type    | Default | Description                                 |
 |------------+---------+---------+---------------------------------------------|
 | =:spacing= | integer | 1       | Spaces between children                     |
@@ -603,6 +607,15 @@ Vertical layout. ARGS can start with options, then children.
             (vui-text "Item 1")
             (vui-text "Item 2"))
 #+end_src
+
+The indent goes before each line that a child starts. A nested layout
+adds the indent to its own, and a =vui-flex= or a =vui-grid= subtracts
+it from its width, in a box too. A component gets it as if
+its tree were written in the component's place. The children of a
+fragment, a context provider, a =vui-region= or an error boundary get
+it on each line that one of them starts. Any other child, such as a
+text, gets it before its first line only: a newline inside a text is not
+indented.
 
 ** vui-box
 
