@@ -90,6 +90,23 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component in a =vui-stream= is always a row of its own now, so it
+  keeps its state. Before, a component appended to a stream with no text
+  yet, and content that held a component (a =vui-fragment= with a
+  component in it, say), rendered as children of the component that
+  rendered the stream: the components after the stream could mount
+  again, and the components in the stream lost their state on the next
+  render. Such content now goes in as a row: =vui-stream-update-last=,
+  =vui-stream-append-to= and =vui-stream-update= give it new content.
+  =vui-stream-before=, =vui-stream-after= and =vui-stream-remove= now
+  work on component nodes too, and a button in content written in place
+  belongs to the component that renders the stream, as after a render.
+
+- A component row can go into a stream that is inside an inline mount or
+  inside another row. It signalled "Position N is inside an existing
+  inline VUI instance". The edits of a stream in an inline mount that
+  write the stream again now render that mount; they did nothing.
+
 - A =vui-stream= that is the last thing in a component row of another
   stream (a tool card with its own output, say), or in an inline
   region, grows that row or region with what it writes at its end.

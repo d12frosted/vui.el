@@ -192,7 +192,7 @@
                 :to-equal
                 "start\na:item dark\nitem dark\nitem dark\nitem dark\n[dim]"))))
 
-  (it "see the new value of a provider when written in place"
+  (it "see the new value of a provider in a later item"
     (let ((vui-render-delay nil))
       (vui-mount (vui-component 'vsx-app :log log) buffer)
       (vui-stream-append log (vsx-item))

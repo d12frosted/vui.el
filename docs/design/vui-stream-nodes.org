@@ -206,8 +206,10 @@ the natural behaviour of =append-to=.
   separate problem. As implemented, =vui-stream-open= of a component returns a
   node that wraps the inline row; =vui-stream-update= refreshes its props out
   of order (state preserved); =finalize= just stops tracking the node (the row
-  keeps its own markers and stays interactive). =append-to= / =before= /
-  =after= / =remove= are content-only for now and no-op on a component node.
+  keeps its own markers and stays interactive). =before= / =after= put an
+  item next to a component node by writing the stream again, =remove=
+  unmounts its row, and =append-to= is a no-op on it (but for the node of
+  a row that renders content).
   (Today's component-rows code already has the latent O(rows)-per-append cost;
   the node model makes it addressable.)
 

@@ -919,29 +919,35 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
 
       (it (format "opens a node on its own item for a component on an empty stream (%s)"
                   mode)
-        ;; On an empty stream the component is not a row: it renders in a
-        ;; render of the tree, and its hook appends to the same stream there
+        ;; On an empty stream the component goes in as a vnode, and the
+        ;; render of the tree that writes the stream makes it a row; its
+        ;; hook appends to the same stream there
         (vui-sr-hook--with mode nil
           (let* ((vnode (vui-component 'vui-sr-hook-row
                                        :label "a"
                                        :hook (lambda ()
                                                (vui-stream-append
                                                 panel (vui-text "t")))))
-                 (node (vui-stream-open panel vnode)))
-            (expect (car (vui--stream-node-cell node)) :to-be vnode)
+                 (node (vui-stream-open panel vnode))
+                 (row (car (vui--stream-node-cell node))))
+            (expect (vui-instance-p row) :to-be-truthy)
+            (expect (vui--stream-node-instance node) :to-be row)
             ;; The item the hook appended is in the buffer, as in a render
             ;; of the whole tree
             (expect (vui-sr-hook--text)
                     :to-equal (concat x "l0|panel|[a]|t|footer"))
             (expect (vui-sr-hook--render-whole)
                     :to-equal (concat x "l0|panel|[a]|t|footer"))
-            ;; The node of a component that is not a row does nothing
+            ;; Content does not update the node of a row of another
+            ;; component, and removing the node unmounts the row
             (vui-stream-update node (vui-text "X"))
             (expect (vui-sr-hook--text)
                     :to-equal (concat x "l0|panel|[a]|t|footer"))
             (vui-stream-remove node)
             (expect (vui-sr-hook--text)
-                    :to-equal (concat x "l0|panel|[a]|t|footer")))))
+                    :to-equal (concat x "l0|panel|t|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|panel|t|footer")))))
 
       (it (format "opens a content node on its own item on an empty stream (%s)"
                   mode)

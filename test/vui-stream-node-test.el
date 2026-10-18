@@ -728,9 +728,8 @@
                     :to-equal (vui-snode--oracle '("header" "[a]") "n0")))
         (vui-snode--kill))))
 
-  ;; Opening a component on an EMPTY stream takes the row fallback (no inline
-  ;; instance): the node must NOT capture the root instance, and a later
-  ;; update must not hijack the buffer.
+  ;; Opening a component on an EMPTY stream: the node must NOT capture the
+  ;; root instance, and a later update must not hijack the buffer.
   (it "open of a component on an empty stream does not capture the root"
     (let ((vui-render-delay nil)
           (s (vui-make-stream)))
@@ -739,10 +738,14 @@
           (let (node)
             (setq node (vui-stream-open
                         s (vui-component 'vui-snode-row :label "solo")))
-            (expect (vui--stream-node-instance node) :to-be nil)
+            ;; The render that gives the stream its text makes the
+            ;; component a row, and the node is the row's, not the root's
+            (let ((row (vui--stream-node-instance node)))
+              (expect (vui--inline-p row) :to-be-truthy)
+              (expect row :not :to-be (vui-get-instance)))
             (vui-stream-update node (vui-component 'vui-snode-row :label "X"))
             (expect (vui-snode--buffer)
-                    :to-equal (vui-snode--oracle '("[solo]") "n0")))
+                    :to-equal (vui-snode--oracle '("[X]") "n0")))
         (vui-snode--kill))))
 
   ;; After finalize the node is inert: update must not setcar a vnode over the
