@@ -980,14 +980,21 @@ Every render binds this while it runs: the hooks of a render in another
 buffer, which a render function can start, count there only.")
 
 (defvar vui--created-instances nil
-  "The components created while an error boundary renders its children.
-A cons whose car lists the instances `vui--reconcile-component' created
-since the outermost boundary started, less those a boundary in it
-dropped already, newest first, so the components in a component come
-before it.  Nested boundaries share it, so one that fails can drop
-what a boundary in it created.  Nil when no boundary is
-rendering its children, and in the render of another tree (a tree
-mounted from a hook logs nothing here).")
+  "The components that a render created.
+A cons whose car lists the instances `vui--reconcile-component' created,
+less those an error boundary dropped already, newest first, so the
+components in a component come before it.  Each render of a root binds
+its own (see `vui--rendering-root'), and so a tree mounted from a hook
+logs to its own; an error boundary rendered outside of one binds it
+while it renders its children.  A stream row renders without it: the
+row and what it holds belong to its stream.  A render that stops
+because a hook unmounted its tree drops them all, and an error
+boundary that catches drops the ones its children created (see
+`vui--drop-created').  Nil when no render logs.")
+
+(defvar vui--stoppable-root nil
+  "The root whose render stops when a hook unmounts it, or nil.
+See `vui--rendering-root'.")
 
 (defvar vui--queued-rerenders nil
   "Roots whose re-render was requested while a render was in progress.
@@ -3281,6 +3288,33 @@ it drains the rest."
          (unless (or ,done (not ,top) vui--flushing-rerenders-p)
            (vui--drain-queue-after-error))))))
 
+(defmacro vui--rendering-root (root &rest body)
+  "Run BODY, a render of ROOT; return nil when a hook unmounted ROOT.
+A hook in the render (`:on-mount', `:on-update', or the `:on-unmount'
+of a child that goes, which runs before the `:on-update' of its
+parent) can unmount the tree it renders, or mount another tree in its
+place.  The render stops there instead of writing the rest of the
+tree: what it wrote went with the unmount.  The components it created
+that are not in the tree yet, and so were not unmounted with it, are
+dropped then (see `vui--drop-created').  Return non-nil when BODY ran
+to its end."
+  (declare (indent 1) (debug t))
+  (let ((r (make-symbol "root")))
+    `(let* ((,r ,root)
+            (vui--stoppable-root ,r)
+            (vui--created-instances (list nil)))
+       (or (catch ,r ,@body t)
+           (progn
+             (vui--drop-created (car vui--created-instances) nil)
+             nil)))))
+
+(defun vui--stop-if-unmounted ()
+  "Stop the render of a root that a hook just unmounted, if any.
+See `vui--rendering-root'."
+  (when (and vui--stoppable-root
+             (eq (vui-instance-mounted-p vui--stoppable-root) 'unmounted))
+    (throw vui--stoppable-root nil)))
+
 (defun vui--rerender-instance (instance)
   "Re-render INSTANCE and update the buffer.
 For instances mounted via `vui-mount-inline', only the region they
@@ -3362,26 +3396,33 @@ stream does (see `vui--stream-relay-empty-transition')."
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
-              (let ((new-bounds nil))
+              (let ((new-bounds nil)
+                    (done nil))
                 (save-excursion
                   (vui--remove-widget-overlays pos end-pos)
                   (vui--forget-region-fields pos end-pos)
                   (vui--park-streams pos end-pos instance)
-                  ;; The hooks of the render can move the region
-                  (setq new-bounds
-                        (vui--inline-replace-text instance pos end-pos))
+                  ;; The hooks of the render can move the region, or
+                  ;; unmount it, which ends the render there
+                  (setq done (vui--rendering-root instance
+                               (setq new-bounds
+                                     (vui--inline-replace-text
+                                      instance pos end-pos))))
                   ;; The header line of a sticky table that is gone, as
-                  ;; in `vui--rerender-buffer'
-                  (vui--table-restore-header-line)
-                  (widget-setup)
-                  (vui--setup-field-placeholders))
-                (when saved-point
-                  (goto-char (vui--restored-position
-                              saved-point (car new-bounds) (cdr new-bounds))))
-                (vui--restore-window-points
-                 window-points (car new-bounds) (cdr new-bounds))
-                ;; Run effects after commit
-                (vui--run-pending-effects))
+                  ;; in `vui--rerender-buffer'.  Not when a hook killed
+                  ;; the buffer: another one is current then
+                  (when (buffer-live-p buffer)
+                    (vui--table-restore-header-line)
+                    (widget-setup)
+                    (vui--setup-field-placeholders)))
+                (when done
+                  (when saved-point
+                    (goto-char (vui--restored-position
+                                saved-point (car new-bounds) (cdr new-bounds))))
+                  (vui--restore-window-points
+                   window-points (car new-bounds) (cdr new-bounds))
+                  ;; Run effects after commit
+                  (vui--run-pending-effects)))
             (setq vui--rendering-p nil))))
       ;; A row that had text and has none now: its stream had text
       (when (and row-p (not stream) (buffer-live-p buffer))
@@ -3505,29 +3546,33 @@ writes there goes into the region."
           (unwind-protect
               (progn
                 ;; `vui--commit-root' erases and rebuilds, or patches in
-                ;; place when incremental rendering is eligible.
-                (vui--render-instance instance #'vui--commit-root)
-                ;; A sticky table the render did not draw again leaves the
-                ;; header line it installed; put back what that replaced
-                ;; once no sticky table is left (it was erased or patched
-                ;; away).  Before the windows are restored: their height
-                ;; depends on the header line.
-                (vui--table-restore-header-line)
-                (widget-setup)
-                (vui--setup-field-placeholders)
-                ;; Restore the cursor position
-                (goto-char (vui--restored-position saved-point))
-                ;; Restore the point, then the viewport, of all windows
-                (vui--restore-window-points window-points)
-                (vui--restore-window-starts window-info)
-                ;; Run effects after commit
-                (vui--run-pending-effects))
+                ;; place when incremental rendering is eligible.  Nothing
+                ;; is left to do when a hook unmounted the tree
+                (when (vui--rendering-root instance
+                        (vui--render-instance instance #'vui--commit-root))
+                  ;; A sticky table the render did not draw again leaves
+                  ;; the header line it installed; put back what that
+                  ;; replaced once no sticky table is left (it was erased
+                  ;; or patched away).  Before the windows are restored:
+                  ;; their height depends on the header line.
+                  (vui--table-restore-header-line)
+                  (widget-setup)
+                  (vui--setup-field-placeholders)
+                  ;; Restore the cursor position
+                  (goto-char (vui--restored-position saved-point))
+                  ;; Restore the point, then the viewport, of all windows
+                  (vui--restore-window-points window-points)
+                  (vui--restore-window-starts window-info)
+                  ;; Run effects after commit
+                  (vui--run-pending-effects)))
             (setq vui--rendering-p nil)))
         ;; `widget-setup' cleared the undo list inside the binding above,
         ;; so that clear was undone with it; redo it here.  Entries from
         ;; before the render describe text that no longer exists, and an
-        ;; undo in a field would edit the wrong place.
-        (setq buffer-undo-list nil)
+        ;; undo in a field would edit the wrong place.  Not when a hook
+        ;; killed the buffer: another one is current then
+        (when (buffer-live-p buffer)
+          (setq buffer-undo-list nil))
         ;; Run any re-renders requested during render/effects
         (vui--flush-queued-rerenders)))))
 
@@ -4478,7 +4523,8 @@ record of the contexts its subtree read."
                                props state))))
                 ;; If on-mount returns a function, store it as cleanup
                 (when (functionp result)
-                  (setf (vui-instance-mount-cleanup instance) result)))))
+                  (setf (vui-instance-mount-cleanup instance) result))))
+            (vui--stop-if-unmounted))
         ;; Re-render: call on-update only if we actually rendered
         (when should-render-p
           (vui--debug-log 'update "<%s> updated" component-name)
@@ -4488,7 +4534,8 @@ record of the contexts its subtree read."
                "on-update"
                (vui-component-def-on-update def)
                instance
-               props state prev-props prev-state))))))
+               props state prev-props prev-state)))
+          (vui--stop-if-unmounted))))
     ;; Store current props/state for next render's on-update.  A
     ;; shallow copy is enough: it owns its own plist cells, so the
     ;; in-place plist-put done by `vui-set-state' cannot reach it,
@@ -4559,8 +4606,8 @@ component in it (see `vui--drop-created')."
        (vui-instance-state instance))))
   ;; Not mounted any more, so its effects still waiting to run are
   ;; skipped (see `vui--run-pending-effects').  Not nil: it was mounted,
-  ;; and a render that goes on after a hook unmounted the tree must not
-  ;; mount it again.
+  ;; and must not mount again.  A render that a hook of its tree
+  ;; unmounted stops on it (see `vui--stop-if-unmounted').
   (setf (vui-instance-mounted-p instance) 'unmounted))
 
 (defun vui--detach-instance (instance)
@@ -4688,10 +4735,15 @@ components in a component go before it."
           (setf (vui-instance-vnode existing) vnode)
           existing)
       ;; Create new instance
-      (let ((instance (vui--create-instance vnode parent)))
-        (when (and vui--created-instances (not vui--measuring-p))
-          (push instance (car vui--created-instances)))
-        instance))))
+      (vui--log-created (vui--create-instance vnode parent)))))
+
+(defun vui--log-created (instance)
+  "Log INSTANCE, which a render just created, and return it.
+See `vui--created-instances'.  Not in a measure pass: its instances are
+thrown away, and have no lifecycle."
+  (when (and vui--created-instances (not vui--measuring-p))
+    (push instance (car vui--created-instances)))
+  instance)
 
 ;;; Rendering
 
@@ -6425,7 +6477,7 @@ text takes in what is written there."
         (if chosen
             (progn (setf (vui-instance-props chosen) props-wc)
                    (setf (vui-instance-vnode chosen) vnode))
-          (setq chosen (vui--create-instance vnode instance)))
+          (setq chosen (vui--log-created (vui--create-instance vnode instance))))
         (if (and same-pos
                  ;; what stays in place keeps the paths of its last
                  ;; render, which are right only under the same step
@@ -8810,9 +8862,11 @@ is written."
                  (vui--drop-created failed created)))
              ;; Store the error for this boundary
              (puthash boundary-key err table)
-             ;; Call on-error callback if provided
+             ;; Call on-error callback if provided.  It can unmount the
+             ;; tree, as a hook can
              (when on-error
-               (funcall on-error err))
+               (funcall on-error err)
+               (vui--stop-if-unmounted))
              ;; Render fallback
              (when fallback
                (let ((fallback-vnode (funcall fallback err))
@@ -8878,7 +8932,10 @@ VNODE to give it one.  Use `vui-mount' for a tree that lives."
           ;; global list, or, called from a hook of a tree being
           ;; rendered, run with the effects of that tree, in its buffer.
           (vui--pending-effects nil)
-          (vui--created-instances nil))
+          (vui--created-instances nil)
+          ;; Its hooks do not stop the render of the tree it is called
+          ;; from: the hook that called it does, when it is done
+          (vui--stoppable-root nil))
       ;; Enable vui-mode (this also sets up the keymap hierarchy)
       (unless (derived-mode-p 'vui-mode)
         (vui-mode))
@@ -9002,8 +9059,9 @@ returns, the tree may not show those changes yet."
           (setq vui--rendering-p t)
           (vui--draining-queue-on-error (not outer-rendering)
             (unwind-protect
-                (progn
-                  (vui--render-instance instance)
+                ;; Nothing is left to do when a hook unmounted the tree
+                (when (vui--rendering-root instance
+                        (vui--render-instance instance))
                   ;; widget-setup installs before-change-functions that
                   ;; prevent editing outside of editable fields - no need
                   ;; for buffer-read-only
@@ -9016,11 +9074,15 @@ returns, the tree may not show those changes yet."
             ;; render in progress, if any, runs them when it is done.
             (unless outer-rendering
               (vui--flush-queued-rerenders))))
-        (goto-char (point-min)))
+        ;; A hook can kill BUF: another buffer is current then
+        (when (buffer-live-p buf)
+          (goto-char (point-min))))
       ;; Outside the `buffer-undo-list' binding: leave the list empty, as
       ;; `widget-setup' did before the render stopped recording.
-      (setq buffer-undo-list nil))
-    (switch-to-buffer buf)
+      (when (buffer-live-p buf)
+        (setq buffer-undo-list nil)))
+    (when (buffer-live-p buf)
+      (switch-to-buffer buf))
     instance))
 
 (defun vui-mount-inline (component-vnode &optional position)

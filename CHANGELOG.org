@@ -38,6 +38,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A render stops when a hook in it (=:on-mount=, =:on-update=)
+  unmounts the tree it renders, or mounts another tree in its place.
+  The render went on: the components after that hook rendered, ran
+  their hooks and effects, and wrote their text: into the host buffer
+  for an inline region, or into the buffer of the new tree. In the
+  first render the root ran =:on-mount= after its own =:on-unmount=,
+  and the components mounted before the hook were never unmounted, as
+  they were not in the tree yet. They are unmounted now.
+
 - The layout containers (=vui-vstack=, =vui-hstack=, =vui-box=,
   =vui-flex=, =vui-grid=, =vui-region=) find their own text when the
   hook of a component in them writes or deletes text above them. They
