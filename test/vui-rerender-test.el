@@ -2012,6 +2012,223 @@ Its [copy] button moves right, and so does the number."
                             :to-equal (vui-rr--copy-button-pos 2)))
                 (kill-buffer "*rr-sif*")))))))))
 
+(defun vui-rr--tagged-rows (n tag)
+  "Return N lines of text: TAG row 1, TAG row 2, and so on."
+  (mapconcat (lambda (i) (format "%s row %d" tag i))
+             (number-sequence 1 n) "\n"))
+
+(defun vui-rr--line-start (string)
+  "Return the start of the first line holding STRING."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward string)
+    (pos-bol)))
+
+(vui-defcomponent vui-rr-rows-of (tag rows newline)
+  "ROWS lines of text tagged TAG, fifty by default.
+With NEWLINE, a newline ends the last one."
+  :render (vui-fragment (vui-text (vui-rr--tagged-rows (or rows 50) tag))
+                        (when newline (vui-newline))))
+
+(describe "a window that starts in text written again in place"
+  ;; A window start is a marker.  Text written again in place, an item
+  ;; of a stream or an inline region, dropped it with the old text: to
+  ;; the start of the item, or to the end of the region, whose new text
+  ;; is written before the old one.  It keeps its line in the text now.
+  (it "keeps its line in a stream item"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-ws*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (switch-to-buffer "*rr-ws*")
+              (goto-char (vui-rr--line-start "a row 30"))
+              (set-window-start nil (vui-rr--line-start "a row 25"))
+              (vui-stream-update-last
+               stream (vui-text (vui-rr--tagged-rows 50 "b")))
+              (expect (window-start)
+                      :to-equal (vui-rr--line-start "b row 25"))
+              (expect (point) :to-equal (vui-rr--line-start "b row 30")))
+          (kill-buffer "*rr-ws*")))))
+
+  (it "keeps its line in a stream item for a window that is not selected"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wsw*" 1))))
+        (unwind-protect
+            (progn
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (vui-rr--with-side-window win "*rr-wsw*"
+                (set-window-point win (vui-rr--line-start "a row 30"))
+                (set-window-start win (vui-rr--line-start "a row 25"))
+                (vui-stream-update-last stream
+                                        (vui-text (vui-rr--tagged-rows 50 "b")))
+                (expect (window-start win)
+                        :to-equal (vui-rr--line-start "b row 25"))))
+          (kill-buffer "*rr-wsw*")))))
+
+  (it "keeps the line a window remembers for the hidden buffer"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wsh*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (switch-to-buffer "*rr-wsh*")
+              (goto-char (vui-rr--line-start "a row 30"))
+              (set-window-start nil (vui-rr--line-start "a row 25"))
+              (switch-to-buffer (get-buffer-create "*rr-wsh-other*"))
+              (vui-stream-update-last
+               stream (vui-text (vui-rr--tagged-rows 50 "b")))
+              (switch-to-buffer "*rr-wsh*")
+              (expect (window-start)
+                      :to-equal (vui-rr--line-start "b row 25")))
+          (kill-buffer "*rr-wsh*")
+          (kill-buffer "*rr-wsh-other*")))))
+
+  (it "keeps a remembered start in the item when the point is after it"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wsp*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (switch-to-buffer "*rr-wsp*")
+              (set-window-start nil (vui-rr--line-start "a row 45"))
+              (goto-char (vui-rr--line-start "status"))
+              (switch-to-buffer (get-buffer-create "*rr-wsp-other*"))
+              (with-current-buffer "*rr-wsp*"
+                (goto-char (point-min))
+                (vui-stream-update-last
+                 stream (vui-text (vui-rr--tagged-rows 50 "b"))))
+              (switch-to-buffer "*rr-wsp*")
+              (expect (window-start)
+                      :to-equal (vui-rr--line-start "b row 45"))
+              (expect (window-point) :to-equal (vui-rr--line-start "status")))
+          (kill-buffer "*rr-wsp*")
+          (kill-buffer "*rr-wsp-other*")))))
+
+  (it "goes to the last line of an item that got shorter than that"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wss*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (switch-to-buffer "*rr-wss*")
+              (set-window-start nil (vui-rr--line-start "a row 25"))
+              (vui-stream-update-last
+               stream (vui-text (vui-rr--tagged-rows 10 "b")))
+              (expect (window-start)
+                      :to-equal (vui-rr--line-start "b row 10")))
+          (kill-buffer "*rr-wss*")))))
+
+  (it "leaves alone a window that starts before the item"
+    (let ((vui-render-delay nil))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wso*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream
+                                 (vui-text (vui-rr--tagged-rows 50 "a")))
+              (switch-to-buffer "*rr-wso*")
+              (set-window-start nil (vui-rr--line-start "message 0"))
+              (vui-stream-update-last
+               stream (vui-text (vui-rr--tagged-rows 50 "b")))
+              (expect (window-start)
+                      :to-equal (vui-rr--line-start "message 0")))
+          (kill-buffer "*rr-wso*")))))
+
+  (it "keeps its place in a long line"
+    ;; A paragraph is one line, wrapped by the window
+    (let ((vui-render-delay nil)
+          (para (lambda (tag)
+                  (mapconcat (lambda (i) (format "%s%d" tag i))
+                             (number-sequence 1 400) " "))))
+      (let ((stream (cdr (vui-rr--mount-chat "*rr-wsl*" 1))))
+        (unwind-protect
+            (save-window-excursion
+              (vui-stream-append stream (vui-text (funcall para "a")))
+              (switch-to-buffer "*rr-wsl*")
+              (let ((offset (- (save-excursion
+                                 (goto-char (point-min))
+                                 (search-forward " a200 ")
+                                 (point))
+                               (vui-rr--line-start "a1 a2"))))
+                (set-window-start nil (+ (vui-rr--line-start "a1 a2") offset))
+                (vui-stream-update-last stream (vui-text (funcall para "b")))
+                (expect (- (window-start) (vui-rr--line-start "b1 b2"))
+                        :to-equal offset)))
+          (kill-buffer "*rr-wsl*")))))
+
+  (it "keeps a window that starts right after an inline region there"
+    ;; The region ends with a newline, so the line after it starts where
+    ;; the region ends
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*rr-wsa*")
+        (insert "HOST\n" (vui-rr--tagged-rows 40 "after"))
+        (let ((inst (vui-mount-inline
+                     (vui-component 'vui-rr-rows-of :tag "a" :rows 3
+                                    :newline t)
+                     6)))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-wsa*")
+                (set-window-start nil (vui-rr--line-start "after row 1"))
+                (vui-update inst '(:tag "b" :rows 8 :newline t))
+                (expect (window-start)
+                        :to-equal (vui-rr--line-start "after row 1")))
+            (kill-buffer "*rr-wsa*"))))))
+
+  (it "goes to the last line of an inline region that got shorter"
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*rr-wsr*")
+        (insert "HOST\n" (vui-rr--tagged-rows 40 "after"))
+        (let ((inst (vui-mount-inline
+                     (vui-component 'vui-rr-rows-of :tag "a" :rows 8
+                                    :newline t)
+                     6)))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-wsr*")
+                (set-window-start nil (vui-rr--line-start "a row 6"))
+                (vui-update inst '(:tag "b" :rows 3 :newline t))
+                (expect (window-start)
+                        :to-equal (vui-rr--line-start "b row 3")))
+            (kill-buffer "*rr-wsr*"))))))
+
+  (it "keeps a window that starts where an inline region starts mid-line"
+    ;; The first line of the region starts with host text
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*rr-wsm*")
+        (insert "HOST: \nTAIL")
+        (let ((inst (vui-mount-inline
+                     (vui-component 'vui-rr-rows-of :tag "a" :rows 3)
+                     7)))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-wsm*")
+                (set-window-start nil 7)
+                (vui-update inst '(:tag "b" :rows 5))
+                (expect (window-start) :to-equal 7))
+            (kill-buffer "*rr-wsm*"))))))
+
+  (it "keeps its line in an inline region"
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*rr-wsi*")
+        (insert "HOST\n\nTAIL")
+        (let ((inst (vui-mount-inline
+                     (vui-component 'vui-rr-rows-of :tag "a") 6)))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-wsi*")
+                (goto-char (vui-rr--line-start "a row 30"))
+                (set-window-start nil (vui-rr--line-start "a row 25"))
+                (vui-update inst '(:tag "b"))
+                (expect (window-start)
+                        :to-equal (vui-rr--line-start "b row 25")))
+            (kill-buffer "*rr-wsi*")))))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

@@ -3257,9 +3257,12 @@ Returns a list of (WINDOW PLACE SAVED . DELTA) for
 as `vui--save-window-points' saves the point of a window, and DELTA how
 many lines the start of PLACE is above its point.
 
-With START and END, only the places whose point the rewrite of that
-region has to save are in the list (see `vui--region-position-p'), and
-DELTA is nil: their start is left alone.
+With START and END, only the places whose point or start the rewrite
+of that region has to save are in the list (see
+`vui--region-position-p').  SAVED is nil for a point outside the
+region, which stays as it is.  DELTA is (region . SAVED) for a start in
+the region, SAVED from `vui--region-start-save', and nil for a start
+outside, which stays as it is too.
 
 Places at one position share one SAVED: on Emacs 31 a window that left
 BUFFER usually remembers it twice, in `window-prev-buffers' and in
@@ -3273,23 +3276,39 @@ with BUFFER current."
       (save-restriction
         (widen)
         (pcase-dolist (`(,window . ,place) (vui--remembered-places buffer))
-          (let ((place-point (marker-position (nth 1 place))))
-            (when (or (null start)
-                      (vui--region-position-p place-point start end))
+          (let* ((place-point (marker-position (nth 1 place)))
+                 ;; Nil for a start marker that points nowhere: the
+                 ;; point is saved all the same
+                 (place-start (let ((place-start (car place)))
+                                (when (or (integerp place-start)
+                                          (marker-position place-start))
+                                  (max (point-min)
+                                       (min (point-max) place-start)))))
+                 (point-in (or (null start)
+                               (vui--region-position-p place-point start end)))
+                 (start-in
+                  (and start place-start
+                       (vui--region-position-p place-start start end))))
+            (when (or point-in start-in)
               (push (cl-list*
                      window place
-                     (or (= place-point point)
-                         (cdr (assq place-point saved-at))
-                         (let ((saved (progn
-                                        (goto-char place-point)
-                                        (vui--save-position start end))))
-                           (push (cons place-point saved) saved-at)
-                           saved))
-                     (unless start
-                       (max 0 (- (line-number-at-pos place-point)
-                                 (line-number-at-pos
-                                  (max (point-min)
-                                       (min (point-max) (car place))))))))
+                     (and point-in
+                          (or (= place-point point)
+                              (cdr (assq place-point saved-at))
+                              (let ((saved (progn
+                                             (goto-char place-point)
+                                             (vui--save-position start end))))
+                                (push (cons place-point saved) saved-at)
+                                saved)))
+                     (cond
+                      ((null start)
+                       (and place-start
+                            (max 0 (- (line-number-at-pos place-point)
+                                      (line-number-at-pos place-start)))))
+                      (start-in
+                       (cons 'region
+                             (vui--region-start-save start end
+                                                     place-start)))))
                     result))))))
     result))
 
@@ -3297,9 +3316,11 @@ with BUFFER current."
   "Restore the places saved by `vui--save-remembered-places'.
 PLACES is a list of (WINDOW PLACE SAVED . DELTA).  The point of PLACE
 goes where `vui--restored-position', which START and END are passed on
-to, finds SAVED, or to the buffer's point when it follows that.  Its
-start goes DELTA lines above that, unless DELTA is nil, or to the
-beginning of the buffer when the whole buffer fits in WINDOW.
+to, finds SAVED, or to the buffer's point when it follows that, and
+stays when SAVED is nil.  A number DELTA puts its start DELTA lines
+above that, or at the beginning of the buffer when the whole buffer
+fits in WINDOW.  A DELTA (region . LINE) puts it on that line of the
+region (see `vui--region-start-position'), and nil leaves it alone.
 
 Call with the buffer current and its point already restored.  A place
 whose point marker no longer points into the buffer is left alone."
@@ -3313,14 +3334,22 @@ whose point marker no longer points into the buffer is left alone."
           ;; Asked first, and for every SAVED: this releases its markers.
           ;; Once only, as places at one position share it
           (let ((pos (cond
+                      ((null saved) nil)
                       ((eq saved t) point)
                       ((cdr (assq saved found)))
                       (t (let ((pos (vui--restored-position saved start end)))
                            (push (cons saved pos) found)
                            pos)))))
             (when (eq (marker-buffer (nth 1 place)) buffer)
-              (set-marker (nth 1 place) pos)
-              (when delta
+              (when pos
+                (set-marker (nth 1 place) pos))
+              (when (eq (car-safe delta) 'region)
+                (let ((place-start
+                       (vui--region-start-position start end (cdr delta))))
+                  (if (markerp (car place))
+                      (set-marker (car place) place-start)
+                    (setcar place place-start))))
+              (when (numberp delta)
                 (goto-char pos)
                 (forward-line (- delta))
                 (let ((place-start (point)))
@@ -3333,6 +3362,80 @@ whose point marker no longer points into the buffer is left alone."
                       (set-marker (car place) place-start)
                     (setcar place place-start)))))))))))
 
+;; A window start in text written again in place (an item of a stream,
+;; an inline region) is a marker like any other, and is dropped with
+;; the old text: to the start of a stream item, or to the end of an
+;; inline region, whose new text is written before the old one.  It is
+;; kept by its line in the text instead, so a window that shows the
+;; middle of a long message goes on showing the same lines of it.
+
+(defun vui--region-start-save (start end pos)
+  "Save window start POS in the region from START to END.
+Returns `end' for POS at END, which is after the region (on the text
+that follows it, when the region ends with a newline), and otherwise
+\(LINE . OFFSET): LINE counts the lines of the region from the line of
+START, which is line 0, and OFFSET is how far POS is into its line (a
+long line wraps, and a window can start inside it).  See
+`vui--region-start-position'.  Call with the buffer current."
+  (if (= pos end)
+      'end
+    (save-excursion
+      (goto-char pos)
+      (let ((bol (pos-bol)))
+        (cons (count-lines (save-excursion (goto-char start) (pos-bol)) bol)
+              (- pos bol))))))
+
+(defun vui--region-start-position (start end saved)
+  "Return where window start SAVED is in the region from START to END.
+SAVED comes from `vui--region-start-save'; START and END are the bounds
+of the region as it is now.  A region with fewer lines gives its last
+line, and a shorter line its end.  The result is never before START,
+nor after the last line of the region.  Call with the buffer current."
+  (if (eq saved 'end)
+      end
+    (save-excursion
+      (let ((last (progn
+                    ;; The newline that ends a region ends its last line
+                    (goto-char (if (and (> end start)
+                                        (eq (char-before end) ?\n))
+                                   (1- end)
+                                 end))
+                    (pos-bol))))
+        (goto-char start)
+        (forward-line (car saved))
+        (when (> (point) last)
+          (goto-char last))
+        (max start (min (+ (point) (cdr saved)) (pos-eol)))))))
+
+(defun vui--save-region-starts (buffer start end)
+  "Save the start of each window showing BUFFER in the region START to END.
+Returns a list of (WINDOW . SAVED) for `vui--restore-region-starts',
+SAVED from `vui--region-start-save'.  The starts outside the region
+move with the text around them.  Call with BUFFER current."
+  (let ((result nil))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (let ((window-start (window-start window)))
+        (when (vui--region-position-p window-start start end)
+          (push (cons window
+                      (vui--region-start-save start end window-start))
+                result))))
+    result))
+
+(defun vui--restore-region-starts (starts start end)
+  "Restore the window starts saved by `vui--save-region-starts'.
+STARTS is a list of (WINDOW . SAVED), START and END the bounds of the
+region after it was written again (see
+`vui--region-start-position').  No start is forced (see
+`vui--restore-window-starts').  A window that was deleted or shows
+another buffer by now is left alone."
+  (let ((buffer (current-buffer)))
+    (pcase-dolist (`(,window . ,saved) starts)
+      (when (and (window-live-p window)
+                 (eq (window-buffer window) buffer))
+        (set-window-start window
+                          (vui--region-start-position start end saved)
+                          t)))))
+
 ;; An item of a live stream is written again in place, outside of any
 ;; render: `vui-stream-update-last' and `vui-stream-update' delete its
 ;; text and write the new item there.  The positions in it get what a
@@ -3341,10 +3444,11 @@ whose point marker no longer points into the buffer is left alone."
 (defmacro vui--keeping-positions (start end &rest body)
   "Run BODY, a rewrite of the text from START to END, keeping positions.
 START and END are markers around that text, before BODY and after it.
-The positions in the text (the buffer's point, the point of each window
-showing the buffer, the points windows remember for it) are saved
-before BODY as for a render of an inline region, and found again after
-it in the new text.  Positions outside it move with the text around it.
+The positions in the text (the buffer's point, the point and the start
+of each window showing the buffer, the points and starts windows
+remember for it) are saved before BODY as for a render of an inline
+region, and found again after it in the new text.  Positions outside
+it move with the text around it.
 Call with the buffer current.  Returns what BODY returns."
   (declare (indent 2) (debug t))
   (let ((from (make-symbol "from"))
@@ -3352,6 +3456,7 @@ Call with the buffer current.  Returns what BODY returns."
         (buffer (make-symbol "buffer"))
         (saved-point (make-symbol "saved-point"))
         (window-points (make-symbol "window-points"))
+        (window-starts (make-symbol "window-starts"))
         (remembered (make-symbol "remembered")))
     `(let* ((,from (marker-position ,start))
             (,to (marker-position ,end))
@@ -3359,6 +3464,7 @@ Call with the buffer current.  Returns what BODY returns."
             (,saved-point (when (vui--region-position-p (point) ,from ,to)
                             (vui--save-position ,from ,to)))
             (,window-points (vui--save-window-points ,buffer ,from ,to))
+            (,window-starts (vui--save-region-starts ,buffer ,from ,to))
             (,remembered (vui--save-remembered-places ,buffer ,from ,to)))
        (prog1 (progn ,@body)
          (let ((,from (marker-position ,start))
@@ -3366,6 +3472,7 @@ Call with the buffer current.  Returns what BODY returns."
            (when ,saved-point
              (goto-char (vui--restored-position ,saved-point ,from ,to)))
            (vui--restore-window-points ,window-points ,from ,to)
+           (vui--restore-region-starts ,window-starts ,from ,to)
            (vui--restore-remembered-places ,remembered ,from ,to))))))
 
 ;; Fields next to text a render inserts
@@ -3637,6 +3744,8 @@ stream is written again with a render of the tree (see
                               (vui--save-position pos end-pos)))
                ;; Same for the point of each window showing the buffer
                (window-points (vui--save-window-points buffer pos end-pos))
+               ;; And their starts
+               (window-starts (vui--save-region-starts buffer pos end-pos))
                ;; And of each window that showed it before
                (remembered (vui--save-remembered-places buffer pos end-pos))
                (vui--root-instance instance)
@@ -3698,6 +3807,8 @@ stream is written again with a render of the tree (see
                                 saved-point (car new-bounds) (cdr new-bounds))))
                   (vui--restore-window-points
                    window-points (car new-bounds) (cdr new-bounds))
+                  (vui--restore-region-starts
+                   window-starts (car new-bounds) (cdr new-bounds))
                   (vui--restore-remembered-places
                    remembered (car new-bounds) (cdr new-bounds))
                   ;; Run effects after commit

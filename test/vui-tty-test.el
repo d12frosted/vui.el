@@ -170,6 +170,50 @@ up, or what was wrong with it."
                       (mapcar (lambda (i) (vui-button (format "row%d" i)))
                               (number-sequence 1 count)))))
 
+    (vui-defcomponent vui-tty-chat (stream)
+      :render (vui-vstack (vui-stream stream) (vui-text "status")))
+
+    (defun vui-tty-line (string)
+      "Return the start of the first line holding STRING."
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward string)
+        (pos-bol)))
+
+    (defun vui-tty-stream-scenario (from to park)
+      "Write a stream item of FROM lines again with TO lines; report around it.
+The item is the only one of a stream above a status line, in the
+selected window.  Its lines read \"a row N\", and \"b row N\" once it is
+written again: an item that only grows is extended, not written again.
+PARK is called in its buffer to scroll the window and place point.
+Returns (BEFORE AFTER): the text of the lines the window starts on and
+point is on, once redisplay has run before the item is written again
+and once it has run after."
+      (let* ((stream (vui-make-stream))
+             (rows (lambda (n tag)
+                     (mapconcat (lambda (i) (format "%s row %d" tag i))
+                                (number-sequence 1 n) "\n")))
+             (state (lambda ()
+                      (list (save-excursion
+                              (goto-char (window-start))
+                              (buffer-substring-no-properties
+                               (pos-bol) (pos-eol)))
+                            (buffer-substring-no-properties
+                             (pos-bol) (pos-eol)))))
+             (instance (vui-mount (vui-component 'vui-tty-chat :stream stream)
+                                  "*vui-tty-chat*"))
+             (before nil))
+        (vui-stream-append stream (vui-text (funcall rows from "a")))
+        (switch-to-buffer "*vui-tty-chat*")
+        (funcall park)
+        (redisplay t)
+        (setq before (funcall state))
+        (vui-stream-update-last stream (vui-text (funcall rows to "b")))
+        (redisplay t)
+        (prog1 (list before (funcall state))
+          (vui-unmount instance)
+          (kill-buffer "*vui-tty-chat*"))))
+
     (defun vui-tty-row (n)
       "Return the start of row N's button in the current buffer."
       (save-excursion
@@ -280,6 +324,19 @@ AFTER), the window's state once redisplay has run before the re-render
              (setq-local tab-line-format "tabs")
              (set-window-start window (vui-tty-row 40))
              (goto-char (vui-tty-row 45))))
+    ;; A long message read in the middle while it streams in: its
+    ;; item is written again, longer.
+    :stream-middle
+    (vui-tty-stream-scenario
+     100 120 (lambda ()
+               (set-window-start nil (vui-tty-line "a row 40"))
+               (goto-char (vui-tty-line "a row 45"))))
+    ;; The cursor below the message, which grows past the window.
+    :stream-below
+    (vui-tty-stream-scenario
+     50 300 (lambda ()
+              (set-window-start nil (vui-tty-line "a row 20"))
+              (goto-char (vui-tty-line "status"))))
     ;; Not a scenario: whether the child compiles what it loads, and
     ;; the processes it has running.
     :native-comp
@@ -380,6 +437,19 @@ anyone noticing."
               :to-equal (plist-get before :screen-row))
       (expect (plist-get after :start-line)
               :to-equal (+ 3 (plist-get before :start-line)))))
+
+  (it "shows the same lines of a stream item written again in place"
+    ;; The start used to drop to the start of the item, and the window
+    ;; then recentered on its point
+    (pcase-let ((`(,before ,after) (vui-tty-test--scenario :stream-middle)))
+      (expect before :to-equal '("a row 40" "a row 45"))
+      (expect after :to-equal '("b row 40" "b row 45"))))
+
+  (it "scrolls to a point below a stream item that grew past the window"
+    ;; The start is not forced: a forced one makes redisplay move the
+    ;; point into view instead
+    (pcase-let ((`(,_before ,after) (vui-tty-test--scenario :stream-below)))
+      (expect (cadr after) :to-equal "status")))
 
   (it "runs in a child that starts no native compilation"
     ;; It starts one for vui.elc otherwise, and that process can

@@ -90,6 +90,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A window that starts in text written again in place keeps showing
+  the same lines. An item of a =vui-stream= written again
+  (=vui-stream-update-last=, =vui-stream-update=) moved the start of
+  such a window to the start of the item, and a =vui-mount-inline=
+  region that renders again moved it to the end of the region, whose
+  new text is written before the old one. A window showing the middle
+  of a long message jumped on each update. Now the start stays on the
+  same line of the text, at the same place in it (a long line wraps),
+  or on its last line when the text no longer has that line. This holds
+  for the windows showing the buffer and for the starts windows
+  remember for it. A window that starts right after the text stays
+  there.
+
 - A field in a content item of a =vui-stream= can be edited. A stream
   writes its content items in place, outside of any render (an append;
   an item opened, grown or put next to another with =vui-stream-open=,

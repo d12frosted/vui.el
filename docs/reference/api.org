@@ -325,9 +325,10 @@ It stays on that text, wherever the text is after the render.
 
 An item of a stream written again in place, by =vui-stream-update-last= or
 =vui-stream-update=, is rewritten text too, though no render runs: the
-positions in it are found again as above. Point on a button of a message
-stays on that button when the message is written again with more text
-before it.
+positions in it are found again as above, and a window that starts in it
+keeps its line in it, as in an inline region (below). Point on a button
+of a message stays on that button when the message is written again with
+more text before it.
 
 This holds for *every window showing the buffer*, selected or not. Each
 window has its own point, so two windows on one buffer keep two positions,
@@ -352,9 +353,10 @@ key is what lets point follow the same row.
 In a =vui-mount-inline= region the same applies to every point inside the
 region, and a point found again this way never leaves the region. A point
 right after the region stays right after it. A point where a component is
-mounted stays before it, on the first row of the new region. Scroll is not
-restored there: a window that starts outside the region is not affected,
-one that starts inside it may scroll when the region is rewritten.
+mounted stays before it, on the first row of the new region. A window
+that starts inside the region stays on the same line of it (its last line,
+when the region no longer has that line), and one that starts outside it
+is not affected.
 
 The same goes for *windows that showed the buffer before*. A window
 remembers where to put back each buffer it showed: =switch-to-buffer=,
