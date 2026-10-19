@@ -878,4 +878,177 @@
       (expect (cadr handler-called) :to-equal "Custom event error"))))
 
 
+(describe "an error boundary that drops what a hook wrote in it"
+  ;; A hook of a child appends to a stream in the boundary, and a later
+  ;; child signals: the boundary deletes what its children wrote, the
+  ;; item too, and the layout around it goes on from there
+  (dolist (label '("i:" "longer label: "))
+    (it (format "lays out the rest of the tree (%S)" label)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'ignore)
+            (stream (vui-make-stream))
+            (instance nil))
+        (vui-defcomponent hook-shift-appender ()
+          :on-mount (vui-stream-append
+                     stream (vui-fragment (vui-text label)
+                                          (vui-field :value "G" :size 6)))
+          :render (vui-text "C"))
+        (vui-defcomponent hook-shift-boom ()
+          :render (error "Boom"))
+        (vui-defcomponent hook-shift-guarded ()
+          :render (vui-vstack
+                   :indent 2
+                   (vui-text "top")
+                   (vui-error-boundary
+                    :fallback (lambda (_) (vui-text "FALLBACK"))
+                    :children (list (vui-stream stream)
+                                    (vui-component 'hook-shift-appender)
+                                    (vui-component 'hook-shift-boom)))
+                   (vui-text "bottom")))
+        (vui-stream-append stream (vui-text "first"))
+        (unwind-protect
+            (progn
+              (setq instance (vui-mount (vui-component 'hook-shift-guarded)
+                                        "*vui-error-hook*"))
+              (with-current-buffer "*vui-error-hook*"
+                (expect (buffer-substring-no-properties (point-min)
+                                                        (point-max))
+                        :to-equal "  top\n  FALLBACK\n  bottom")))
+          (when instance (vui-unmount instance))
+          (kill-buffer "*vui-error-hook*")))))
+
+  (it "keeps what a hook of a child wrote above the boundary"
+    ;; That text stays, and the layout counts it
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore)
+          (stream (vui-make-stream))
+          (instance nil))
+      (vui-defcomponent hook-shift-appender-above ()
+        :on-mount (vui-stream-append stream
+                                     (vui-text "a longer item from a hook"))
+        :render (vui-text "C"))
+      (vui-defcomponent hook-shift-boom-3 ()
+        :render (error "Boom"))
+      (vui-defcomponent hook-shift-above ()
+        :render (vui-vstack
+                 (vui-stream stream)
+                 (vui-error-boundary
+                  :children (list (vui-component 'hook-shift-appender-above)
+                                  (vui-component 'hook-shift-boom-3)))
+                 (vui-text "bottom")))
+      (vui-stream-append stream (vui-text "first"))
+      (unwind-protect
+          (progn
+            (setq instance (vui-mount (vui-component 'hook-shift-above)
+                                      "*hook-shift-above*"))
+            (with-current-buffer "*hook-shift-above*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal
+                      "first\na longer item from a hook\nbottom")))
+        (when instance (vui-unmount instance))
+        (kill-buffer "*hook-shift-above*"))))
+
+  (dolist (edit '(append remove))
+    (it (format "lays out a bare boundary when a hook edits above (%s)" edit)
+      ;; With nothing in its place, the boundary writes no separator
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'ignore)
+            (stream (vui-make-stream))
+            (node nil)
+            (instance nil))
+        (vui-defcomponent hook-shift-editor ()
+          :on-mount (if (eq edit 'append)
+                        (vui-stream-append stream (vui-text "added-long-item"))
+                      (vui-stream-remove node))
+          :render (vui-text "C"))
+        (vui-defcomponent hook-shift-boom-4 ()
+          :render (error "Boom"))
+        (vui-defcomponent hook-shift-bare ()
+          :render (vui-vstack
+                   (vui-stream stream)
+                   (vui-error-boundary
+                    :children (list (vui-component 'hook-shift-editor)
+                                    (vui-component 'hook-shift-boom-4)))
+                   (vui-text "bottom")))
+        (vui-stream-append stream (vui-text "first"))
+        (setq node (vui-stream-open stream (vui-text "second-long-item")))
+        (unwind-protect
+            (progn
+              (setq instance (vui-mount (vui-component 'hook-shift-bare)
+                                        "*hook-shift-bare*"))
+              (with-current-buffer "*hook-shift-bare*"
+                (expect (buffer-substring-no-properties (point-min)
+                                                        (point-max))
+                        :to-equal (if (eq edit 'append)
+                                      (concat "first\nsecond-long-item\n"
+                                              "added-long-item\nbottom")
+                                    "first\nbottom"))))
+          (when instance (vui-unmount instance))
+          (kill-buffer "*hook-shift-bare*")))))
+
+  (it "lays out the tree when its on-error edits above"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore)
+          (stream (vui-make-stream))
+          (instance nil))
+      (vui-defcomponent hook-shift-boom-6 ()
+        :render (error "Boom"))
+      (vui-defcomponent hook-shift-reporting ()
+        :render (vui-vstack
+                 (vui-stream stream)
+                 (vui-error-boundary
+                  :on-error (lambda (_)
+                              (vui-stream-append stream
+                                                 (vui-text "error-long-item")))
+                  :children (list (vui-component 'hook-shift-boom-6)))
+                 (vui-text "bottom")))
+      (vui-stream-append stream (vui-text "first"))
+      (unwind-protect
+          (progn
+            (setq instance (vui-mount (vui-component 'hook-shift-reporting)
+                                      "*hook-shift-reporting*"))
+            (with-current-buffer "*hook-shift-reporting*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "first\nerror-long-item\nbottom")))
+        (when instance (vui-unmount instance))
+        (kill-buffer "*hook-shift-reporting*"))))
+
+  (it "lays out the tree when the fallback of an inner boundary signals"
+    ;; The outer boundary drops the inner one, item and all
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore)
+          (stream (vui-make-stream))
+          (instance nil))
+      (vui-defcomponent hook-shift-appender-2 ()
+        :on-mount (vui-stream-append stream (vui-fragment (vui-text "i:")
+                                                          (vui-text "item")))
+        :render (vui-text "C"))
+      (vui-defcomponent hook-shift-boom-2 ()
+        :render (error "Boom"))
+      (vui-defcomponent hook-shift-nested ()
+        :render (vui-vstack
+                 (vui-text "top")
+                 (vui-error-boundary
+                  :fallback (lambda (_) (vui-text "OUTER"))
+                  :children (list
+                             (vui-text "p")
+                             (vui-error-boundary
+                              :fallback (lambda (_)
+                                          (vui-component 'hook-shift-boom-2))
+                              :children (list
+                                         (vui-stream stream)
+                                         (vui-component 'hook-shift-appender-2)
+                                         (vui-component 'hook-shift-boom-2)))))
+                 (vui-text "bottom")))
+      (vui-stream-append stream (vui-text "first"))
+      (unwind-protect
+          (progn
+            (setq instance (vui-mount (vui-component 'hook-shift-nested)
+                                      "*hook-shift-nested*"))
+            (with-current-buffer "*hook-shift-nested*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "top\nOUTER\nbottom")))
+        (when instance (vui-unmount instance))
+        (kill-buffer "*hook-shift-nested*")))))
+
 ;;; vui-error-test.el ends here

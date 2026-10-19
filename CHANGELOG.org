@@ -90,6 +90,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An error boundary that drops what its children wrote no longer breaks
+  the layout around it when a hook wrote text while its children
+  rendered. When a child's =:on-mount= appended to a =vui-stream= in
+  the boundary and a later child signalled, the container of the
+  boundary cut the fallback short in an indented =vui-vstack=, or
+  signalled =args-out-of-range= once the appended text was long enough;
+  nested boundaries whose inner fallback signals failed the same way,
+  and so did an =:on-error= callback that edits text above the
+  boundary.
+
 - A window that a hook of a render switches to another buffer comes
   back to its widget, with its start where it would be, when it shows
   the buffer again. The window remembered the buffer as it was in the

@@ -10152,6 +10152,8 @@ is written."
         ;; would run for components that are not shown.  The start is
         ;; a marker, as their hooks can write or delete text above it.
         (let* ((start (point-marker))
+               (start-pos (point))
+               (shift vui--hook-shift)
                (effects vui--pending-effects)
                ;; The children of the component the boundary is in: the
                ;; children that failed go, as on the renders after this
@@ -10174,7 +10176,13 @@ is written."
                ;; is set up, and stays.
                (vui--forget-fields-in start end)
                (vui--park-streams start end)
-               (delete-region start end))
+               (delete-region start end)
+               ;; What the hooks of the children wrote in that text went
+               ;; with it: the text before point moved only as far as
+               ;; the start of the boundary did (see `vui--hook-shift').
+               ;; Text a hook wrote right at the start cannot be told
+               ;; from the children's, and goes too
+               (setq vui--hook-shift (+ shift (- start start-pos))))
              (goto-char start)
              ;; A sticky table in that text goes too
              (vui--table-restore-header-line)
@@ -10193,7 +10201,9 @@ is written."
              ;; Call on-error callback if provided.  It can unmount the
              ;; tree, as a hook can
              (when on-error
-               (funcall on-error err)
+               ;; It can edit the buffer, as a hook can
+               (vui--shifting-point
+                 (funcall on-error err))
                (vui--stop-if-unmounted))
              ;; Render fallback
              (when fallback
