@@ -2450,6 +2450,255 @@ A head line comes before STREAM, unless FIRST."
               (vui-unmount inst)
               (kill-buffer "*rr-pe*"))))))))
 
+(describe "a narrowed buffer"
+  ;; Text written in place (an inline region rendered again, a stream
+  ;; item) can be outside the narrowing.  It is written where it belongs,
+  ;; and the narrowing stays.
+  (it "takes an item appended to a stream outside the narrowing"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-nar*")))
+        (unwind-protect
+            (with-current-buffer "*rr-nar*"
+              (vui-stream-append stream (vui-text "one"))
+              (narrow-to-region 1 5)
+              (vui-stream-append stream (vui-text "two"))
+              (vui-stream-update-last stream (vui-text "TWO"))
+              (expect (cons (point-min) (point-max)) :to-equal '(1 . 5))
+              (widen)
+              (expect (buffer-string)
+                      :to-equal "head\none\nTWO\nstatus line"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-nar*")))))
+
+  (it "removes a stream item outside the narrowing"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-narr*")))
+        (unwind-protect
+            (with-current-buffer "*rr-narr*"
+              (vui-stream-append stream (vui-text "one"))
+              (let ((node (vui-stream-open stream (vui-text "two"))))
+                (narrow-to-region 1 5)
+                (vui-stream-remove node))
+              (expect (buffer-string) :to-equal "head")
+              (widen)
+              (expect (buffer-string) :to-equal "head\none\nstatus line"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-narr*")))))
+
+  (it "keeps the line of a narrowing that starts in a stream item written again"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-narx*")))
+        (unwind-protect
+            (with-current-buffer "*rr-narx*"
+              (vui-stream-append stream (vui-text "a1\na2\na3"))
+              (narrow-to-region (vui-rr--line-start "a2") (point-max))
+              (vui-stream-update-last stream (vui-text "longer a1\nb2\nb3"))
+              (expect (buffer-string) :to-equal "b2\nb3\nstatus line"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-narx*")))))
+
+  (it "moves a narrowing after a stream item written again with its text"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-nary*")))
+        (unwind-protect
+            (with-current-buffer "*rr-nary*"
+              (vui-stream-append stream (vui-text "one"))
+              (narrow-to-region (vui-rr--line-start "status") (point-max))
+              (vui-stream-update-last stream (vui-text "ONE\nTWO"))
+              (expect (buffer-string) :to-equal "status line"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-nary*")))))
+
+  (it "takes text added to an item at the end of the narrowing"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-narz*")))
+        (unwind-protect
+            (with-current-buffer "*rr-narz*"
+              (vui-stream-append stream (vui-text "one"))
+              (narrow-to-region 1 (save-excursion
+                                    (goto-char (vui-rr--line-start "one"))
+                                    (pos-eol)))
+              (vui-stream-update-last stream (vui-text "one more"))
+              (expect (buffer-string) :to-equal "head\none more"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-narz*")))))
+
+  (it "renders the text after a stream that starts the tree outside it"
+    ;; The root render leaves the stream as it is and writes the rest
+    (let ((vui-render-delay nil))
+      (let* ((pair (vui-rr--mount-chat "*rr-narp*" 2))
+             (inst (car pair))
+             (stream (cdr pair)))
+        (unwind-protect
+            (with-current-buffer "*rr-narp*"
+              (narrow-to-region (point-min) (save-excursion
+                                              (goto-char (point-min))
+                                              (pos-eol)))
+              (vui-update inst (list :stream stream :label "c"))
+              (expect (buffer-string) :to-equal "message 0 [copy]")
+              (widen)
+              (expect (buffer-substring-no-properties
+                       (vui-rr--line-start "status") (point-max))
+                      :to-equal "status: c"))
+          (kill-buffer "*rr-narp*")))))
+
+  (it "renders the root again in a narrowed buffer and keeps the narrowing"
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t))
+      (let ((inst (vui-mount (vui-component 'vui-rr-lines :rows 4)
+                             "*rr-narr2*")))
+        (unwind-protect
+            (with-current-buffer "*rr-narr2*"
+              (narrow-to-region (vui-rr--line-start "line 2-0")
+                                (save-excursion
+                                  (goto-char (vui-rr--line-start "line 2-0"))
+                                  (pos-eol)))
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (expect (buffer-string) :to-equal "line 2-1"))
+          (kill-buffer "*rr-narr2*")))))
+
+  (it "sets up a field appended to a stream outside the narrowing"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-narf*")))
+        (unwind-protect
+            (with-current-buffer "*rr-narf*"
+              (vui-stream-append stream (vui-text "one"))
+              (narrow-to-region 1 5)
+              (vui-stream-append stream (vui-fragment
+                                         (vui-text "f: ")
+                                         (vui-field :value "abc" :size 6)))
+              (widen)
+              (goto-char (point-min))
+              (search-forward "ab")
+              (insert "X")
+              (expect (widget-value (widget-field-at (point)))
+                      :to-equal "abXc"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-narf*")))))
+
+  (it "keeps a narrowing on its text when lines appear above it"
+    ;; As point stays on its text
+    (with-current-buffer (get-buffer-create "*rr-nart*")
+      (insert "host\n\ntail")
+      (vui-defcomponent vui-rr-nar-text (lines)
+        :render (vui-text lines))
+      (let ((inst (vui-mount-inline
+                   (vui-component 'vui-rr-nar-text :lines "a\nb\nc") 6)))
+        (unwind-protect
+            (progn
+              (narrow-to-region (vui-rr--line-start "c") (point-max))
+              (vui-update inst '(:lines "new\na\nb\nc"))
+              (expect (buffer-string) :to-equal "c\ntail"))
+          (kill-buffer "*rr-nart*")))))
+
+  (it "keeps a narrowing that ends at the end of a line that grows there"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-nare*")))
+        (unwind-protect
+            (with-current-buffer "*rr-nare*"
+              (vui-stream-append stream (vui-text "first"))
+              (vui-stream-append stream (vui-text "aaa\nbbb"))
+              (narrow-to-region (vui-rr--line-start "aaa")
+                                (save-excursion
+                                  (goto-char (vui-rr--line-start "aaa"))
+                                  (pos-eol)))
+              (vui-stream-update-last stream (vui-text "aaa-longer\nbbb"))
+              (expect (buffer-string) :to-equal "aaa-longer"))
+          (vui-unmount inst)
+          (kill-buffer "*rr-nare*")))))
+
+  (it "keeps a narrowing in its own inline region"
+    ;; Another region of the same component has the same widgets
+    (with-current-buffer (get-buffer-create "*rr-nar2*")
+      (insert "top\n\nmiddle\n\nbottom")
+      (vui-defcomponent vui-rr-nar-saver (n)
+        :render (vui-vstack (vui-button "Save") (vui-text (format "n=%d" n))))
+      (let ((a (vui-mount-inline (vui-component 'vui-rr-nar-saver :n 0) 5))
+            (b nil))
+        (setq b (vui-mount-inline (vui-component 'vui-rr-nar-saver :n 0)
+                                  (save-excursion
+                                    (goto-char (vui-rr--line-start "middle"))
+                                    (forward-line 1)
+                                    (point))))
+        (unwind-protect
+            (let ((line (save-excursion
+                          (goto-char (car (vui--inline-bounds b)))
+                          (cons (pos-bol) (pos-eol)))))
+              (narrow-to-region (car line) (cdr line))
+              (vui-update b '(:n 1))
+              (expect (buffer-string) :to-equal "[Save]")
+              (expect (point-min) :to-equal (car (vui--inline-bounds b))))
+          (ignore a)
+          (kill-buffer "*rr-nar2*")))))
+
+  (it "keeps a narrowing that ends where an inline region starts"
+    (with-current-buffer (get-buffer-create "*rr-nars*")
+      (insert "host top\n\nhost tail")
+      (vui-defcomponent vui-rr-nar-go (note)
+        :render (vui-vstack (when note (vui-text "note"))
+                            (vui-button "Go")))
+      (let ((inst (vui-mount-inline (vui-component 'vui-rr-nar-go) 10)))
+        (unwind-protect
+            (progn
+              (narrow-to-region 1 10)
+              (vui-update inst '(:note t))
+              (expect (buffer-string) :to-equal "host top\n"))
+          (kill-buffer "*rr-nars*")))))
+
+  (it "keeps a narrowing at the place of an inline region its render unmounts"
+    (with-current-buffer (get-buffer-create "*rr-naru*")
+      (insert "host top\n\nhost tail")
+      (let ((inst nil))
+        (vui-defcomponent vui-rr-nar-gone (gone)
+          :render (progn
+                    (vui-use-effect (gone)
+                      (when gone (vui-unmount inst)))
+                    (vui-button "Go")))
+        (setq inst (vui-mount-inline (vui-component 'vui-rr-nar-gone) 10))
+        (unwind-protect
+            (progn
+              (narrow-to-region 1 (save-excursion (goto-char 10) (pos-eol)))
+              (vui-update inst '(:gone t))
+              (expect (buffer-string) :to-equal "host top\n"))
+          (kill-buffer "*rr-naru*")))))
+
+  (it "renders an inline region again that starts outside the narrowing"
+    (with-temp-buffer
+      (insert "h1\nh2\n")
+      (vui-defcomponent vui-rr-nar-lines (lines)
+        :render (vui-text lines))
+      (let ((inst (vui-mount-inline
+                   (vui-component 'vui-rr-nar-lines :lines "r1\nr2\nr3"))))
+        (goto-char (car (vui--inline-bounds inst)))
+        (forward-line 2)
+        (narrow-to-region (point) (point-max))
+        (vui-update inst '(:lines "r1\nr2\nR3"))
+        (expect (buffer-string) :to-equal "R3")
+        (widen)
+        (expect (buffer-string) :to-equal "h1\nh2\nr1\nr2\nR3")))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

@@ -3436,6 +3436,81 @@ another buffer by now is left alone."
                           (vui--region-start-position start end saved)
                           t)))))
 
+(defun vui--save-narrowing (&optional start end cheap)
+  "Save the narrowing of the current buffer around a write of its text.
+START and END are the region the write rewrites, or nil for the whole
+buffer.  CHEAP is passed on to `vui--save-bound'.  Returns nil when
+the buffer is not narrowed, and otherwise (BEG FIN EOL HOME) for
+`vui--restore-narrowing': its two bounds, saved by `vui--save-bound',
+whether FIN was at the end of its line, where it goes again (a line
+can get longer), and a marker at START, where a bound in the region
+goes when the region is gone after the write."
+  (when (buffer-narrowed-p)
+    (let ((beg (point-min))
+          (fin (point-max)))
+      (save-restriction
+        (widen)
+        (save-excursion
+          (list (vui--save-bound beg start end nil cheap)
+                (vui--save-bound fin start end t cheap)
+                (progn (goto-char fin) (eolp))
+                (and start (copy-marker start))))))))
+
+(defun vui--save-bound (pos start end fin &optional cheap)
+  "Save POS, a bound of a narrowing, around a rewrite of START to END.
+FIN is non-nil for the end of the narrowing, which is tied to the
+character before it.  A bound in the region is saved as point is in
+it (see `vui--save-position'), and found again in the new text.  One
+outside it moves with the text around it, and is saved as point is in
+the whole buffer, in case a render that this one runs (the render of
+a tree a stream row is in, say) rewrites that text too.  With CHEAP it
+is only tied to its text, with a marker for when that text goes: an
+item that streams in is written many times a second, and the text
+around it stays.  Without START and END the whole buffer is the
+region.  Call with the buffer widened."
+  (goto-char pos)
+  (cond
+   ((and start (vui--region-position-p pos start end)
+         ;; An end at START is tied to the text before the region
+         (not (and fin (= pos start))))
+    (list 'region (vui--save-position start end)))
+   ((and start cheap)
+    (list 'outside (vui--make-anchor pos fin) (copy-marker pos fin)))
+   (t
+    (list 'buffer (vui--make-anchor pos fin) (vui--save-cursor-position)))))
+
+(defun vui--restore-bound (saved start end home)
+  "Return where the bound SAVED by `vui--save-bound' is now, or nil.
+START and END are the bounds of the region as it is now, nil when it
+is gone: a bound saved in the region is then at HOME, a position."
+  (pcase saved
+    (`(buffer ,anchor ,cursor)
+     (vui--restored-position (cons anchor cursor)))
+    (`(region ,position)
+     (if (and start end)
+         (vui--restored-position position start end)
+       home))
+    (`(outside ,anchor ,marker)
+     (prog1 (or (vui--anchor-position anchor) (marker-position marker))
+       (set-marker marker nil)))))
+
+(defun vui--restore-narrowing (narrowing &optional start end)
+  "Narrow to NARROWING again, saved by `vui--save-narrowing'.
+START and END are the bounds of the region as it is now, nil when it
+is gone (see `vui--restore-bound').  A bound that cannot be found is
+the start or the end of the buffer."
+  (pcase-let ((`(,beg ,fin ,eol ,home) narrowing))
+    (when narrowing
+      ;; A hook of the render can have narrowed the buffer
+      (widen)
+      (let* ((home (when home
+                     (prog1 (marker-position home) (set-marker home nil))))
+             (from (or (vui--restore-bound beg start end home) (point-min)))
+             (to (or (vui--restore-bound fin start end home) (point-max))))
+        (narrow-to-region from (if eol
+                                   (save-excursion (goto-char to) (pos-eol))
+                                 to))))))
+
 ;; An item of a live stream is written again in place, outside of any
 ;; render: `vui-stream-update-last' and `vui-stream-update' delete its
 ;; text and write the new item there.  The positions in it get what a
@@ -3457,23 +3532,33 @@ Call with the buffer current.  Returns what BODY returns."
         (saved-point (make-symbol "saved-point"))
         (window-points (make-symbol "window-points"))
         (window-starts (make-symbol "window-starts"))
-        (remembered (make-symbol "remembered")))
-    `(let* ((,from (marker-position ,start))
-            (,to (marker-position ,end))
-            (,buffer (current-buffer))
-            (,saved-point (when (vui--region-position-p (point) ,from ,to)
-                            (vui--save-position ,from ,to)))
-            (,window-points (vui--save-window-points ,buffer ,from ,to))
-            (,window-starts (vui--save-region-starts ,buffer ,from ,to))
-            (,remembered (vui--save-remembered-places ,buffer ,from ,to)))
-       (prog1 (progn ,@body)
-         (let ((,from (marker-position ,start))
-               (,to (marker-position ,end)))
-           (when ,saved-point
-             (goto-char (vui--restored-position ,saved-point ,from ,to)))
-           (vui--restore-window-points ,window-points ,from ,to)
-           (vui--restore-region-starts ,window-starts ,from ,to)
-           (vui--restore-remembered-places ,remembered ,from ,to))))))
+        (remembered (make-symbol "remembered"))
+        (narrowing (make-symbol "narrowing")))
+    `(let ((,narrowing (vui--save-narrowing (marker-position ,start)
+                                             (marker-position ,end)
+                                             t)))
+       ;; The text can be outside a narrowing, which is put back after
+       (widen)
+       (unwind-protect
+           (let* ((,from (marker-position ,start))
+                  (,to (marker-position ,end))
+                  (,buffer (current-buffer))
+                  (,saved-point (when (vui--region-position-p (point) ,from ,to)
+                                  (vui--save-position ,from ,to)))
+                  (,window-points (vui--save-window-points ,buffer ,from ,to))
+                  (,window-starts (vui--save-region-starts ,buffer ,from ,to))
+                  (,remembered (vui--save-remembered-places ,buffer ,from ,to)))
+             (prog1 (progn ,@body)
+               (let ((,from (marker-position ,start))
+                     (,to (marker-position ,end)))
+                 (when ,saved-point
+                   (goto-char (vui--restored-position ,saved-point ,from ,to)))
+                 (vui--restore-window-points ,window-points ,from ,to)
+                 (vui--restore-region-starts ,window-starts ,from ,to)
+                 (vui--restore-remembered-places ,remembered ,from ,to))))
+         (vui--restore-narrowing ,narrowing
+                                 (marker-position ,start)
+                                 (marker-position ,end))))))
 
 ;; Fields next to text a render inserts
 ;;
@@ -3687,7 +3772,8 @@ its tree sets state (see `vui--unmounting')."
    ((vui--inline-p instance)
     (vui--rerender-inline instance))
    (t
-    (vui--rerender-buffer instance))))
+    (vui--widening (vui-instance-buffer instance)
+                   (lambda () (vui--rerender-buffer instance))))))
 
 (defun vui--rerender-inline (instance)
   "Re-render inline INSTANCE inside the region it manages.
@@ -3711,7 +3797,33 @@ stream is written again with a render of the tree (see
           ;; changes with the row's text, so the stream is written again
           ;; (see `vui-stream-handle-measured')
           (vui--stream-request-rebuild stream)
-        (vui--rerender-inline-1 instance)))))
+        (vui--widening (vui-instance-buffer instance)
+                       (lambda () (vui--rerender-inline-1 instance))
+                       instance)))))
+
+(defun vui--widening (buffer fn &optional instance)
+  "Call FN, a render in BUFFER, with BUFFER widened.
+What the render writes can be outside a narrowing of BUFFER.  The
+narrowing is put back after FN, also when FN exits non-locally (see
+`vui--save-narrowing').  INSTANCE is the inline instance FN renders,
+whose region is what FN rewrites; without it, FN renders the whole
+buffer."
+  (let* ((bounds (and instance (vui--inline-bounds instance)))
+         (narrowing (and buffer (buffer-live-p buffer)
+                         (or bounds (null instance))
+                         (with-current-buffer buffer
+                           (vui--save-narrowing (car bounds)
+                                                (cdr bounds))))))
+    (if (not narrowing)
+        (funcall fn)
+      (with-current-buffer buffer
+        (widen))
+      (unwind-protect
+          (funcall fn)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (let ((now (and instance (vui--inline-bounds instance))))
+              (vui--restore-narrowing narrowing (car now) (cdr now)))))))))
 
 (defun vui--rerender-inline-1 (instance)
   "Do the work of `vui--rerender-inline' for INSTANCE."
@@ -7365,8 +7477,12 @@ markers of the regions that end with the stream advance with that text
                ;; a render in progress, which sets them up when it is
                ;; done
                (,pending widget-field-new))
-           (prog1 (save-excursion ,@body)
-             (vui--setup-fields-written ,pending)))))))
+           ;; The stream can be outside a narrowing, and so can the
+           ;; fields it writes
+           (save-restriction
+             (widen)
+             (prog1 (save-excursion ,@body)
+               (vui--setup-fields-written ,pending))))))))
 
 (defun vui--setup-fields-written (pending)
   "Set up the fields written in place since `widget-field-new' was PENDING.
@@ -9004,21 +9120,24 @@ if NODE is not live."
     (when (and buf (buffer-live-p buf)
                start (marker-position start) end (marker-position end))
       (with-current-buffer buf
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              (buffer-undo-list t)
-              (s (marker-position start))
-              (e (marker-position end)))
-          ;; Swallow exactly one separator so the survivors stay singly
-          ;; separated: the one before NODE if anything renders above it,
-          ;; else the one after, else (the only item) none.
-          (cond
-           ((cdr cell) (vui--forget-text (max (point-min) (- s seplen)) e))
-           ((not (eq cell head))
-            (vui--forget-text s (min (point-max) (+ e seplen))))
-           (t (vui--forget-text s e)))
-          ;; As in `vui-stream-update-last'
-          (vui--table-restore-header-line)))
+        (save-restriction
+          ;; NODE can be outside a narrowing
+          (widen)
+          (let ((inhibit-read-only t)
+                (inhibit-modification-hooks t)
+                (buffer-undo-list t)
+                (s (marker-position start))
+                (e (marker-position end)))
+            ;; Swallow exactly one separator so the survivors stay singly
+            ;; separated: the one before NODE if anything renders above it,
+            ;; else the one after, else (the only item) none.
+            (cond
+             ((cdr cell) (vui--forget-text (max (point-min) (- s seplen)) e))
+             ((not (eq cell head))
+              (vui--forget-text s (min (point-max) (+ e seplen))))
+             (t (vui--forget-text s e)))
+            ;; As in `vui-stream-update-last'
+            (vui--table-restore-header-line))))
       ;; splice NODE's cell out of items-rev, and its id out of ids-rev
       (vui--stream-drop-item handle cell)
       (vui-stream-finalize node)

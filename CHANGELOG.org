@@ -90,6 +90,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A render works in a narrowed buffer, and keeps the narrowing. An item
+  appended to a =vui-stream= outside the narrowing, or text added to
+  one, landed at the end of the narrowing, before the items it should
+  follow. An inline region that renders again, a stream item written
+  again or removed, and a render of the root that rewrites only part of
+  the buffer signalled =args-out-of-range= when their text was outside
+  the narrowing, and a render of the whole root widened the buffer for
+  good. Renders now widen the buffer and narrow it again afterwards. A
+  bound of the narrowing on text that is written again is found again
+  in that text as point is (on its widget, or its line and column), and
+  an end at the end of a line stays at the end of that line.
+
 - A cursor on plain text stays on its line when a render puts rows
   above it. It was put back by its line number and column, so it moved
   up by the rows that appeared: a cursor on a status line below a
