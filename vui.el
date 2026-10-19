@@ -4544,6 +4544,45 @@ inline region, or the first field of the next component."
     (setq widget-field-list (cl-remove-if in-region-p widget-field-list))
     (setq widget-field-new (cl-remove-if in-region-p widget-field-new))))
 
+(defun vui--forget-fields-in (start end)
+  "Forget the fields in the text from START to END.
+The fields set up there leave `widget-field-list', and their overlays
+go.  They are found by their overlays, so the cost depends on the text,
+not on the number of fields in the buffer.  Only an overlay that is all
+in the text counts: the overlay of a neighbour's field takes in text
+written at its edge, and goes on past the text then.  The fields not
+set up yet leave `widget-field-new'."
+  (dolist (ov (overlays-in start end))
+    (when (and (>= (overlay-start ov) start)
+               (<= (overlay-end ov) end))
+      (let ((widget (overlay-get ov 'field)))
+        (cond
+         ;; The `boundary' overlay of a field is a symbol there
+         ((and widget (not (symbolp widget)))
+          (setq widget-field-list (delq widget widget-field-list))
+          (delete-overlay ov))
+         ((or (overlay-get ov 'real-field)
+              (overlay-get ov 'vui-placeholder))
+          (delete-overlay ov))))))
+  (when widget-field-new
+    (setq widget-field-new
+          (cl-remove-if (lambda (widget)
+                          (let ((from (widget-get widget :from)))
+                            (and (markerp from)
+                                 (>= from start) (< from end))))
+                        widget-field-new))))
+
+(defun vui--forget-text (start end)
+  "Delete the text from START to END, with the fields in it.
+For text written outside of a render, which no render cleans up after:
+the fields in it would stay in `widget-field-list' with empty bounds,
+and a new field written at their path would be taken for them.  See
+`vui--forget-fields-in'."
+  (let ((start (if (markerp start) (marker-position start) start))
+        (end (if (markerp end) (marker-position end) end)))
+    (vui--forget-fields-in start end)
+    (delete-region start end)))
+
 (defun vui--marker-out-of-field (marker start end)
   "Move MARKER out of the field from START to END when it is inside it.
 MARKER is a boundary: of an inline region, of a stream, of a stream
@@ -7118,26 +7157,61 @@ appended after a row is not the row's.  While BODY runs, the end
 markers of the regions that end with the stream advance with that text
 (see `vui--stream-end-regions' and `vui--advancing-ends')."
   (declare (indent 1) (debug t))
-  (macroexp-let2 nil handle handle
-    `(vui--advancing-ends (vui--stream-end-regions ,handle)
-       (let ((vui--context-stack (vui-stream-handle-context ,handle))
-             ;; Not a part of the render of the component that is
-             ;; rendering now, if any (a hook of it writes).  As in a
-             ;; render of the stream, the widgets in what BODY writes
-             ;; belong to the component that renders the stream.
-             (vui--current-instance (vui-stream-handle-parent ,handle))
-             (vui--root-instance (or (vui--stream-root ,handle)
-                                     vui--root-instance))
-             (vui--new-children nil)
-             (vui--child-index 0)
-             ;; A component in it (a function there made it) is a new
-             ;; one: not a child of that component, which keeps its own
-             (vui--reconcile-lookup
-              (and (vui-stream-handle-parent ,handle)
-                   (list :parent (vui-stream-handle-parent ,handle)
-                         :vec [] :by-key vui--empty-table)))
-             (vui--created-instances nil))
-         (save-excursion ,@body)))))
+  (let ((pending (make-symbol "pending")))
+    (macroexp-let2 nil handle handle
+      `(vui--advancing-ends (vui--stream-end-regions ,handle)
+         (let ((vui--context-stack (vui-stream-handle-context ,handle))
+               ;; Not a part of the render of the component that is
+               ;; rendering now, if any (a hook of it writes).  As in a
+               ;; render of the stream, the widgets in what BODY writes
+               ;; belong to the component that renders the stream.
+               (vui--current-instance (vui-stream-handle-parent ,handle))
+               (vui--root-instance (or (vui--stream-root ,handle)
+                                       vui--root-instance))
+               (vui--new-children nil)
+               (vui--child-index 0)
+               ;; A component in it (a function there made it) is a new
+               ;; one: not a child of that component, which keeps its own
+               (vui--reconcile-lookup
+                (and (vui-stream-handle-parent ,handle)
+                     (list :parent (vui-stream-handle-parent ,handle)
+                           :vec [] :by-key vui--empty-table)))
+               (vui--created-instances nil)
+               ;; Fields that wait in `widget-field-new' now belong to
+               ;; a render in progress, which sets them up when it is
+               ;; done
+               (,pending widget-field-new))
+           (prog1 (save-excursion ,@body)
+             (vui--setup-fields-written ,pending)))))))
+
+(defun vui--setup-fields-written (pending)
+  "Set up the fields written in place since `widget-field-new' was PENDING.
+A render sets up the fields it writes when it is done (see
+`widget-setup'), but what a stream writes in place is not a part of
+any render: without this, a field in it cannot be edited.  The fields
+in PENDING wait for the render that wrote them and stay where they
+are: that render may still write next to them, and the overlay of a
+field that is set up takes in text inserted at its end (see
+`vui--keeping-fields').  The new fields get their placeholders too
+\(see `vui--setup-field-placeholders')."
+  ;; Nothing written: the list is the one the write started with
+  (unless (eq widget-field-new pending)
+    (let ((written nil)
+          (waiting nil)
+          (old (make-hash-table :test #'eq)))
+      (dolist (widget pending)
+        (puthash widget t old))
+      (dolist (widget widget-field-new)
+        (if (gethash widget old)
+            (push widget waiting)
+          (push widget written)))
+      (when written
+        (setq widget-field-new (nreverse waiting)
+              written (nreverse written))
+        ;; `widget-setup' also clears the undo list: every write binds it
+        (let ((widget-field-new written))
+          (widget-setup))
+        (mapc #'vui--field-add-placeholder written)))))
 
 (defun vui-make-stream (&optional separator)
   "Create a `vui-stream-handle'.  SEPARATOR goes between items (default newline).
@@ -8082,7 +8156,7 @@ components keep their state where they stay in place."
                                 :face (vui-vnode-text-face vnode)
                                 :properties (vui-vnode-text-properties vnode))))
                             (set-marker end (point)))
-                        (delete-region (marker-position ls) (marker-position end))
+                        (vui--forget-text ls end)
                         (goto-char (marker-position ls))
                         (vui--keeping-fields (point)
                           (vui--render-vnode vnode))
@@ -8519,8 +8593,7 @@ content takes any VNODE (see `vui-stream-open')."
                      (vui--stream-item-path handle (vui--stream-node-id node))))
                 (vui--keeping-positions start end
                   (vui--growing-excursion handle
-                    (delete-region (marker-position start)
-                                   (marker-position end))
+                    (vui--forget-text start end)
                     (goto-char (marker-position start))
                     (vui--keeping-fields (point)
                       (vui--render-vnode vnode))
@@ -8729,9 +8802,10 @@ if NODE is not live."
           ;; separated: the one before NODE if anything renders above it,
           ;; else the one after, else (the only item) none.
           (cond
-           ((cdr cell) (delete-region (max (point-min) (- s seplen)) e))
-           ((not (eq cell head)) (delete-region s (min (point-max) (+ e seplen))))
-           (t (delete-region s e)))
+           ((cdr cell) (vui--forget-text (max (point-min) (- s seplen)) e))
+           ((not (eq cell head))
+            (vui--forget-text s (min (point-max) (+ e seplen))))
+           (t (vui--forget-text s e)))
           ;; As in `vui-stream-update-last'
           (vui--table-restore-header-line)))
       ;; splice NODE's cell out of items-rev, and its id out of ids-rev
@@ -9693,16 +9767,13 @@ is written."
               (vui--render-children children layout)
             (error
              (let ((end (max start (point))))
-               ;; The fields in that text are not set up yet: they wait
-               ;; in `widget-field-new' for `widget-setup', with no
-               ;; overlay.  A field around it is set up, and stays.
-               (setq widget-field-new
-                     (cl-remove-if
-                      (lambda (widget)
-                        (let ((from (widget-get widget :from)))
-                          (and (markerp from)
-                               (>= from start) (< from end))))
-                      widget-field-new))
+               ;; The fields the render wrote in that text are not set
+               ;; up yet: they wait in `widget-field-new' for
+               ;; `widget-setup', with no overlay.  Those a stream wrote
+               ;; there in place are set up (see
+               ;; `vui--setup-fields-written').  A field around the text
+               ;; is set up, and stays.
+               (vui--forget-fields-in start end)
                (vui--park-streams start end)
                (delete-region start end))
              (goto-char start)

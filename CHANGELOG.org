@@ -90,6 +90,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A field in a content item of a =vui-stream= can be edited. A stream
+  writes its content items in place, outside of any render (an append;
+  an item opened, grown or put next to another with =vui-stream-open=,
+  =vui-stream-append-to=, =vui-stream-before= and =vui-stream-after=;
+  the last item or a node written again), and nothing set up the fields
+  in what it wrote: typing in one signalled =text-read-only=, and its
+  placeholder did not show. It worked for a field written by a render,
+  such as one in the first item of an empty stream or in a component
+  item. The field of an item written again or removed also stayed in
+  =widget-field-list= with empty bounds, and the cursor in it went to
+  the start of the item. Now each write sets up the fields it wrote, and
+  forgets the fields of the text it deletes.
+
 - An item of a =vui-stream= written again in place keeps the cursor
   where it was in the item. =vui-stream-update-last= (when the new item
   does not just extend the old one) and =vui-stream-update= delete the
