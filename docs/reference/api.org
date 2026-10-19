@@ -699,7 +699,8 @@ which is what lets fields actually fill remaining space:
 #+end_src
 
 Flex rows subtract inherited vstack indentation from their available
-width. When the children's natural widths already exceed the total,
+width, and put it before the lines after the first of a multi-line
+child. When the children's natural widths already exceed the total,
 everything renders at natural width and growers get zero. Without
 =:wrap=, rows are single-line by design: multi-line children are
 measured by their widest line, but the layout does not account for

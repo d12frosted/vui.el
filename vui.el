@@ -1681,7 +1681,8 @@ Options:
   :justify J   - what to do with leftover width when no child grows:
                  :start (default), :center, :end, or :space-between
   :indent N    - inherited indent, set by a parent vstack; subtracted
-                 from the total width
+                 from the total width, and put before the lines after
+                 the first of a multi-line child
   :wrap W      - non-nil: children wrap into rows in source order when
                  their widths stop fitting the total (see below)
   :face FACE   - applied beneath the children's own faces
@@ -6996,6 +6997,9 @@ and `window'."
          (vui--outer-indent 0)
          (flex-start (vui--container-start (vui-vnode-flex-face vnode)
                                            (vui-vnode-flex-keymap vnode)))
+         ;; Where the lines of the row start, for its indent: a marker,
+         ;; as the hooks of the components in it can write above it
+         (lines-start (and (> indent 0) (point-marker)))
          ;; Classify children: growers carry a weight, the rest are
          ;; measured at natural width.  The measure runs under a
          ;; reconciliation cursor so a mounted component child measures
@@ -7127,7 +7131,14 @@ and `window'."
         (cl-incf child-idx)))
     (vui--finish-container flex-start
                            (vui-vnode-flex-face vnode)
-                           (vui-vnode-flex-keymap vnode))))
+                           (vui-vnode-flex-keymap vnode))
+    ;; A multi-line child goes on below the first line: its lines get
+    ;; the indent too, as in a box (see `vui--indent-lines').  After the
+    ;; face of the flex, which is not on the indent.
+    (when lines-start
+      ;; A blank line stays blank, as in an hstack
+      (vui--indent-lines lines-start (point) (vui--pad indent) t)
+      (set-marker lines-start nil))))
 
 (defun vui--flex-wrap-specs (children)
   "Measure CHILDREN of a wrapping flex into layout specs.
@@ -10782,8 +10793,10 @@ it got is gone too, and nothing is left."
         (progn (delete-region (vui--shifted start shift) (point))
                nil))))
 
-(defun vui--indent-lines (start end indent)
+(defun vui--indent-lines (start end indent &optional skip-blank)
   "Insert INDENT after each newline between START and END.
+SKIP-BLANK non-nil leaves a blank line as it is: no INDENT before a
+newline.
 END moves past each INDENT inserted before it or at it, so a newline
 right before END gets its INDENT too.  Text after END is left alone: it
 is not the layout's (the host text after an inline region, the content
@@ -10793,7 +10806,8 @@ is written."
   (let ((end (copy-marker end t)))
     (goto-char start)
     (while (search-forward "\n" end t)
-      (insert indent))
+      (unless (and skip-blank (eq (char-after) ?\n))
+        (insert indent)))
     (goto-char end)
     (set-marker end nil)))
 

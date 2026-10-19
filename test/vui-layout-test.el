@@ -688,6 +688,44 @@
         (expect (buffer-string)
                 :to-equal "    a          b\n    a          b    ")))))
 
+(describe "a flex with a multi-line child in an indented vstack"
+  (it "gives the indent to each line of the child"
+    (with-temp-buffer
+      ;; As in a box: "    a\n    a2 b"
+      (vui-render (vui-vstack :indent 4
+                    (vui-flex :width 24
+                      (vui-vstack (vui-text "a") (vui-text "a2"))
+                      (vui-text "b"))))
+      (expect (buffer-string) :to-equal "    a\n    a2 b")))
+
+  (it "adds the indent to the own indent of the child"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-flex :width 24
+                      (vui-vstack :indent 1 (vui-text "a") (vui-text "a2"))
+                      (vui-text "b"))))
+      (expect (buffer-string) :to-equal "   a\n   a2 b")))
+
+  (it "leaves a blank line in the child blank"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 4
+                    (vui-flex :width 24
+                      (vui-vstack (vui-text "a") (vui-newline) (vui-text "a3"))
+                      (vui-text "b"))))
+      ;; As in an hstack
+      (expect (buffer-string) :to-equal "    a\n\n    a3 b")))
+
+  (it "keeps its face off the indent"
+    (with-temp-buffer
+      (vui-render (vui-vstack :indent 2
+                    (vui-flex :width 24 :face 'shadow
+                      (vui-vstack (vui-text "a") (vui-text "a2"))
+                      (vui-text "b"))))
+      (expect (buffer-string) :to-equal "  a\n  a2 b")
+      ;; The indent of the second line has no face, as on the first
+      (expect (vui-layout-test--faces-at 5) :to-equal nil)
+      (expect (vui-layout-test--faces-at 7) :to-contain 'shadow))))
+
 (describe "a flex in a table cell in an indented vstack"
   (it "does not subtract the indent"
     (with-temp-buffer

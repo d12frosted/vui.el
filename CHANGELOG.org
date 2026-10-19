@@ -90,6 +90,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-flex= in an indented vstack gives the indent to the lines after
+  the first of a multi-line child, as a box does. They started at column
+  0: =(vui-vstack :indent 4 (vui-flex (vui-vstack "a" "a2") "b"))= gave
+  "    a" and "a2 b".
+
 - A tree that renders now, while a render of it waits for
   =vui-render-delay= or for the end of a =vui-batch=, renders once. The
   render that waited still ran after it, for example when a
