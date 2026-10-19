@@ -2699,6 +2699,320 @@ A head line comes before STREAM, unless FIRST."
         (widen)
         (expect (buffer-string) :to-equal "h1\nh2\nr1\nr2\nR3")))))
 
+(defvar vui-rr--leave-windows nil
+  "Windows the hook of `vui-rr-leaver-any' switches to another buffer.")
+
+(defvar vui-rr--leave-how 'switch
+  "How `vui-rr-leaver-any' switches: `switch' or `pop' (same window).")
+
+(vui-defcomponent vui-rr-leaver-any ()
+  "Switch `vui-rr--leave-windows' to another buffer when unmounted."
+  :on-unmount (dolist (window vui-rr--leave-windows)
+                (when (window-live-p window)
+                  (with-selected-window window
+                    (let ((other (get-buffer-create "*rr-leave-other*")))
+                      (if (eq vui-rr--leave-how 'pop)
+                          (pop-to-buffer-same-window other)
+                        (switch-to-buffer other))))))
+  :render (vui-text "leaver"))
+
+(vui-defcomponent vui-rr-leaving-any (rows)
+  "ROWS rows of buttons; two more on top and no leaver once PHASE."
+  :state ((phase nil))
+  :render (apply #'vui-vstack
+                 (append
+                  (when phase (list (vui-button "x1") (vui-button "x2")))
+                  (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                          (number-sequence 1 rows))
+                  (unless phase (list (vui-component 'vui-rr-leaver-any))))))
+
+(describe "a window that leaves the buffer during a render"
+  ;; A hook of the render switches the window to another buffer: the
+  ;; window records where it was in the buffer at that moment, in the
+  ;; middle of the render, when the text was being rewritten.  It goes
+  ;; back to its widget when it shows the buffer again.
+  (it "comes back to its widget"
+    (let ((vui-render-delay nil)
+          (side nil))
+      (vui-defcomponent vui-rr-leaver ()
+        :on-unmount (when (window-live-p side)
+                      (with-selected-window side
+                        (switch-to-buffer
+                         (get-buffer-create "*rr-left-other*"))))
+        :render (vui-text "leaver"))
+      (vui-defcomponent vui-rr-leaving ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (list (vui-button "head"))
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (list (vui-button "a") (vui-button "target"))
+                        (unless phase (list (vui-component 'vui-rr-leaver))))))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving) "*rr-left*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-left*"
+              (setq side win)
+              (set-window-point win (vui-rr--button-pos "target"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :phase t))
+              (expect (window-buffer win)
+                      :to-be (get-buffer "*rr-left-other*"))
+              (with-selected-window win
+                (switch-to-buffer "*rr-left*"))
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-left*")
+          (kill-buffer "*rr-left-other*")))))
+
+  (it "comes back with its start on the line it had"
+    ;; A window that is not selected keeps its own scroll position
+    (let ((vui-render-delay nil)
+          (side nil))
+      (vui-defcomponent vui-rr-leaver-long ()
+        :on-unmount (when (window-live-p side)
+                      (with-selected-window side
+                        (switch-to-buffer
+                         (get-buffer-create "*rr-lefts-other*"))))
+        :render (vui-text "leaver"))
+      (vui-defcomponent vui-rr-leaving-long ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                                (number-sequence 1 60))
+                        (unless phase
+                          (list (vui-component 'vui-rr-leaver-long))))))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving-long)
+                             "*rr-lefts*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-lefts*"
+              (setq side win)
+              (set-window-start win (vui-rr--button-pos "row20"))
+              (set-window-point win (vui-rr--button-pos "row25"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :phase t))
+              (with-selected-window win
+                (switch-to-buffer "*rr-lefts*"))
+              (expect (window-start win)
+                      :to-equal (vui-rr--button-pos "row18"))
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "row25")))
+          (kill-buffer "*rr-lefts*")
+          (kill-buffer "*rr-lefts-other*")))))
+
+  (it "comes back with `quit-window' to its widget and its line"
+    ;; `pop-to-buffer-same-window' records the place in `quit-restore'
+    (let ((vui-render-delay nil)
+          (vui-rr--leave-how 'pop))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving-any :rows 60)
+                             "*rr-leaveq*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-leaveq*"
+              (setq vui-rr--leave-windows (list win))
+              (set-window-start win (vui-rr--button-pos "row20"))
+              (set-window-point win (vui-rr--button-pos "row25"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :phase t))
+              (with-selected-window win
+                (quit-window))
+              (expect (window-buffer win) :to-be (get-buffer "*rr-leaveq*"))
+              (expect (window-point win)
+                      :to-equal (vui-rr--button-pos "row25"))
+              (expect (window-start win)
+                      :to-equal (vui-rr--button-pos "row18")))
+          (setq vui-rr--leave-windows nil)
+          (kill-buffer "*rr-leaveq*")
+          (kill-buffer "*rr-leave-other*")))))
+
+  (it "brings each of two windows back to its own widget"
+    (let ((vui-render-delay nil)
+          (vui-rr--leave-how 'switch))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving-any :rows 60)
+                             "*rr-leave2*")))
+        (unwind-protect
+            (vui-rr--with-side-window w1 "*rr-leave2*"
+              (let ((w2 (split-window w1)))
+                (set-window-buffer w2 (current-buffer))
+                (setq vui-rr--leave-windows (list w1 w2))
+                (set-window-point w1 (vui-rr--button-pos "row10"))
+                (set-window-point w2 (vui-rr--button-pos "row40"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :phase t))
+                (with-selected-window w1 (switch-to-buffer "*rr-leave2*"))
+                (with-selected-window w2 (switch-to-buffer "*rr-leave2*"))
+                (expect (window-point w1)
+                        :to-equal (vui-rr--button-pos "row10"))
+                (expect (window-point w2)
+                        :to-equal (vui-rr--button-pos "row40"))))
+          (setq vui-rr--leave-windows nil)
+          (kill-buffer "*rr-leave2*")
+          (kill-buffer "*rr-leave-other*")))))
+
+  (it "comes back from the top when the buffer fits in the window"
+    (let ((vui-render-delay nil)
+          (vui-rr--leave-how 'switch))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving-any :rows 3)
+                             "*rr-leavef*")))
+        (unwind-protect
+            (vui-rr--with-side-window win "*rr-leavef*"
+              (setq vui-rr--leave-windows (list win))
+              (set-window-start win (vui-rr--button-pos "row2"))
+              (set-window-point win (vui-rr--button-pos "row3"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :phase t))
+              (with-selected-window win
+                (switch-to-buffer "*rr-leavef*"))
+              (expect (window-start win) :to-equal (point-min)))
+          (setq vui-rr--leave-windows nil)
+          (kill-buffer "*rr-leavef*")
+          (kill-buffer "*rr-leave-other*")))))
+
+  (it "brings the selected window back to its widget"
+    ;; Its point is the buffer's point
+    (let ((vui-render-delay nil)
+          (main nil))
+      (vui-defcomponent vui-rr-leaver-selected ()
+        :on-unmount (when (window-live-p main)
+                      (with-selected-window main
+                        (switch-to-buffer
+                         (get-buffer-create "*rr-lefsel-other*"))))
+        :render (vui-text "leaver"))
+      (vui-defcomponent vui-rr-leaving-selected ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (list (vui-button "head"))
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (list (vui-button "a") (vui-button "target"))
+                        (unless phase
+                          (list (vui-component 'vui-rr-leaver-selected))))))
+      (let ((inst (vui-mount (vui-component 'vui-rr-leaving-selected)
+                             "*rr-lefsel*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-lefsel*")
+              (setq main (selected-window))
+              (goto-char (vui-rr--button-pos "target"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :phase t))
+              (expect (window-buffer) :to-be (get-buffer "*rr-lefsel-other*"))
+              (switch-to-buffer "*rr-lefsel*")
+              (expect (window-point) :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-lefsel*")
+          (kill-buffer "*rr-lefsel-other*")))))
+
+  (it "keeps the point of a window a hook leaves for another one"
+    ;; The hook selects another window: the one that was selected still
+    ;; shows the buffer, and its point is the buffer's no more
+    (let ((vui-render-delay nil)
+          (other nil))
+      (vui-defcomponent vui-rr-selector ()
+        :on-unmount (when (window-live-p other) (select-window other))
+        :render (vui-text "selector"))
+      (vui-defcomponent vui-rr-selecting ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (list (vui-button "head"))
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (list (vui-button "a") (vui-button "target"))
+                        (unless phase
+                          (list (vui-component 'vui-rr-selector))))))
+      (let ((inst (vui-mount (vui-component 'vui-rr-selecting) "*rr-sel*")))
+        (unwind-protect
+            (save-window-excursion
+              (delete-other-windows)
+              (switch-to-buffer "*rr-sel*")
+              (let ((main (selected-window)))
+                (setq other (split-window main))
+                (set-window-buffer other (get-buffer-create "*rr-sel-other*"))
+                (goto-char (vui-rr--button-pos "target"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :phase t))
+                (expect (selected-window) :to-be other)
+                (expect (window-point main)
+                        :to-equal (with-current-buffer "*rr-sel*"
+                                    (vui-rr--button-pos "target")))))
+          (kill-buffer "*rr-sel*")
+          (kill-buffer "*rr-sel-other*")))))
+
+  (it "keeps the point of a window a hook leaves for another one on the buffer"
+    (let ((vui-render-delay nil)
+          (other nil))
+      (vui-defcomponent vui-rr-selector-same ()
+        :on-unmount (when (window-live-p other) (select-window other))
+        :render (vui-text "selector"))
+      (vui-defcomponent vui-rr-selecting-same ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                                (number-sequence 1 60))
+                        (unless phase
+                          (list (vui-component 'vui-rr-selector-same))))))
+      (let ((inst (vui-mount (vui-component 'vui-rr-selecting-same)
+                             "*rr-selsame*")))
+        (unwind-protect
+            (save-window-excursion
+              (delete-other-windows)
+              (switch-to-buffer "*rr-selsame*")
+              (let ((main (selected-window)))
+                (setq other (split-window main))
+                (set-window-buffer other (current-buffer))
+                (set-window-point other (vui-rr--button-pos "row2"))
+                (set-window-start main (vui-rr--button-pos "row30"))
+                (goto-char (vui-rr--button-pos "row34"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :phase t))
+                (expect (selected-window) :to-be other)
+                (expect (window-point main)
+                        :to-equal (vui-rr--button-pos "row34"))
+                (expect (window-start main)
+                        :to-equal (vui-rr--button-pos "row30"))
+                (expect (window-point other)
+                        :to-equal (vui-rr--button-pos "row2"))))
+          (kill-buffer "*rr-selsame*")))))
+
+  (it "keeps the start of a window that leaves while an inline region renders"
+    (let ((vui-render-delay nil)
+          (side nil))
+      (vui-defcomponent vui-rr-leaver-inline ()
+        :on-unmount (when (window-live-p side)
+                      (with-selected-window side
+                        (switch-to-buffer
+                         (get-buffer-create "*rr-lefti-other*"))))
+        :render (vui-text "leaver"))
+      (vui-defcomponent vui-rr-leaving-inline ()
+        :state ((phase nil))
+        :render (apply #'vui-vstack
+                       (append
+                        (when phase (list (vui-button "x1") (vui-button "x2")))
+                        (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                                (number-sequence 1 60))
+                        (unless phase
+                          (list (vui-component 'vui-rr-leaver-inline))))))
+      (with-current-buffer (get-buffer-create "*rr-lefti*")
+        (insert "host\n")
+        (let ((inst (vui-mount-inline
+                     (vui-component 'vui-rr-leaving-inline) (point-max))))
+          (unwind-protect
+              (vui-rr--with-side-window win "*rr-lefti*"
+                (setq side win)
+                (set-window-start win (vui-rr--button-pos "row20"))
+                (set-window-point win (vui-rr--button-pos "row25"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :phase t))
+                (with-selected-window win
+                  (switch-to-buffer "*rr-lefti*"))
+                (expect (window-point win)
+                        :to-equal (vui-rr--button-pos "row25"))
+                (expect (window-start win)
+                        :to-equal (vui-rr--button-pos "row18")))
+            (kill-buffer "*rr-lefti*")
+            (kill-buffer "*rr-lefti-other*")))))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

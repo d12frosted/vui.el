@@ -3049,14 +3049,17 @@ Call with the buffer current.  Point does not move."
           start))))))
 
 (defun vui--save-window-points (buffer &optional start end)
-  "Save the point of every window showing BUFFER, except the selected one.
-The selected window's point is the buffer's point, which the render
-restores on its own.  Returns a list of (WINDOW . SAVED) for
+  "Save the point of every window showing BUFFER.
+Returns a list of (WINDOW SAVED . PARAMS) for
 `vui--restore-window-points'.
 
 SAVED is what `vui--save-position', which START and END are passed on
 to, returns at the window's point.  It is t when the window's point is
-the buffer's point; the window then follows that.
+the buffer's point, and for the selected window, whose point that is:
+the window then follows the buffer's point, which the render restores
+on its own.  A hook of the render can select another window, or switch
+a window to another buffer.  PARAMS are its `quit-restore' parameters
+\(see `vui--window-places').
 
 With START and END, only the windows whose point the rewrite of that
 region has to save are in the list (see `vui--region-position-p').
@@ -3066,34 +3069,46 @@ Call with BUFFER current."
         (result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
       (let ((window-point (window-point window)))
-        (when (and (not (eq window selected))
-                   (or (null start)
-                       (vui--region-position-p window-point start end)))
-          (push (cons window
-                      (or (= window-point point)
-                          (save-excursion
-                            (goto-char window-point)
-                            (vui--save-position start end))))
+        (when (or (eq window selected)
+                  (null start)
+                  (vui--region-position-p window-point start end))
+          (push (cl-list* window
+                          (or (eq window selected)
+                              (= window-point point)
+                              (save-excursion
+                                (goto-char window-point)
+                                (vui--save-position start end)))
+                          (vui--window-params window))
                 result))))
     result))
 
 (defun vui--restore-window-points (window-points &optional start end)
   "Restore the window points saved by `vui--save-window-points'.
-WINDOW-POINTS is a list of (WINDOW . SAVED).  Each window goes where
+WINDOW-POINTS is a list of (WINDOW SAVED . PARAMS).  Each window goes where
 `vui--restored-position', which START and END are passed on to, finds
 its position, or to the buffer's point when it follows that.
 
 Call with the buffer current and its point already restored.  A window
-that was deleted or shows another buffer by now is left alone."
-  (let ((buffer (current-buffer)))
-    (pcase-dolist (`(,window . ,saved) window-points)
+that was deleted by now is left alone.  One that shows another buffer
+by now left this one during the render (a hook of the render switched
+it): the point it remembers for this buffer is set to the point it
+would get (see `vui--window-places')."
+  (let ((buffer (current-buffer))
+        ;; Taken once: setting the point of the selected window moves
+        ;; it, and a hook can have selected another window on the buffer
+        (point (point)))
+    (pcase-dolist (`(,window ,saved . ,params) window-points)
       ;; Asked first, and for every window: this releases the markers
       (let ((pos (if (eq saved t)
-                     (point)
+                     point
                    (vui--restored-position saved start end))))
-        (when (and (window-live-p window)
-                   (eq (window-buffer window) buffer))
-          (set-window-point window pos))))))
+        (when (window-live-p window)
+          (if (eq (window-buffer window) buffer)
+              (set-window-point window pos)
+            (dolist (place (vui--window-places window buffer params))
+              (set-marker (nth 1 place) pos))))))))
+
+
 
 (defun vui--save-window-starts (buffer)
   "Save viewport restoration data for all windows showing BUFFER.
@@ -3113,10 +3128,11 @@ scroll position instead of being yanked to point.  See
          (result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
       (let ((start-line (line-number-at-pos (window-start window))))
-        (push (cons window
-                    (if (eq window cursor-window)
-                        (cons 'relative (max 0 (- point-line start-line)))
-                      (cons 'absolute start-line)))
+        (push (cl-list* window
+                        (if (eq window cursor-window)
+                            (cons 'relative (max 0 (- point-line start-line)))
+                          (cons 'absolute start-line))
+                        (vui--window-params window))
               result)))
     result))
 
@@ -3174,15 +3190,21 @@ point is not always in view from the start worked out here: rows
 appeared above it in a window that keeps its start line, the buffer
 shrank, or point moved since the window was last drawn.  Unforced,
 redisplay keeps the start when point is visible from it and scrolls to
-point otherwise.  A window that was deleted or shows another buffer by
-now is left alone."
+point otherwise.  A window that was deleted by now is left alone.  One
+that shows another buffer by now left this one during the render: the
+start it remembers for this buffer is set to the start it would get
+\(see `vui--window-places')."
   (let ((buffer (current-buffer)))
-    (pcase-dolist (`(,window . ,spec) window-info)
-      (when (and (window-live-p window)
-                 (eq (window-buffer window) buffer))
-        (let ((start (save-excursion
+    (pcase-dolist (`(,window ,spec . ,params) window-info)
+      (when (window-live-p window)
+        (let* ((showing (eq (window-buffer window) buffer))
+               (start (save-excursion
                        (pcase spec
                          (`(relative . ,delta)
+                          ;; From the point of the window: a hook can
+                          ;; have selected another one on the buffer
+                          (when showing
+                            (goto-char (window-point window)))
                           (forward-line (- delta))
                           (line-beginning-position))
                          (`(absolute . ,line)
@@ -3192,13 +3214,18 @@ now is left alone."
                           ;; line above a window of blank rows
                           (unless (zerop (forward-line (1- line)))
                             (forward-line (- 1 (window-body-height window))))
-                          (line-beginning-position))))))
-          (set-window-start window
-                            (if (and (> start (point-min))
-                                     (vui--window-fits-buffer-p window))
-                                (point-min)
-                              start)
-                            t))))))
+                          (line-beginning-position)))))
+               (start (if (and (> start (point-min))
+                               (vui--window-fits-buffer-p
+                                window (unless showing buffer)))
+                          (point-min)
+                        start)))
+          (if showing
+              (set-window-start window start t)
+            (dolist (place (vui--window-places window buffer params))
+              (if (markerp (car place))
+                  (set-marker (car place) start)
+                (setcar place start)))))))))
 
 ;; A window also remembers, for each buffer it showed before, where to
 ;; put that buffer back: its start and its point.  An entry of
@@ -3241,12 +3268,48 @@ Emacs 31: `switch-to-buffer' back to BUFFER keeps them."
                                                    window parameter)))
                                        (and (consp value) (nth 1 value))))
                                    '(quit-restore quit-restore-prev))))
-        (when (and (consp entry)
-                   (eq (car entry) buffer)
-                   (integer-or-marker-p (nth 1 entry))
-                   (markerp (nth 2 entry))
-                   (eq (marker-buffer (nth 2 entry)) buffer))
+        (when (vui--place-p entry buffer)
           (push (cons window (cdr entry)) places))))
+    places))
+
+(defun vui--place-p (entry buffer)
+  "Return non-nil when ENTRY is a window's description of BUFFER.
+ENTRY is an entry of `window-prev-buffers' or the description of a
+buffer in a `quit-restore' parameter: (BUFFER START POINT ...)."
+  (and (consp entry)
+       (eq (car entry) buffer)
+       (integer-or-marker-p (nth 1 entry))
+       (markerp (nth 2 entry))
+       (eq (marker-buffer (nth 2 entry)) buffer)))
+
+(defun vui--window-params (window)
+  "Return the `quit-restore' parameters of WINDOW, to tell new ones by.
+See `vui--window-places'."
+  (list (window-parameter window 'quit-restore)
+        (window-parameter window 'quit-restore-prev)))
+
+(defun vui--window-places (window buffer params)
+  "Return the places WINDOW recorded for BUFFER since it had PARAMS.
+WINDOW showed BUFFER when the render started, and a hook of the render
+switched it to another buffer: it recorded where it was in BUFFER, in
+the middle of the render, and the render puts the position it finds
+for WINDOW there.  Each place is a list (START POINT ...), as in
+`vui--remembered-places': the entry of BUFFER in `window-prev-buffers',
+which a window writes anew when it leaves a buffer, and the
+`quit-restore' parameters that are not the ones in PARAMS, from
+`vui--window-params'.  Those were there before, and are not WINDOW's
+place in BUFFER now."
+  (let ((places nil))
+    (let ((entry (assq buffer (window-prev-buffers window))))
+      (when (vui--place-p entry buffer)
+        (push (cdr entry) places)))
+    (cl-loop for parameter in '(quit-restore quit-restore-prev)
+             for old in params
+             do (let ((value (window-parameter window parameter)))
+                  (unless (eq value old)
+                    (let ((entry (and (consp value) (nth 1 value))))
+                      (when (vui--place-p entry buffer)
+                        (push (cdr entry) places))))))
     places))
 
 (defun vui--save-remembered-places (buffer &optional start end)
@@ -3409,32 +3472,38 @@ nor after the last line of the region.  Call with the buffer current."
 
 (defun vui--save-region-starts (buffer start end)
   "Save the start of each window showing BUFFER in the region START to END.
-Returns a list of (WINDOW . SAVED) for `vui--restore-region-starts',
-SAVED from `vui--region-start-save'.  The starts outside the region
-move with the text around them.  Call with BUFFER current."
+Returns a list of (WINDOW SAVED . PARAMS) for
+`vui--restore-region-starts', SAVED from `vui--region-start-save' and
+PARAMS from `vui--window-params'.  The starts outside the region move
+with the text around them.  Call with BUFFER current."
   (let ((result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
       (let ((window-start (window-start window)))
         (when (vui--region-position-p window-start start end)
-          (push (cons window
-                      (vui--region-start-save start end window-start))
+          (push (cl-list* window
+                          (vui--region-start-save start end window-start)
+                          (vui--window-params window))
                 result))))
     result))
 
 (defun vui--restore-region-starts (starts start end)
   "Restore the window starts saved by `vui--save-region-starts'.
-STARTS is a list of (WINDOW . SAVED), START and END the bounds of the
-region after it was written again (see
+STARTS is a list of (WINDOW SAVED . PARAMS), START and END the bounds
+of the region after it was written again (see
 `vui--region-start-position').  No start is forced (see
-`vui--restore-window-starts').  A window that was deleted or shows
-another buffer by now is left alone."
+`vui--restore-window-starts').  A window that was deleted by now is
+left alone, and one that shows another buffer gets its start in the
+places it recorded for this one (see `vui--window-places')."
   (let ((buffer (current-buffer)))
-    (pcase-dolist (`(,window . ,saved) starts)
-      (when (and (window-live-p window)
-                 (eq (window-buffer window) buffer))
-        (set-window-start window
-                          (vui--region-start-position start end saved)
-                          t)))))
+    (pcase-dolist (`(,window ,saved . ,params) starts)
+      (when (window-live-p window)
+        (let ((pos (vui--region-start-position start end saved)))
+          (if (eq (window-buffer window) buffer)
+              (set-window-start window pos t)
+            (dolist (place (vui--window-places window buffer params))
+              (if (markerp (car place))
+                  (set-marker (car place) pos)
+                (setcar place pos)))))))))
 
 (defun vui--save-narrowing (&optional start end cheap)
   "Save the narrowing of the current buffer around a write of its text.

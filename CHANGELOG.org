@@ -90,6 +90,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A window that a hook of a render switches to another buffer comes
+  back to its widget, with its start where it would be, when it shows
+  the buffer again. The window remembered the buffer as it was in the
+  middle of the render, with its point and start on rewritten text.
+  The render now writes the point and start it finds for the window
+  into what the window remembers, as it does for a window that still
+  shows the buffer. The same goes for the selected window, and for a
+  window that is not selected any more because a hook selected another
+  one.
+
 - A render works in a narrowed buffer, and keeps the narrowing. An item
   appended to a =vui-stream= outside the narrowing, or text added to
   one, landed at the end of the narrowing, before the items it should
