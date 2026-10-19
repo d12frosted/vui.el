@@ -885,7 +885,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   r-streams    ; Streams in that text, each (HANDLE . LENGTH) (see vui--instance-text-length)
   base-path    ; Render path an inline instance starts from (stream rows only)
   regions      ; The inline regions around a stream row, innermost first
-  providers)   ; The context stack a stream row renders with (that of its stream)
+  providers    ; The context stack a stream row renders with (that of its stream)
+  measured)    ; Non-nil for a stream row in a layout that measures its stream
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -969,6 +970,11 @@ Bound by `vui--render-in-vstack' around a region or a boundary in an
 indented vstack, to (INDENT INDENT-STR FIRST); see
 `vui--render-children'.  The region or the boundary takes it at once,
 so that nothing under it sees it.")
+
+(defvar vui--in-measured-layout nil
+  "Non-nil while a box, a table, a flex or a grid renders its children.
+These measure their children to lay them out, so a stream in one of
+them cannot be edited in place (see `vui-stream-handle-measured').")
 
 (defvar vui--outer-indent 0
   "The indent added before the lines of a box, in characters.
@@ -3402,9 +3408,21 @@ ephemeral chrome, not document content.
 
 A component row of a `vui-stream' that renders the stream's only text
 away, or brings it back, has the tree laid out again, as an edit of the
-stream does (see `vui--stream-relay-empty-transition')."
+stream does (see `vui--stream-relay-empty-transition').  A row of a
+stream in a layout that measures it does not render on its own: its
+stream is written again with a render of the tree (see
+`vui-stream-handle-measured')."
   (vui--draining-queue-on-error t
-    (vui--rerender-inline-1 instance)))
+    (let ((stream (and (vui-instance-measured instance)
+                       (buffer-live-p (vui-instance-buffer instance))
+                       (with-current-buffer (vui-instance-buffer instance)
+                         (vui--stream-of-row instance)))))
+      (if stream
+          ;; A row in a layout that measures its stream: the layout
+          ;; changes with the row's text, so the stream is written again
+          ;; (see `vui-stream-handle-measured')
+          (vui--stream-request-rebuild stream)
+        (vui--rerender-inline-1 instance)))))
 
 (defun vui--rerender-inline-1 (instance)
   "Do the work of `vui--rerender-inline' for INSTANCE."
@@ -3446,6 +3464,9 @@ stream does (see `vui--stream-relay-empty-transition')."
                ;; of a tree under one
                (vui--context-stack (and row-p
                                         (vui-instance-providers instance)))
+               ;; And in the layout around its stream
+               (vui--in-measured-layout (and row-p
+                                             (vui-instance-measured instance)))
                (vui--pending-effects nil)
                ;; An error boundary of another tree does not drop what
                ;; this tree creates
@@ -5811,7 +5832,8 @@ and `window'."
 
 (defun vui--render-flex (vnode)
   "Render a `vui-flex' VNODE: distribute its width among children."
-  (let* ((children (vui-vnode-flex-children vnode))
+  (let* ((vui--in-measured-layout t)
+         (children (vui-vnode-flex-children vnode))
          (spacing (vui--width (or (vui-vnode-flex-spacing vnode) 1)))
          (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (justify (or (vui-vnode-flex-justify vnode) :start))
@@ -6086,7 +6108,8 @@ are all single-line renders inline (component and widget identity
 preserved, exactly like a non-wrapped flex), a row containing a
 multi-line block is composed as text.  Rows after the first start on a
 new line, indented by the flex's :indent."
-  (let* ((children (vui-vnode-flex-children vnode))
+  (let* ((vui--in-measured-layout t)
+         (children (vui-vnode-flex-children vnode))
          (spacing (vui--width (or (vui-vnode-flex-spacing vnode) 1)))
          (indent (vui--width (or (vui-vnode-flex-indent vnode) 0)))
          (total (max 0 (- (vui--flex-resolve-width (vui-vnode-flex-width vnode))
@@ -6154,7 +6177,8 @@ widths, widens any column whose content overflows its track - across
 all rows, so columns stay aligned - then renders row by row with the
 same identity rules as `vui--render-flex-wrap': single-line rows
 in place, rows containing a multi-line cell composed as text."
-  (let* ((children (vui-vnode-grid-children vnode))
+  (let* ((vui--in-measured-layout t)
+         (children (vui-vnode-grid-children vnode))
          (spacing (vui--width (or (vui-vnode-grid-spacing vnode) 1)))
          (row-spacing (or (vui-vnode-grid-row-spacing vnode) 0))
          (indent (vui--width (or (vui-vnode-grid-indent vnode) 0)))
@@ -6826,7 +6850,13 @@ PARENT is the component that rendered the stream last, and ROOT is the
 root of its tree, from the same render.  The widgets of what the stream
 writes in place belong to PARENT, as they do in a render of the stream,
 and the stream is written again by a render of ROOT (see
-`vui--stream-request-rerender')."
+`vui--stream-request-rerender').
+
+MEASURED is non-nil when the stream was last rendered in a layout that
+measures its children (see `vui--in-measured-layout'): a box, say.  Its
+text changes that layout, so its edits do not write in place: they
+write the stream again, and so does a row of it that renders again on
+its own."
   buffer
   region-start
   region-end
@@ -6842,7 +6872,8 @@ and the stream is written again by a render of ROOT (see
   (enclosing nil)
   (context nil)
   (parent nil)
-  (root nil))
+  (root nil)
+  (measured nil))
 
 (defun vui--regions-ending-at (regions pos)
   "Return the end markers of REGIONS that end at POS, with their types.
@@ -6933,7 +6964,15 @@ PROPS may carry :key for reconciliation.  The items of the stream see
 the context providers around the stream, as if they were its children.
 This is also true for an item written in place by code under other
 providers (or under none), and for a component row that renders again
-on its own."
+on its own.
+
+A stream anywhere inside a layout that measures its children (a
+`vui-box', a `vui-table', a `vui-flex' or a `vui-grid') is not edited in
+place: its text changes that layout, so each edit, and each render of
+one of its rows, writes the stream again with a render of the tree.  So
+does an edit from a hook that runs on each render, unless it leaves the
+item as it is.  Keep a stream that grows long outside these layouts, to
+keep its edits O(1)."
   (vui-vnode-stream--create :handle handle :key (plist-get props :key)))
 
 (defun vui--stream-bind-region (handle buffer start end)
@@ -7085,7 +7124,8 @@ the first time passes it, to drop them when that render does not finish
     ;; The regions it renders in on its own later, too, and the
     ;; providers
     (setf (vui-instance-regions row) vui--enclosing-regions
-          (vui-instance-providers row) vui--context-stack)
+          (vui-instance-providers row) vui--context-stack
+          (vui-instance-measured row) vui--in-measured-layout)
     (let ((vui--root-instance row)
           (vui--render-path path)
           (vui--enclosing-regions (cons row vui--enclosing-regions))
@@ -7236,7 +7276,8 @@ silently dropping every subsequent streamed append."
       ;; with them.  And the component and the root it renders in.
       (setf (vui-stream-handle-context handle) vui--context-stack
             (vui-stream-handle-parent handle) vui--current-instance
-            (vui-stream-handle-root handle) vui--root-instance)
+            (vui-stream-handle-root handle) vui--root-instance
+            (vui-stream-handle-measured handle) vui--in-measured-layout)
       ;; The end of the stream is the end marker of its last item when
       ;; that is a row, so it follows the row when the row grows or
       ;; shrinks on its own (see `vui--stream-append-row').  Otherwise
@@ -7544,12 +7585,18 @@ last item of the stream, before anything is written."
      ;; can be writing the stream right now, from its items as they were
      ;; before this one (a hook of a component in the tree appends): it
      ;; writes the stream again when it is done.
+     ;; In a layout that measures it, the stream can be in a row the
+     ;; layout writes as text (a grid with a multi-line cell, say): no
+     ;; render may come, so it asks for one.
      ((not (vui--stream-written-p handle))
-      (when (and buf (buffer-live-p buf) vui--rendering-p)
+      (when (and buf (buffer-live-p buf)
+                 (or vui--rendering-p (vui-stream-handle-measured handle)))
         (vui--stream-request-rebuild handle)))
      ;; Empty -> non-empty: the surrounding separators change, so re-lay
      ;; the whole tree once.  (Only the very first item pays this.)
-     ((not (vui--stream-in-place-p handle))
+     ((or (not (vui--stream-in-place-p handle))
+          ;; In a layout that measures it (see `vui-stream-handle-measured')
+          (vui-stream-handle-measured handle))
       (vui--stream-request-rebuild handle))
      ;; Live and non-empty: O(1) imperative insert at the region end.
      (t
@@ -7592,6 +7639,7 @@ last item of the stream, before anything is written."
      ;; A stream that holds a row has its place in the buffer, also when
      ;; that row renders nothing, so the new row goes there.
      ((or (not (vui--stream-written-p handle))
+          (vui-stream-handle-measured handle)
           (not (or (vui--stream-in-place-p handle)
                    (cl-some #'vui--stream-row-p
                             (vui-stream-handle-items-rev handle)))))
@@ -7704,7 +7752,8 @@ only means a full re-render, never a wrong answer."
 This is the in-progress message in a streaming agent UI: as tokens
 arrive, update the last item with the message-so-far.  The cost depends
 on that one item, not on the number of items above it, so the transcript
-can be arbitrarily long.  A no-op when the stream is empty.  While the
+can be arbitrarily long (not for a stream in a layout that measures it,
+see `vui-stream').  A no-op when the stream is empty.  While the
 stream is not in its buffer (it was never rendered, or its root shows
 another tree for now), the new last item shows when the stream is
 rendered.
@@ -7789,7 +7838,8 @@ components keep their state where they stay in place."
              ;; is rendered.  A render in progress can be writing it now,
              ;; from the item as it was (see `vui--stream-append-content').
              ((not (vui--stream-written-p handle))
-              (when (and buf (buffer-live-p buf) vui--rendering-p)
+              (when (and buf (buffer-live-p buf)
+                         (or vui--rendering-p (vui-stream-handle-measured handle)))
                 (vui--stream-request-rebuild handle)))
              ;; Nothing marks where the last item starts: it is static,
              ;; and `vui-stream-remove' took the item after it.  Write the
@@ -7800,8 +7850,14 @@ components keep their state where they stay in place."
              ((or (not (and ls (marker-position ls)))
                   ;; A component in it: the stream is written again, and
                   ;; the item becomes a row (see `vui--stream-mount-row')
-                  (vui--holds-component-p vnode))
-              (vui--stream-request-rebuild handle))
+                  (vui--holds-component-p vnode)
+                  ;; In a layout that measures it
+                  (vui-stream-handle-measured handle))
+              ;; Not for the same item: a hook that runs on each render
+              ;; can make this edit, and the render it asks for runs it
+              ;; again
+              (unless (vui--vnode-equal old vnode)
+                (vui--stream-request-rebuild handle)))
              (t
               (let ((was-empty (vui--stream-region-empty-p handle)))
                 (with-current-buffer buf
@@ -8050,7 +8106,9 @@ messages land underneath.
 
 A live node holds one region's markers until finalized; keep the live set
 bounded by concurrency (finalize a message when its turn ends) and append
-stays O(1) - see docs/design/vui-stream-nodes.org.  Like a component row,
+stays O(1) (not for a stream in a layout that measures it, see
+`vui-stream') - see docs/design/vui-stream-nodes.org.  Like a component
+row,
 a node wants the stream live and non-empty first; opening the only item of
 an empty stream pays the one full re-render the empty -> non-empty
 transition always costs.  Open that first item from a command or async
@@ -8148,7 +8206,8 @@ written again for that."
   "Append VNODE's content at the end of live NODE's region; return NODE.
 The streaming primitive: each delta costs O(delta) - only the new text is
 inserted, and only it is marked dirty for redisplay - no matter how long
-the node has grown or how many items sit below it.  VNODE is typically a
+the node has grown or how many items sit below it (not for a stream in a
+layout that measures it, see `vui-stream').  VNODE is typically a
 text vnode carrying the freshly arrived tokens.  A no-op once NODE has been
 finalized, and on a component node, except the node of a row that
 renders content (see `vui--stream-content-row'): that row renders again
@@ -8173,9 +8232,10 @@ written again, and the item becomes such a row (see `vui-stream-open')."
       ;; accumulated node, not just the latest delta.
       (when cell
         (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
-      (if (vui--holds-component-p vnode)
-          ;; The stream is written again, and the item becomes a row,
-          ;; with NODE its node (see `vui--stream-mount-row')
+      (if (or (vui--holds-component-p vnode) (vui-stream-handle-measured handle))
+          ;; The stream is written again: an item that holds a component
+          ;; becomes a row, with NODE its node (see `vui--stream-mount-row'),
+          ;; and a layout that measures the stream lays it out again
           (vui--stream-request-rebuild handle)
       (let ((was-empty (vui--stream-region-empty-p handle)))
         (with-current-buffer buf
@@ -8197,7 +8257,8 @@ written again, and the item becomes such a row (see `vui-stream-open')."
   "Replace live NODE's whole region with VNODE; return NODE.
 Use when the content changes wholesale (a tool card going from \"running\"
 to its result), as opposed to `vui-stream-append-to' which grows it.  Cost
-is O(VNODE), independent of the items around it.  A no-op once NODE has
+is O(VNODE), independent of the items around it (not for a stream in a
+layout that measures it, see `vui-stream').  A no-op once NODE has
 been finalized.
 
 For a COMPONENT node (opened with a `vui-component'), pass a vnode of the
@@ -8233,11 +8294,18 @@ content takes any VNODE (see `vui-stream-open')."
              (vnode (vui--stream-node-vnode vnode)))
         (when (and buf (buffer-live-p buf)
                    start (marker-position start) end (marker-position end))
-          (when cell (setcar cell vnode))
-          (if (vui--holds-component-p vnode)
-              ;; The stream is written again, and the item becomes a row,
-              ;; with NODE its node (see `vui--stream-mount-row')
-              (vui--stream-request-rebuild handle)
+          (let ((same (and cell (vui--vnode-equal (car cell) vnode))))
+            (when cell (setcar cell vnode))
+            (setq vnode (and (not same) vnode)))
+          (if (or (null vnode)
+                  (vui--holds-component-p vnode)
+                  (vui-stream-handle-measured handle))
+              ;; The stream is written again: an item that holds a
+              ;; component becomes a row (see `vui--stream-mount-row'), and
+              ;; a layout that measures the stream lays it out again.  Not
+              ;; for the same item: the text is as it is.
+              (when vnode
+                (vui--stream-request-rebuild handle))
           (let ((was-empty (vui--stream-region-empty-p handle)))
             (with-current-buffer buf
               (let ((inhibit-read-only t)
@@ -8310,9 +8378,12 @@ screen.  A no-op returning nil if NODE is not live."
         (setf (vui--stream-node-cell new) (cdr cell)
               (vui--stream-node-id-cell new) (cdr id-cell))
         (if (or (vui--holds-component-p vnode)
+                (vui-stream-handle-measured handle)
                 (vui--stream-node-instance node))
-            ;; The stream is written again, and the item becomes a row,
-            ;; with the new node its node (see `vui--stream-mount-row')
+            ;; The stream is written again: an item that holds a component
+            ;; becomes a row, with the new node its node (see
+            ;; `vui--stream-mount-row'), and a layout that measures the
+            ;; stream lays it out again
             (progn (push new (vui-stream-handle-nodes handle))
                    (vui--stream-request-rebuild handle))
         (with-current-buffer buf
@@ -8381,9 +8452,12 @@ if NODE is not live."
               (setcdr id-prev (cons id (cdr id-prev)))
               (setf (vui--stream-node-id-cell new) (cdr id-prev)))))
         (if (or (vui--holds-component-p vnode)
+                (vui-stream-handle-measured handle)
                 (vui--stream-node-instance node))
-            ;; The stream is written again, and the item becomes a row,
-            ;; with the new node its node (see `vui--stream-mount-row')
+            ;; The stream is written again: an item that holds a component
+            ;; becomes a row, with the new node its node (see
+            ;; `vui--stream-mount-row'), and a layout that measures the
+            ;; stream lays it out again
             (progn (push new (vui-stream-handle-nodes handle))
                    (vui--stream-request-rebuild handle))
         (with-current-buffer buf
@@ -8429,6 +8503,14 @@ if NODE is not live."
         (progn (when (vui--stream-row-p row)
                  (vui-unmount row))
                (vui-stream-finalize node))
+    (if (and (vui-stream-handle-measured handle)
+             buf (buffer-live-p buf)
+             start (marker-position start) end (marker-position end))
+        ;; In a layout that measures it: the stream is written again
+        ;; without the item
+        (progn (vui--stream-drop-item handle cell)
+               (vui-stream-finalize node)
+               (vui--stream-request-rebuild handle))
     (when (and buf (buffer-live-p buf)
                start (marker-position start) end (marker-position end))
       (with-current-buffer buf
@@ -8482,7 +8564,7 @@ if NODE is not live."
       ;; empty -> non-empty transition - re-lay once so the buffer matches a
       ;; plain render.  The text is what counts, not the items: the ones
       ;; left may all write nothing.
-      (vui--stream-relay-empty-transition handle was-empty)))
+      (vui--stream-relay-empty-transition handle was-empty))))
     nil))
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
@@ -9099,7 +9181,8 @@ is written."
 
    ;; Fixed-width box
    ((vui-vnode-box-p vnode)
-    (let* ((width (vui--width (vui-vnode-box-width vnode)))
+    (let* ((vui--in-measured-layout t)
+           (width (vui--width (vui-vnode-box-width vnode)))
            (align (or (vui-vnode-box-align vnode) :left))
            (pad-left (vui--width (or (vui-vnode-box-padding-left vnode) 0)))
            (pad-right (vui--width (or (vui-vnode-box-padding-right vnode) 0)))
@@ -9161,6 +9244,7 @@ is written."
     (let* (;; A cell has its own width: a flex in it does not subtract
            ;; the indent of the lines of the table
            (vui--outer-indent 0)
+           (vui--in-measured-layout t)
            ;; Where the table starts: a marker, as the hooks of the
            ;; components in its cells can write or delete text above it
            (table-start (point-marker))
@@ -9522,6 +9606,8 @@ and do not see its context values."
          ;; Mounted for real also from a render that a layout measures:
          ;; its hooks run, and a later mount there unmounts it
          (vui--measuring-p nil)
+         ;; Nor in a layout of the tree whose hook mounts this one
+         (vui--in-measured-layout nil)
          (vui--current-instance nil)
          (vui--new-children nil)
          (vui--child-index 0)

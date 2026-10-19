@@ -90,6 +90,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= in a =vui-box=, =vui-table=, =vui-flex= or =vui-grid=
+  now gets a fresh layout on each edit: an append, an edit of a node or
+  of the last item, a removal, or a row that renders again on its own
+  writes the stream with a render of the tree. Before, the stream wrote
+  its new text in place, and the layout around it kept the widths and
+  the padding of its old text (a box aligned to the right, say, or the
+  columns of a grid). Such an edit now costs a render of the tree; a
+  stream outside these layouts keeps its O(1) edits.
+
 - A component in a =vui-stream= is always a row of its own now, so it
   keeps its state. Before, a component appended to a stream with no text
   yet, and content that held a component (a =vui-fragment= with a
