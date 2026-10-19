@@ -350,13 +350,22 @@ mounted stays before it, on the first row of the new region. Scroll is not
 restored there: a window that starts outside the region is not affected,
 one that starts inside it may scroll when the region is rewritten.
 
-One limit: positions that Emacs saved before the render are not updated.
-A window configuration restored after the render puts back the window
-starts it saved and, for windows that are not selected, their points, and
-all of those now sit at the start of the buffer. Leaving the minibuffer
-does this for a render that ran while it was open, and so does
-=save-window-excursion= around an update. =save-excursion= around an
-update loses the buffer's point the same way.
+The same goes for *windows that showed the buffer before*. A window
+remembers where to put back each buffer it showed: =switch-to-buffer=,
+=switch-to-prev-buffer= (=C-x <left>=) and =quit-window= (=q=) read it.
+So a page refreshed while another page covers it (a timer, a process
+callback, a shared store updated by the page on top) comes back with the
+cursor on its widget, as many lines below the top of the window as
+before, or with the whole buffer from the top when it fits.
+
+One limit: positions that Emacs saved elsewhere before the render are not
+updated. A window configuration restored after the render puts back the
+window starts it saved and, for windows that are not selected, their
+points, and all of those now sit at the start of the buffer. Leaving the
+minibuffer does this for a render that ran while it was open, and so do
+=save-window-excursion= around an update and switching back to a tab of
+=tab-bar-mode= that showed the buffer. =save-excursion= around an update
+loses the buffer's point the same way.
 
 * Primitives
 

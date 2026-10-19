@@ -1610,6 +1610,262 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
           (kill-buffer "*rr-wps*")
           (kill-buffer "*rr-wps-other*"))))))
 
+(vui-defcomponent vui-rr-tall ()
+  "Forty rows of buttons, with two more on top of them once EXPANDED."
+  :state ((expanded nil))
+  :render (apply #'vui-vstack
+                 (append
+                  (when expanded (list (vui-button "x1") (vui-button "x2")))
+                  (mapcar (lambda (i) (vui-button (format "row%d" i)))
+                          (number-sequence 1 40)))))
+
+(defun vui-rr--leave (way other)
+  "Show buffer OTHER in the selected window, to come back WAY later.
+WAY is `switch' (by `switch-to-buffer'), `quit' (by `pop-to-buffer',
+to go back with `quit-window') or `quit-fresh' (the same, with the
+`quit-restore' parameters cleared first, so `pop-to-buffer' writes
+`quit-restore' on every Emacs, and not `quit-restore-prev')."
+  (when (eq way 'quit-fresh)
+    (set-window-parameter nil 'quit-restore nil)
+    (set-window-parameter nil 'quit-restore-prev nil))
+  (if (eq way 'switch)
+      (switch-to-buffer other)
+    (pop-to-buffer other '(display-buffer-same-window))))
+
+(defun vui-rr--go-back (way buffer)
+  "Show BUFFER again in the selected window, the WAY `vui-rr--leave' left."
+  (if (eq way 'switch)
+      (switch-to-buffer buffer)
+    (quit-window)))
+
+(describe "re-render keeps where windows return to a hidden buffer"
+  ;; A window remembers, for each buffer it showed before, where to put
+  ;; that buffer back: its start and its point, kept in markers in
+  ;; `window-prev-buffers' and in the `quit-restore' and
+  ;; `quit-restore-prev' window parameters.  A render of a hidden buffer
+  ;; (a refresh while another page covers it) drops those markers with
+  ;; the text, and `quit-window', `switch-to-buffer' or
+  ;; `switch-to-prev-buffer' then show it at the top.
+  (it "brings `switch-to-buffer' back to the widget"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hid*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-hid*")
+              (goto-char (vui-rr--button-pos "target"))
+              (switch-to-buffer (get-buffer-create "*rr-hid-other*"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (switch-to-buffer "*rr-hid*")
+              (expect (vui-rr--tag-at (window-point)) :to-equal "target")
+              (expect (window-point) :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-hid*")
+          (kill-buffer "*rr-hid-other*")))))
+
+  (it "brings `switch-to-prev-buffer' back to the widget"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hidp*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-hidp*")
+              (goto-char (vui-rr--button-pos "target"))
+              (switch-to-buffer (get-buffer-create "*rr-hidp-other*"))
+              (let ((vui--current-instance inst))
+                (vui-set-state :expanded t))
+              (switch-to-prev-buffer)
+              (expect (window-buffer) :to-be (get-buffer "*rr-hidp*"))
+              (expect (window-point) :to-equal (vui-rr--button-pos "target")))
+          (kill-buffer "*rr-hidp*")
+          (kill-buffer "*rr-hidp-other*")))))
+
+  (it "brings `quit-window' back to the widget after `pop-to-buffer'"
+    ;; `display-buffer' records where to go back in `quit-restore', or in
+    ;; `quit-restore-prev' (Emacs 31) when `quit-restore' is taken
+    ;; already, as it is by the mount's `switch-to-buffer' there.
+    ;; `quit-window' reads those before `window-prev-buffers'.
+    (let ((vui-render-delay nil))
+      (dolist (way '(quit quit-fresh))
+        (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hidq*")))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-hidq*")
+                (goto-char (vui-rr--button-pos "target"))
+                (vui-rr--leave way (get-buffer-create "*rr-hidq-other*"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (vui-rr--go-back way "*rr-hidq*")
+                (expect (window-buffer) :to-be (get-buffer "*rr-hidq*"))
+                (expect (window-point)
+                        :to-equal (vui-rr--button-pos "target")))
+            (kill-buffer "*rr-hidq*")
+            (kill-buffer "*rr-hidq-other*"))))))
+
+  (it "keeps the point each window remembers on its own"
+    ;; Two windows left the buffer at different rows.  The buffer's
+    ;; point is the one of the window that left last.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hid2*"))
+            (other (get-buffer-create "*rr-hid2-other*")))
+        (unwind-protect
+            (save-window-excursion
+              (delete-other-windows)
+              (let* ((w1 (selected-window))
+                     (w2 (split-window w1)))
+                (set-window-buffer w1 (get-buffer "*rr-hid2*"))
+                (set-window-buffer w2 (get-buffer "*rr-hid2*"))
+                (with-current-buffer "*rr-hid2*"
+                  (set-window-point w1 (vui-rr--button-pos "a"))
+                  (set-window-point w2 (vui-rr--button-pos "target")))
+                (with-selected-window w2 (switch-to-buffer other))
+                (with-selected-window w1 (switch-to-buffer other))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (with-selected-window w1 (switch-to-prev-buffer))
+                (with-selected-window w2 (switch-to-prev-buffer))
+                (with-current-buffer "*rr-hid2*"
+                  (expect (window-point w1) :to-equal (vui-rr--button-pos "a"))
+                  (expect (window-point w2)
+                          :to-equal (vui-rr--button-pos "target")))))
+          (kill-buffer "*rr-hid2*")
+          (kill-buffer other)))))
+
+  (it "keeps the start a window remembers"
+    ;; No line comes or goes above the point here, so the start stays on
+    ;; its line.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-lines :rows 60)
+                             "*rr-hids*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-hids*")
+              (let ((line-30 (save-excursion (goto-char (point-min))
+                                             (forward-line 29)
+                                             (point))))
+                (set-window-start nil line-30)
+                (goto-char (+ line-30 5))
+                (switch-to-buffer (get-buffer-create "*rr-hids-other*"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :n 1))
+                (switch-to-buffer "*rr-hids*")
+                (expect (window-start) :to-equal line-30)
+                (expect (window-point) :to-equal (+ line-30 5))))
+          (kill-buffer "*rr-hids*")
+          (kill-buffer "*rr-hids-other*")))))
+
+  (it "keeps the start as many lines above the point as it was"
+    ;; Two rows appear above the point.  The window shows the buffer
+    ;; again with the cursor on the screen row it had, as the cursor of a
+    ;; window showing the buffer does.  For `switch-to-buffer' the start
+    ;; is a marker in `window-prev-buffers', for `quit-window' a number in
+    ;; `quit-restore' or `quit-restore-prev'.
+    (let ((vui-render-delay nil))
+      (dolist (way '(switch quit quit-fresh))
+        (let ((inst (vui-mount (vui-component 'vui-rr-tall) "*rr-hidd*")))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-hidd*")
+                (set-window-start nil (vui-rr--button-pos "row15"))
+                (goto-char (vui-rr--button-pos "row20"))
+                (vui-rr--leave way (get-buffer-create "*rr-hidd-other*"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (vui-rr--go-back way "*rr-hidd*")
+                (expect (window-buffer) :to-be (get-buffer "*rr-hidd*"))
+                (expect (window-point) :to-equal (vui-rr--button-pos "row20"))
+                ;; The start's own line is [row13] now
+                (expect (window-start) :to-equal (vui-rr--button-pos "row15")))
+            (kill-buffer "*rr-hidd*")
+            (kill-buffer "*rr-hidd-other*"))))))
+
+  (it "shows a buffer that fits in the window from the top"
+    ;; As for a window showing the buffer: following the cursor would
+    ;; push the first rows out of view, with blank rows at the bottom.
+    (let ((vui-render-delay nil))
+      (dolist (way '(switch quit quit-fresh))
+        (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hidf*")))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer "*rr-hidf*")
+                (goto-char (vui-rr--button-pos "target"))
+                (vui-rr--leave way (get-buffer-create "*rr-hidf-other*"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (vui-rr--go-back way "*rr-hidf*")
+                (expect (window-point) :to-equal (vui-rr--button-pos "target"))
+                (expect (window-start) :to-equal (point-min)))
+            (kill-buffer "*rr-hidf*")
+            (kill-buffer "*rr-hidf-other*"))))))
+  (it "measures the window as it is with the buffer's own header line"
+    ;; The buffer has a header line, the one that covers it has none: the
+    ;; window will be a line shorter once it shows the buffer again.  As
+    ;; many lines as the window has now fit in it now, but not then.
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (switch-to-buffer (get-buffer-create "*rr-hidh-other*"))
+        (setq header-line-format nil)
+        (let* ((rows (window-body-height))
+               (inst (vui-mount (vui-component 'vui-rr-lines :rows rows)
+                                "*rr-hidh*")))
+          (unwind-protect
+              (progn
+                (switch-to-buffer "*rr-hidh*")
+                (setq header-line-format "header")
+                (let ((line-3 (save-excursion (goto-char (point-min))
+                                              (forward-line 2)
+                                              (point))))
+                  (set-window-start nil line-3)
+                  (goto-char (point-max))
+                  (switch-to-buffer "*rr-hidh-other*")
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :n 1))
+                  (switch-to-buffer "*rr-hidh*")
+                  (expect (window-start) :to-equal line-3)))
+            (kill-buffer "*rr-hidh*")
+            (kill-buffer "*rr-hidh-other*"))))))
+  (it "keeps the place `quit-restore' remembers in a window showing the buffer"
+    ;; On Emacs 31 `switch-to-buffer' back to the buffer keeps the
+    ;; `quit-restore' parameter, which can describe the buffer itself: a
+    ;; `quit-window' from the page it leads to brings it back.  Set by
+    ;; hand here, for every Emacs.
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hidw*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-hidw*")
+              (let ((marker (copy-marker (vui-rr--button-pos "target"))))
+                (set-window-parameter
+                 nil 'quit-restore
+                 (list 'other (list (current-buffer) 1 marker 10)
+                       (selected-window)
+                       (get-buffer-create "*rr-hidw-other*")))
+                (goto-char (vui-rr--button-pos "a"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (expect (marker-position marker)
+                        :to-equal (vui-rr--button-pos "target"))))
+          (kill-buffer "*rr-hidw*")
+          (kill-buffer "*rr-hidw-other*")))))
+
+  (it "keeps a remembered point outside the narrowing"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-rows) "*rr-hidn*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-hidn*")
+              (goto-char (vui-rr--button-pos "target"))
+              (switch-to-buffer (get-buffer-create "*rr-hidn-other*"))
+              (with-current-buffer "*rr-hidn*"
+                (goto-char (point-min))
+                (narrow-to-region (point-min) (line-end-position))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :expanded t))
+                (widen)
+                (expect (marker-position
+                         (nth 2 (assq (current-buffer) (window-prev-buffers))))
+                        :to-equal (vui-rr--button-pos "target"))))
+          (kill-buffer "*rr-hidn*")
+          (kill-buffer "*rr-hidn-other*"))))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

@@ -304,6 +304,41 @@ fields signal."
           (expect (window-point side)
                   :to-equal (+ 2 (vui-inline-test--button-pos "two")))))))
 
+  (it "keeps the point a window remembers inside the region"
+    ;; The host buffer is hidden, and the window that showed it keeps
+    ;; its point in `window-prev-buffers'.  The buffer's own point moved
+    ;; elsewhere since, so the window's point is recovered on its own.
+    ;; A buffer whose name starts with a space is never remembered, so
+    ;; not `with-temp-buffer'.  The lines after TAIL make it taller than
+    ;; the window, so a start put back by the point would not be at the
+    ;; top.
+    (with-current-buffer (get-buffer-create "*inline-hid*")
+      (let ((lines (make-string 40 ?\n)))
+        (insert "HEAD\nTAIL" lines)
+        (let ((host (current-buffer))
+              (other (get-buffer-create "*inline-hid-other*"))
+              (instance (vui-mount-inline
+                         (vui-component 'inline-window-point :extra nil) 6)))
+          (unwind-protect
+              (save-window-excursion
+                (switch-to-buffer host)
+                (goto-char (+ 2 (vui-inline-test--button-pos "two")))
+                (switch-to-buffer other)
+                (with-current-buffer host
+                  (goto-char (point-min))
+                  (vui-update instance '(:extra t))
+                  (expect (buffer-string)
+                          :to-equal (concat "HEAD\n[extra]\n[one]\n[two]\nTAIL"
+                                            lines)))
+                (switch-to-buffer host)
+                (expect (window-point)
+                        :to-equal (+ 2 (vui-inline-test--button-pos "two")))
+                ;; The start is left alone, as for a window showing the
+                ;; buffer, and it is outside the region
+                (expect (window-start) :to-equal 1))
+            (kill-buffer host)
+            (kill-buffer other))))))
+
   (it "keeps a window point that is also the buffer's point inside the region"
     ;; The state a window is in right after it was left: its point and
     ;; the buffer's point are one position.  The window follows the

@@ -3120,20 +3120,34 @@ scroll position instead of being yanked to point.  See
               result)))
     result))
 
-(defun vui--window-fits-buffer-p (window)
+(defun vui--window-fits-buffer-p (window &optional buffer)
   "Return non-nil when WINDOW is tall enough to show its whole buffer.
 The text is measured the way redisplay lays it out (wrapped lines, tall
 faces, images), and only until it is taller than the window, so the
-cost does not grow with the buffer."
-  (let ((height (window-body-height window t)))
-    (<= (+ (cdr (window-text-pixel-size
-                 window (point-min) (point-max) nil
-                 ;; The limit counts from the top of the window, the
-                 ;; result from the top of the text below the header
-                 ;; line and the tab line
-                 (+ 1 height
-                    (window-header-line-height window)
-                    (window-tab-line-height window))))
+cost does not grow with the buffer.
+
+With BUFFER, a buffer WINDOW does not show, tell it for BUFFER, as if
+WINDOW showed it.  The body is then the one WINDOW has now, with the
+header line and the tab line of the buffer it shows put back by those
+of BUFFER, each a line of WINDOW's default height.  Call with BUFFER
+current."
+  (let* ((lines (+ (window-header-line-height window)
+                   (window-tab-line-height window)))
+         (height (if buffer
+                     (- (+ (window-body-height window t) lines)
+                        (* (window-default-line-height window)
+                           (+ (if header-line-format 1 0)
+                              (if tab-line-format 1 0))))
+                   (window-body-height window t)))
+         ;; The limit counts from the top of the window, the result from
+         ;; the top of the text below the header line and the tab line.
+         ;; Those of BUFFER are not known, so it is a few lines more
+         (limit (+ 1 height lines
+                   (if buffer (* 2 (window-default-line-height window)) 0))))
+    (<= (+ (cdr (if buffer
+                    (buffer-text-pixel-size buffer window nil limit)
+                  (window-text-pixel-size
+                   window (point-min) (point-max) nil limit)))
            ;; The measure leaves out the empty line after a final
            ;; newline, a line point can be on like any other
            (if (eq (char-before (point-max)) ?\n)
@@ -3185,6 +3199,139 @@ now is left alone."
                                 (point-min)
                               start)
                             t))))))
+
+;; A window also remembers, for each buffer it showed before, where to
+;; put that buffer back: its start and its point.  An entry of
+;; `window-prev-buffers' keeps both in markers, and the `quit-restore'
+;; parameter (with `quit-restore-prev' from Emacs 31) keeps the start as
+;; a number and the point in a marker.  `switch-to-buffer',
+;; `switch-to-prev-buffer' and `quit-window' read them.  A buffer
+;; rendered while it is hidden (a refresh while another page covers it)
+;; loses those points like any other marker, and came back at its top
+;; however it was shown again.  They are saved and put back like the
+;; point of a window showing the buffer.  The start is put back as the
+;; start of the window holding the cursor is (see
+;; `vui--save-window-starts'): once the window shows the buffer again,
+;; its point is the cursor.  So it goes as many lines above the point as
+;; it was, or to the top of a buffer that fits in the window.
+;;
+;; A window configuration shares these entries with the window it was
+;; saved from, but the point and start it keeps for a window that showed
+;; the buffer when it was saved (a tab of `tab-bar-mode', `winner-mode',
+;; a register) are out of reach.
+
+(defun vui--remembered-places (buffer)
+  "Return the places where windows remember how to show BUFFER again.
+Returns a list of (WINDOW . PLACE).  PLACE is a list (START POINT ...),
+the tail of a description of BUFFER that WINDOW keeps: of its entry in
+`window-prev-buffers', where START and POINT are markers, or of its
+part of the `quit-restore' or `quit-restore-prev' window parameter,
+where START is a number.
+
+The entry of BUFFER in `window-prev-buffers' of a window that shows
+BUFFER now is left out: the window writes a new one when it switches
+away.  Its `quit-restore' parameters stay, and can describe BUFFER on
+Emacs 31: `switch-to-buffer' back to BUFFER keeps them."
+  (let ((places nil))
+    (dolist (window (window-list-1 nil t t))
+      (dolist (entry (cons (unless (eq (window-buffer window) buffer)
+                             (assq buffer (window-prev-buffers window)))
+                           (mapcar (lambda (parameter)
+                                     (let ((value (window-parameter
+                                                   window parameter)))
+                                       (and (consp value) (nth 1 value))))
+                                   '(quit-restore quit-restore-prev))))
+        (when (and (consp entry)
+                   (eq (car entry) buffer)
+                   (integer-or-marker-p (nth 1 entry))
+                   (markerp (nth 2 entry))
+                   (eq (marker-buffer (nth 2 entry)) buffer))
+          (push (cons window (cdr entry)) places))))
+    places))
+
+(defun vui--save-remembered-places (buffer &optional start end)
+  "Save where windows remember to show BUFFER again.
+Returns a list of (WINDOW PLACE SAVED . DELTA) for
+`vui--restore-remembered-places', one for each (WINDOW . PLACE) that
+`vui--remembered-places' returns.  SAVED is the point of PLACE, saved
+as `vui--save-window-points' saves the point of a window, and DELTA how
+many lines the start of PLACE is above its point.
+
+With START and END, only the places whose point the rewrite of that
+region has to save are in the list (see `vui--region-position-p'), and
+DELTA is nil: their start is left alone.
+
+Places at one position share one SAVED: on Emacs 31 a window that left
+BUFFER usually remembers it twice, in `window-prev-buffers' and in
+`quit-restore', and finding a widget again can walk the whole tree.
+The places of a narrowed BUFFER can be outside the narrowing.  Call
+with BUFFER current."
+  (let ((point (point))
+        (saved-at nil)
+        (result nil))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (pcase-dolist (`(,window . ,place) (vui--remembered-places buffer))
+          (let ((place-point (marker-position (nth 1 place))))
+            (when (or (null start)
+                      (vui--region-position-p place-point start end))
+              (push (cl-list*
+                     window place
+                     (or (= place-point point)
+                         (cdr (assq place-point saved-at))
+                         (let ((saved (progn
+                                        (goto-char place-point)
+                                        (vui--save-position start end))))
+                           (push (cons place-point saved) saved-at)
+                           saved))
+                     (unless start
+                       (max 0 (- (line-number-at-pos place-point)
+                                 (line-number-at-pos
+                                  (max (point-min)
+                                       (min (point-max) (car place))))))))
+                    result))))))
+    result))
+
+(defun vui--restore-remembered-places (places &optional start end)
+  "Restore the places saved by `vui--save-remembered-places'.
+PLACES is a list of (WINDOW PLACE SAVED . DELTA).  The point of PLACE
+goes where `vui--restored-position', which START and END are passed on
+to, finds SAVED, or to the buffer's point when it follows that.  Its
+start goes DELTA lines above that, unless DELTA is nil, or to the
+beginning of the buffer when the whole buffer fits in WINDOW.
+
+Call with the buffer current and its point already restored.  A place
+whose point marker no longer points into the buffer is left alone."
+  (let ((buffer (current-buffer))
+        (point (point))
+        (found nil))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (pcase-dolist (`(,window ,place ,saved . ,delta) places)
+          ;; Asked first, and for every SAVED: this releases its markers.
+          ;; Once only, as places at one position share it
+          (let ((pos (cond
+                      ((eq saved t) point)
+                      ((cdr (assq saved found)))
+                      (t (let ((pos (vui--restored-position saved start end)))
+                           (push (cons saved pos) found)
+                           pos)))))
+            (when (eq (marker-buffer (nth 1 place)) buffer)
+              (set-marker (nth 1 place) pos)
+              (when delta
+                (goto-char pos)
+                (forward-line (- delta))
+                (let ((place-start (point)))
+                  (when (and (> place-start (point-min))
+                             (window-live-p window)
+                             (not (eq (window-buffer window) buffer))
+                             (vui--window-fits-buffer-p window buffer))
+                    (setq place-start (point-min)))
+                  (if (markerp (car place))
+                      (set-marker (car place) place-start)
+                    (setcar place place-start)))))))))))
 
 ;; Fields next to text a render inserts
 ;;
@@ -3455,6 +3602,8 @@ stream is written again with a render of the tree (see
                               (vui--save-position pos end-pos)))
                ;; Same for the point of each window showing the buffer
                (window-points (vui--save-window-points buffer pos end-pos))
+               ;; And of each window that showed it before
+               (remembered (vui--save-remembered-places buffer pos end-pos))
                (vui--root-instance instance)
                ;; Nil but for a stream row, which is one step of its stream
                (vui--render-path (vui-instance-base-path instance))
@@ -3514,6 +3663,8 @@ stream is written again with a render of the tree (see
                                 saved-point (car new-bounds) (cdr new-bounds))))
                   (vui--restore-window-points
                    window-points (car new-bounds) (cdr new-bounds))
+                  (vui--restore-remembered-places
+                   remembered (car new-bounds) (cdr new-bounds))
                   ;; Run effects after commit
                   (vui--run-pending-effects)))
             (setq vui--rendering-p nil))))
@@ -3622,6 +3773,8 @@ writes there goes into the region."
                ;; windows showing this buffer
                (window-points (vui--save-window-points buffer))
                (window-info (vui--save-window-starts buffer))
+               ;; And where windows that showed it before put it back
+               (remembered (vui--save-remembered-places buffer))
                (vui--root-instance instance)
                ;; Initialize render path for cursor tracking
                (vui--render-path nil)
@@ -3658,6 +3811,7 @@ writes there goes into the region."
                   ;; Restore the point, then the viewport, of all windows
                   (vui--restore-window-points window-points)
                   (vui--restore-window-starts window-info)
+                  (vui--restore-remembered-places remembered)
                   ;; Run effects after commit
                   (vui--run-pending-effects)))
             (setq vui--rendering-p nil)))

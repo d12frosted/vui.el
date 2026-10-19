@@ -90,6 +90,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A buffer rendered while it is hidden comes back with the cursor where
+  it was left. A window remembers where to put back each buffer it
+  showed (its start and point), and =quit-window=, =switch-to-buffer= and
+  =switch-to-prev-buffer= use that. A render dropped these positions with
+  the old text, so a list refreshed while a page opened from it was on
+  top (by a timer, or a shared store that page updated) came back with
+  the cursor on its first line. Now the render keeps these positions the
+  way it keeps the point of a window that shows the buffer, and puts the
+  start back as many lines above the point as before, or at the top when
+  the whole buffer fits in the window (#217).
+
 - A =vui-stream= in a =vui-box=, =vui-table=, =vui-flex= or =vui-grid=
   now gets a fresh layout on each edit: an append, an edit of a node or
   of the last item, a removal, or a row that renders again on its own
