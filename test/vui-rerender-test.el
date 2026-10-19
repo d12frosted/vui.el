@@ -2229,6 +2229,227 @@ With NEWLINE, a newline ends the last one."
                         :to-equal (vui-rr--line-start "b row 25")))
             (kill-buffer "*rr-wsi*")))))))
 
+(vui-defcomponent vui-rr-status (stream spacing first)
+  "STREAM above a status line, SPACING blank lines between children.
+A head line comes before STREAM, unless FIRST."
+  :render (vui-vstack :spacing spacing
+                      (unless first (vui-text "head"))
+                      (vui-stream stream)
+                      (vui-text "status line")))
+
+(vui-defcomponent vui-rr-plain (expanded)
+  "Plain text lines, with two more on top of them when EXPANDED."
+  :render (apply #'vui-vstack
+                 (append (when expanded
+                           (list (vui-text "extra 1") (vui-text "extra 2")))
+                         (list (vui-text "status line")
+                               (vui-text "footer")))))
+
+(describe "a cursor on plain text"
+  ;; Plain text has no widget to find again.  After a render that
+  ;; rewrites it, the cursor goes back to the nearest line with the same
+  ;; text, and to its column there; only when there is none, to its line
+  ;; and column in the buffer.
+  (it "stays on its line when lines appear above it"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-plain) "*rr-pt*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-pt*")
+              (goto-char (vui-rr--line-start "status line"))
+              (forward-char 3)
+              (vui-update inst '(:expanded t))
+              (expect (buffer-substring-no-properties (pos-bol) (point))
+                      :to-equal "sta"))
+          (kill-buffer "*rr-pt*")))))
+
+  (it "stays on its line when the text of that line changes"
+    ;; The old text is on another line: that is not where the cursor was
+    (let ((vui-render-delay nil))
+      (vui-defcomponent vui-rr-plain-text (content)
+        :render (vui-text content))
+      (let ((inst (vui-mount (vui-component
+                              'vui-rr-plain-text
+                              :content "Status: idle\nx\ny\nStatus: idle")
+                             "*rr-ptc*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-ptc*")
+              (goto-char (+ (point-min) 3))
+              (vui-update inst '(:content "Status: busy\nx\ny\nStatus: idle"))
+              (expect (line-number-at-pos) :to-equal 1)
+              (expect (current-column) :to-equal 3))
+          (kill-buffer "*rr-ptc*")))))
+
+  (it "stays on a blank line that gets text while rows come below"
+    ;; A line as far from the end as it was is blank too, but the line
+    ;; after it is not the one after the cursor's line
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component
+                              'vui-rr-plain-text
+                              :content "Head\n\nitem\n\nitem2")
+                             "*rr-ptl*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-ptl*")
+              (goto-char (point-min))
+              (forward-line 1)
+              (vui-update
+               inst '(:content "Head\nLoading\nitem\n\nitem2\nitem3\n"))
+              (expect (line-number-at-pos) :to-equal 2))
+          (kill-buffer "*rr-ptl*")))))
+
+  (dolist (side '(before after))
+    (it (format "lets a hook put a node %s one in an empty stream and edit it"
+                side)
+      ;; During a render the stream is not written again at once: the
+      ;; new node is written in place, so it can be edited
+      (let ((vui-render-delay nil)
+            (stream (vui-make-stream))
+            (anchor nil))
+        (vui-defcomponent vui-rr-inserter ()
+          :on-mount (let ((new (funcall (if (eq side 'before)
+                                            #'vui-stream-before
+                                          #'vui-stream-after)
+                                        anchor (vui-text "Thinking"))))
+                      (vui-stream-append-to new (vui-text "... done")))
+          :render (vui-text "control"))
+        (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                              :spacing 0)
+                               "*rr-pti*"))
+              (control nil))
+          (unwind-protect
+              (progn
+                (setq anchor (vui-stream-open stream (vui-text "")))
+                (setq control (vui-mount (vui-component 'vui-rr-inserter)
+                                         "*rr-pti-control*"))
+                (with-current-buffer "*rr-pti*"
+                  (expect (buffer-substring-no-properties (point-min)
+                                                          (point-max))
+                          :to-match "Thinking\\.\\.\\. done")))
+            (when control (vui-unmount control))
+            (vui-unmount inst)
+            (kill-buffer "*rr-pti*")
+            (kill-buffer "*rr-pti-control*"))))))
+
+  (it "stays on a blank line of an inline region that gets text"
+    ;; The line after the region is blank too
+    (with-current-buffer (get-buffer-create "*rr-ptb*")
+      (insert "host top\n\nhost bottom")
+      (vui-defcomponent vui-rr-plain-lines (content)
+        :render (vui-text content))
+      (let ((inst (vui-mount-inline
+                   (vui-component 'vui-rr-plain-lines :content "r1\n\nr3\n")
+                   10)))
+        (unwind-protect
+            (progn
+              (goto-char (point-min))
+              (forward-line 2)
+              (vui-update inst '(:content "r1\nRESULT\nr3\n"))
+              (expect (buffer-substring-no-properties (pos-bol) (pos-eol))
+                      :to-equal "RESULT"))
+          (kill-buffer "*rr-ptb*")))))
+
+  (it "goes to its line and column when its text is gone"
+    (let ((vui-render-delay nil))
+      (let ((inst (vui-mount (vui-component 'vui-rr-lines :rows 3) "*rr-pg*")))
+        (unwind-protect
+            (save-window-excursion
+              (switch-to-buffer "*rr-pg*")
+              (goto-char (vui-rr--line-start "line 2-0"))
+              (forward-char 4)
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (expect (buffer-substring-no-properties (pos-bol) (point))
+                      :to-equal "line")
+              (expect (line-number-at-pos) :to-equal 2))
+          (kill-buffer "*rr-pg*")))))
+
+  (it "keeps a node opened on an empty stream written in place after"
+    ;; Its first text comes with the tree, the rest in place
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0 :first t)
+                             "*rr-pen*")))
+        (unwind-protect
+            (let ((node (vui-stream-open stream (vui-text ""))))
+              (vui-stream-append-to node (vui-text "now"))
+              (vui-stream-append-to node (vui-text " more"))
+              (vui-stream-update-last stream (vui-text "now more and more"))
+              (with-current-buffer "*rr-pen*"
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal "now more and more\nstatus line")))
+          (vui-unmount inst)
+          (kill-buffer "*rr-pen*")))))
+
+  (it "lets a hook write a stream node again while the stream is written"
+    ;; The region of the stream is not marked at that moment, and the
+    ;; node is written in place
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream))
+          (node nil)
+          (calls 0))
+      (vui-defcomponent vui-rr-node-writer ()
+        :on-update (when node
+                     (setq calls (1+ calls))
+                     (vui-stream-update node (vui-text (format "node v%d"
+                                                               calls))))
+        :render (vui-text "row"))
+      (let ((inst (vui-mount (vui-component 'vui-rr-status :stream stream
+                                            :spacing 0)
+                             "*rr-pth*")))
+        (unwind-protect
+            (progn
+              (setq node (vui-stream-open stream (vui-text "node v0")))
+              (vui-stream-append stream (vui-component 'vui-rr-node-writer))
+              (vui-rerender inst)
+              (with-current-buffer "*rr-pth*"
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal "head\nnode v1\nrow\nstatus line")))
+          (vui-unmount inst)
+          (kill-buffer "*rr-pth*")))))
+
+  (dolist (shape '((0) (1) (0 first) (1 first)))
+    (dolist (how '(append update-last update append-to update-last-node
+                          before after))
+      (it (format "stays below an empty stream that gets an item (%s, %S)"
+                  how shape)
+        (let ((vui-render-delay nil)
+              (stream (vui-make-stream))
+              (node nil))
+          (let ((inst (vui-mount (vui-component 'vui-rr-status
+                                                :stream stream
+                                                :spacing (car shape)
+                                                :first (cadr shape))
+                                 "*rr-pe*")))
+            (unwind-protect
+                (save-window-excursion
+                  ;; An empty stream: no item, or items that write nothing
+                  (pcase how
+                    ('update-last (vui-stream-append stream (vui-text "x"))
+                                  (vui-stream-update-last stream (vui-text "")))
+                    ('update (setq node (vui-stream-open stream (vui-text "x")))
+                             (vui-stream-update node (vui-text "")))
+                    ((or 'append-to 'update-last-node 'before 'after)
+                     (setq node (vui-stream-open stream (vui-text "")))))
+                  (switch-to-buffer "*rr-pe*")
+                  (goto-char (vui-rr--line-start "status line"))
+                  (forward-char 4)
+                  (let ((item (vui-text "now")))
+                    (pcase how
+                      ('append (vui-stream-append stream item))
+                      ((or 'update-last 'update-last-node)
+                       (vui-stream-update-last stream item))
+                      ('update (vui-stream-update node item))
+                      ('append-to (vui-stream-append-to node item))
+                      ('before (vui-stream-before node item))
+                      ('after (vui-stream-after node item))))
+                  (expect (buffer-substring-no-properties (pos-bol) (point))
+                          :to-equal "stat"))
+              (vui-unmount inst)
+              (kill-buffer "*rr-pe*"))))))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

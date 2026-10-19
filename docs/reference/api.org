@@ -313,9 +313,12 @@ its place in the tree, or by its =:key= (its label, when it has no key)
 when rows appeared or went away above it. If the widget itself is gone,
 point moves to the widget that now sits at its place in the tree: the
 sibling that slid into its slot, the previous one when it was last, or a
-parent. A position on plain text is kept by line and column. Each item of
-a =vui-stream= has a place of its own in the tree, so point on the button
-of one message is found on that message again.
+parent. A position on plain text is kept by line and column. When its line
+has other text after the render, the line as far from the end as it was is
+tried, and taken when it and the line after it have the text they had: a
+position on a status line stays there when rows appear above it. Each item
+of a =vui-stream= has a place of its own in the tree, so point on the
+button of one message is found on that message again.
 
 All of that is for text the render rewrote. Not every render rewrites the
 whole buffer: when the root is a flat container whose first child is a

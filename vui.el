@@ -4239,17 +4239,19 @@ in the region: what ends at START is the host buffer's."
 (defun vui--save-cursor-position (&optional start end)
   "Save cursor position relative to current widget.
 Returns plist with :path, :identity, :label, :offset for widgets, or
-:line, :column for non-widget positions.  :path is the widget's ordinal
+:line, :column, :text, :next and :from-end for non-widget positions:
+:text is the text of the line, :next that of the line after it (nil
+for the last one), and :from-end how many lines there are from it to
+the end, when that is no more than `vui--from-end-limit' (see
+`vui--restore-cursor-position').  :path is the widget's ordinal
 tree path, used to relocate it (or, when it is gone, its nearest tree
 neighbour) on restore.  :label is the widget's `:tag', kept alongside
 :identity so a key shared across the buffer can be disambiguated on
 restore (see `vui--find-widget-by-identity').  :at-end is non-nil for a
 point at the end of an editable field (see `vui--field-ending-at', which
-START is passed on to).  With START, :line counts from the line of START
-instead of the first line of the buffer, so the cost depends on the
-region, not on where it is.  END is accepted for symmetry with
-`vui--restore-cursor-position' but is not needed here."
-  (ignore end)
+START is passed on to).  With START and END, :line counts from the
+line of START instead of the first line of the buffer, and :from-end
+to END, so the cost depends on the region, not on where it is."
   (let* ((field (vui--field-ending-at (point) start))
          (elt (or field (vui--elt-at (point)))))
     (if elt
@@ -4270,7 +4272,55 @@ region, not on where it is.  END is accepted for symmetry with
                                          (line-beginning-position))
                                        (line-beginning-position)))
                     (line-number-at-pos))
-            :column (current-column)))))
+            :column (current-column)
+            :text (buffer-substring-no-properties (pos-bol) (pos-eol))
+            :next (save-excursion
+                    (and (vui--next-line)
+                         (or (null end) (<= (point) end))
+                         (buffer-substring-no-properties (pos-bol) (pos-eol))))
+            :from-end (vui--lines-to-end end)))))
+
+(defconst vui--from-end-limit 1000
+  "How many lines from the end a plain-text position is looked for by.
+A line that rows above it moved is found as far from the end as it was
+\(see `vui--restore-cursor-position').  Counting the lines to the end
+costs as many lines as there are, and the lines a cursor stays on
+while rows come above it, a status line or a prompt, are near the
+end.")
+
+(defun vui--lines-to-end (&optional end)
+  "Return how many lines there are after the line of point, up to END.
+END defaults to the end of the buffer, and the line END is on counts.
+Nil when there are more than `vui--from-end-limit'."
+  (save-excursion
+    (let ((limit (or end (point-max)))
+          (lines 0))
+      (while (and (<= lines vui--from-end-limit)
+                  (vui--next-line)
+                  (<= (point) limit)
+                  ;; The line END starts is after the region
+                  (not (and end (= (point) limit) (> limit (point-min))
+                            (eq (char-before limit) ?\n))))
+        (setq lines (1+ lines)))
+      (and (<= lines vui--from-end-limit) lines))))
+
+(defun vui--next-line ()
+  "Move to the start of the next line; return nil when there is none.
+`forward-line' moves to the end of a last line with no newline, and
+counts that as a line moved."
+  (and (zerop (forward-line 1)) (bolp)))
+
+(defun vui--line-from-end (lines &optional end)
+  "Return the start of the line with LINES lines after it, up to END.
+LINES counts as `vui--lines-to-end' does.  Nil when there is no such
+line."
+  (save-excursion
+    (goto-char (or end (point-max)))
+    ;; The line END starts is after the region
+    (when (and end (bolp) (> (point) (point-min)))
+      (backward-char))
+    (and (zerop (forward-line (- lines)))
+         (point))))
 
 (defun vui--collect-widgets (&optional start end)
   "Collect interactive elements between START and END, in buffer order.
@@ -4429,6 +4479,9 @@ to START instead of the buffer beginning."
          (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
          (column (plist-get cursor-info :column))
+         (text (plist-get cursor-info :text))
+         (next (plist-get cursor-info :next))
+         (from-end (plist-get cursor-info :from-end))
          (home (or start (point-min)))
          ;; Single lookup for path-based matching
          (path-widget (and path (vui--find-widget-by-path path start end)))
@@ -4469,6 +4522,26 @@ to START instead of the buffer beginning."
          ((and line column)
           (goto-char home)
           (forward-line (1- line))
+          ;; Rows that appeared or went away above a line move it.  The
+          ;; line as far from the end as it was is the one when it has
+          ;; the text, and the line after it the text of the one after:
+          ;; a line whose own text changed stays on its number
+          (when (and text from-end
+                     (not (string= text (buffer-substring-no-properties
+                                         (pos-bol) (pos-eol)))))
+            (let ((pos (vui--line-from-end from-end end)))
+              (when (and pos
+                         (>= pos home)
+                         (save-excursion
+                           (goto-char pos)
+                           (and (string= text (buffer-substring-no-properties
+                                               (pos-bol) (pos-eol)))
+                                (equal next
+                                       (and (vui--next-line)
+                                            (or (null end) (<= (point) end))
+                                            (buffer-substring-no-properties
+                                             (pos-bol) (pos-eol)))))))
+                (goto-char pos))))
           (move-to-column column))
          (t
           (goto-char home))))))))
@@ -8233,6 +8306,10 @@ components keep their state where they stay in place."
              ;; call is still waiting for that rebuild, the buffer does not
              ;; hold the item it would extend.
              ((or (not (and ls (marker-position ls)))
+                  ;; Nothing marks the separators around a stream with
+                  ;; no text: the tree lays them out (see
+                  ;; `vui--stream-in-place-p')
+                  (not (vui--stream-in-place-p handle))
                   ;; A component in it: the stream is written again, and
                   ;; the item becomes a row (see `vui--stream-mount-row')
                   (vui--holds-component-p vnode)
@@ -8621,7 +8698,11 @@ written again, and the item becomes such a row (see `vui-stream-open')."
       ;; accumulated node, not just the latest delta.
       (when cell
         (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
-      (if (or (vui--holds-component-p vnode) (vui-stream-handle-measured handle))
+      (if (or (vui--holds-component-p vnode) (vui-stream-handle-measured handle)
+              ;; Nothing marks the separators around a stream with no
+              ;; text: the tree lays them out (see `vui--stream-in-place-p')
+              (and (vui--stream-written-p handle)
+                   (not (vui--stream-in-place-p handle))))
           ;; The stream is written again: an item that holds a component
           ;; becomes a row, with NODE its node (see `vui--stream-mount-row'),
           ;; and a layout that measures the stream lays it out again
@@ -8687,6 +8768,11 @@ content takes any VNODE (see `vui-stream-open')."
             (when cell (setcar cell vnode))
             (setq vnode (and (not same) vnode)))
           (if (or (null vnode)
+                  ;; As in `vui-stream-update-last'.  During a render
+                  ;; that writes the stream again its region is not
+                  ;; marked yet, and the write goes on as before
+                  (and (vui--stream-written-p handle)
+                       (not (vui--stream-in-place-p handle)))
                   (vui--holds-component-p vnode)
                   (vui-stream-handle-measured handle))
               ;; The stream is written again: an item that holds a
@@ -8769,7 +8855,14 @@ screen.  A no-op returning nil if NODE is not live."
               (vui--stream-node-id-cell new) (cdr id-cell))
         (if (or (vui--holds-component-p vnode)
                 (vui-stream-handle-measured handle)
-                (vui--stream-node-instance node))
+                (vui--stream-node-instance node)
+                ;; As in `vui-stream-append-to'.  Not during a render,
+                ;; which only queues that: the new node would have no
+                ;; place until it is written, and edits of it would be
+                ;; lost
+                (and (not vui--rendering-p)
+                     (vui--stream-written-p handle)
+                     (not (vui--stream-in-place-p handle))))
             ;; The stream is written again: an item that holds a component
             ;; becomes a row, with the new node its node (see
             ;; `vui--stream-mount-row'), and a layout that measures the
@@ -8843,7 +8936,14 @@ if NODE is not live."
               (setf (vui--stream-node-id-cell new) (cdr id-prev)))))
         (if (or (vui--holds-component-p vnode)
                 (vui-stream-handle-measured handle)
-                (vui--stream-node-instance node))
+                (vui--stream-node-instance node)
+                ;; As in `vui-stream-append-to'.  Not during a render,
+                ;; which only queues that: the new node would have no
+                ;; place until it is written, and edits of it would be
+                ;; lost
+                (and (not vui--rendering-p)
+                     (vui--stream-written-p handle)
+                     (not (vui--stream-in-place-p handle))))
             ;; The stream is written again: an item that holds a component
             ;; becomes a row, with the new node its node (see
             ;; `vui--stream-mount-row'), and a layout that measures the

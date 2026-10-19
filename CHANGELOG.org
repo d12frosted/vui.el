@@ -90,6 +90,22 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A cursor on plain text stays on its line when a render puts rows
+  above it. It was put back by its line number and column, so it moved
+  up by the rows that appeared: a cursor on a status line below a
+  stream went to the stream's first item once that item arrived. Now,
+  when the line at its number has other text, the line as far from the
+  end as it was (for a line no more than 1000 lines from the end) is
+  tried, and taken when it and the line after it have the text they
+  had. An item that =vui-stream-update-last=, =vui-stream-update=,
+  =vui-stream-append-to=, =vui-stream-before= or =vui-stream-after=
+  writes into an empty =vui-stream= outside of a render is also written
+  with the tree now, as an append to an empty stream is. It was written
+  in place first, and the render that laid the tree out right after
+  saved the cursor there. During a render, =vui-stream-before= and
+  =vui-stream-after= still write in place, so that the node they return
+  can be edited.
+
 - A window that starts in text written again in place keeps showing
   the same lines. An item of a =vui-stream= written again
   (=vui-stream-update-last=, =vui-stream-update=) moved the start of
