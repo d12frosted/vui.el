@@ -1444,8 +1444,9 @@ and shows TEXT, or nothing when TEXT is nil."
         (expect (buffer-string) :to-equal "line\n[c]"))))
 
   (it "keeps point in the region when a hook writes above it"
-    ;; Point is on plain text, which no widget finds again: it goes to
-    ;; the start of the region, not to where that was before the hook
+    ;; Point is on plain text, which no widget finds again.  Its line
+    ;; counts from the start of the region, so it stays on its text, and
+    ;; not where that was before the hook
     (with-temp-buffer
       (insert "host line\n")
       (let ((instance (vui-mount-inline
@@ -1458,7 +1459,7 @@ and shows TEXT, or nothing when TEXT is nil."
                                          (vui-inline-test--host-insert
                                           (point-min) "n1\nn2\n"))))
         (expect (buffer-string) :to-equal "n1\nn2\nhost line\n[a]\n[b]")
-        (expect (point) :to-equal (car (vui--inline-bounds instance))))))
+        (expect (point) :to-equal (1- (point-max))))))
 
   (it "keeps a window's point in the region when a hook writes above it"
     (with-temp-buffer
@@ -1473,8 +1474,7 @@ and shows TEXT, or nothing when TEXT is nil."
                             :update-hook (lambda ()
                                            (vui-inline-test--host-insert
                                             (point-min) "n1\nn2\n"))))
-          (expect (window-point side)
-                  :to-equal (car (vui--inline-bounds instance)))))))
+          (expect (window-point side) :to-equal (1- (point-max)))))))
 
   ;; The hooks of a child run while the tree is still being written
   (dolist (when-mounted '(first later))

@@ -1866,6 +1866,152 @@ to go back with `quit-window') or `quit-fresh' (the same, with the
           (kill-buffer "*rr-hidn*")
           (kill-buffer "*rr-hidn-other*"))))))
 
+(defun vui-rr--copy-button-pos (n)
+  "Return the start of the [copy] button of message N, whatever its label."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward (format "message %d " n))
+    (search-forward "[copy]")
+    (match-beginning 0)))
+
+(defun vui-rr--edited (n)
+  "Return message N with more text before and after its number.
+Its [copy] button moves right, and so does the number."
+  (vui-fragment (vui-text (format "new message %d edited " n))
+                (vui-button "copy")))
+
+(describe "an edit of a stream item in place keeps the positions in it"
+  ;; `vui-stream-update-last' and `vui-stream-update' write a new item
+  ;; in place of the old one, outside of any render.  Deleting the old
+  ;; text dropped every position in it at the item's start: the buffer's
+  ;; point, the point of each window showing the buffer and the points
+  ;; windows remember for it.  Now they get what a render of an inline
+  ;; region gives them.
+  (dolist (how '(update-last update))
+    (describe (format "with `vui-stream-%s'" how)
+      (let ((edit (lambda (stream node n)
+                    (if (eq how 'update-last)
+                        (vui-stream-update-last stream (vui-rr--edited n))
+                      (vui-stream-update node (vui-rr--edited n)))))
+            (open (lambda (stream)
+                    ;; The edited message is the last one for update-last
+                    ;; and a node with one more message after it for update
+                    (if (eq how 'update-last)
+                        (progn (vui-stream-append stream (vui-rr--message 2))
+                               nil)
+                      (prog1 (vui-stream-open stream (vui-rr--message 2))
+                        (vui-stream-append stream (vui-rr--message 3)))))))
+
+        (it "keeps the buffer's point on its widget"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sip*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (save-window-excursion
+                    (switch-to-buffer "*rr-sip*")
+                    (goto-char (vui-rr--copy-button-pos 2))
+                    (funcall edit stream node 2)
+                    (expect (buffer-substring-no-properties
+                             (line-beginning-position) (line-end-position))
+                            :to-equal "new message 2 edited [copy]")
+                    (expect (point) :to-equal (vui-rr--copy-button-pos 2)))
+                (kill-buffer "*rr-sip*")))))
+
+        (it "keeps the point of a window that is not selected"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-siw*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (vui-rr--with-side-window win "*rr-siw*"
+                    (set-window-point win (+ 2 (vui-rr--copy-button-pos 2)))
+                    (funcall edit stream node 2)
+                    (expect (window-point win)
+                            :to-equal (+ 2 (vui-rr--copy-button-pos 2))))
+                (kill-buffer "*rr-siw*")))))
+
+        (it "keeps the point a window remembers for the hidden buffer"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sih*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (save-window-excursion
+                    (switch-to-buffer "*rr-sih*")
+                    (goto-char (vui-rr--copy-button-pos 2))
+                    (switch-to-buffer (get-buffer-create "*rr-sih-other*"))
+                    (with-current-buffer "*rr-sih*"
+                      (goto-char (point-min))
+                      (funcall edit stream node 2))
+                    (switch-to-buffer "*rr-sih*")
+                    (expect (window-point)
+                            :to-equal (vui-rr--copy-button-pos 2)))
+                (kill-buffer "*rr-sih*")
+                (kill-buffer "*rr-sih-other*")))))
+
+        (it "keeps a position on the item's text on its line and column"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sit*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (save-window-excursion
+                    (switch-to-buffer "*rr-sit*")
+                    ;; On the "2" of "message 2": the column is kept, not
+                    ;; the text, which moved right
+                    (goto-char (- (vui-rr--copy-button-pos 2) 2))
+                    (funcall edit stream node 2)
+                    (expect (buffer-substring-no-properties
+                             (line-beginning-position) (point))
+                            :to-equal "new mess"))
+                (kill-buffer "*rr-sit*")))))
+
+        (it "leaves alone a position outside the item"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sio*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (save-window-excursion
+                    (switch-to-buffer "*rr-sio*")
+                    (goto-char (vui-rr--copy-button-pos 1))
+                    (funcall edit stream node 2)
+                    (expect (point) :to-equal (vui-rr--copy-button-pos 1)))
+                (kill-buffer "*rr-sio*")))))
+        (it "keeps a position at the end of the item at its new end"
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sie*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (save-window-excursion
+                    (switch-to-buffer "*rr-sie*")
+                    (goto-char (+ 6 (vui-rr--copy-button-pos 2)))
+                    (funcall edit stream node 2)
+                    (expect (buffer-substring-no-properties
+                             (line-beginning-position) (point))
+                            :to-equal "new message 2 edited [copy]")
+                    (expect (point) :to-equal (line-end-position)))
+                (kill-buffer "*rr-sie*")))))
+
+        (it "keeps the point of a window that follows the buffer's point"
+          ;; A window left for another one copies its point into the
+          ;; buffer's point, so a side window usually has the same one
+          (let ((vui-render-delay nil))
+            (let* ((pair (vui-rr--mount-chat "*rr-sif*" 2))
+                   (stream (cdr pair))
+                   (node (funcall open stream)))
+              (unwind-protect
+                  (vui-rr--with-side-window win "*rr-sif*"
+                    (goto-char (vui-rr--copy-button-pos 2))
+                    (set-window-point win (point))
+                    (funcall edit stream node 2)
+                    (expect (point) :to-equal (vui-rr--copy-button-pos 2))
+                    (expect (window-point win)
+                            :to-equal (vui-rr--copy-button-pos 2)))
+                (kill-buffer "*rr-sif*")))))))))
+
 (describe "re-render and the undo list"
   ;; `widget-setup' ends every render by clearing `buffer-undo-list', so
   ;; nothing recorded during a render survives; recording it anyway

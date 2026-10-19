@@ -90,6 +90,20 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An item of a =vui-stream= written again in place keeps the cursor
+  where it was in the item. =vui-stream-update-last= (when the new item
+  does not just extend the old one) and =vui-stream-update= delete the
+  old text and write the new one, outside of any render, and every
+  position in the item dropped to its start: the buffer's point, the
+  point of each window showing the buffer and the points windows
+  remember for it. Point on the button of a message that is still
+  streaming in jumped to the start of the message on each update. Now
+  these positions are kept as a render of an inline region keeps them.
+  A position on plain text there is now kept by its line and column in
+  the region, not in the buffer, so it also stays on its text when a
+  hook of the render writes lines above an inline region (before, it
+  moved up by the lines written).
+
 - A buffer rendered while it is hidden comes back with the cursor where
   it was left. A window remembers where to put back each buffer it
   showed (its start and point), and =quit-window=, =switch-to-buffer= and

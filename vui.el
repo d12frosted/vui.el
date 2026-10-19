@@ -3333,6 +3333,41 @@ whose point marker no longer points into the buffer is left alone."
                       (set-marker (car place) place-start)
                     (setcar place place-start)))))))))))
 
+;; An item of a live stream is written again in place, outside of any
+;; render: `vui-stream-update-last' and `vui-stream-update' delete its
+;; text and write the new item there.  The positions in it get what a
+;; render of an inline region gives them (see `vui--rerender-inline-1').
+
+(defmacro vui--keeping-positions (start end &rest body)
+  "Run BODY, a rewrite of the text from START to END, keeping positions.
+START and END are markers around that text, before BODY and after it.
+The positions in the text (the buffer's point, the point of each window
+showing the buffer, the points windows remember for it) are saved
+before BODY as for a render of an inline region, and found again after
+it in the new text.  Positions outside it move with the text around it.
+Call with the buffer current.  Returns what BODY returns."
+  (declare (indent 2) (debug t))
+  (let ((from (make-symbol "from"))
+        (to (make-symbol "to"))
+        (buffer (make-symbol "buffer"))
+        (saved-point (make-symbol "saved-point"))
+        (window-points (make-symbol "window-points"))
+        (remembered (make-symbol "remembered")))
+    `(let* ((,from (marker-position ,start))
+            (,to (marker-position ,end))
+            (,buffer (current-buffer))
+            (,saved-point (when (vui--region-position-p (point) ,from ,to)
+                            (vui--save-position ,from ,to)))
+            (,window-points (vui--save-window-points ,buffer ,from ,to))
+            (,remembered (vui--save-remembered-places ,buffer ,from ,to)))
+       (prog1 (progn ,@body)
+         (let ((,from (marker-position ,start))
+               (,to (marker-position ,end)))
+           (when ,saved-point
+             (goto-char (vui--restored-position ,saved-point ,from ,to)))
+           (vui--restore-window-points ,window-points ,from ,to)
+           (vui--restore-remembered-places ,remembered ,from ,to))))))
+
 ;; Fields next to text a render inserts
 ;;
 ;; The overlay of an editable field takes in text inserted at either of
@@ -4099,7 +4134,9 @@ neighbour) on restore.  :label is the widget's `:tag', kept alongside
 :identity so a key shared across the buffer can be disambiguated on
 restore (see `vui--find-widget-by-identity').  :at-end is non-nil for a
 point at the end of an editable field (see `vui--field-ending-at', which
-START is passed on to).  END is accepted for symmetry with
+START is passed on to).  With START, :line counts from the line of START
+instead of the first line of the buffer, so the cost depends on the
+region, not on where it is.  END is accepted for symmetry with
 `vui--restore-cursor-position' but is not needed here."
   (ignore end)
   (let* ((field (vui--field-ending-at (point) start))
@@ -4114,7 +4151,15 @@ START is passed on to).  END is accepted for symmetry with
           (list :path path :identity identity :label label :offset offset
                 :at-end (and field t)))
       ;; No element at point - save line/column as fallback
-      (list :line (line-number-at-pos) :column (current-column)))))
+      (list :line (if start
+                      ;; Between the starts of the two lines, so every
+                      ;; line counted ends with a newline
+                      (1+ (count-lines (save-excursion
+                                         (goto-char start)
+                                         (line-beginning-position))
+                                       (line-beginning-position)))
+                    (line-number-at-pos))
+            :column (current-column)))))
 
 (defun vui--collect-widgets (&optional start end)
   "Collect interactive elements between START and END, in buffer order.
@@ -4264,7 +4309,8 @@ Bounds default to the whole buffer."
 (defun vui--restore-cursor-position (cursor-info &optional start end)
   "Restore cursor from CURSOR-INFO saved by `vui--save-cursor-position'.
 When START and END are given, widget lookups are scoped to that
-region and fallbacks move to START instead of the buffer beginning."
+region, a saved line counts from the line of START, and fallbacks move
+to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
          (offset (plist-get cursor-info :offset))
          (at-end (plist-get cursor-info :at-end))
@@ -4310,7 +4356,7 @@ region and fallbacks move to START instead of the buffer beginning."
          (near
           (vui--goto-widget-offset near 0))
          ((and line column)
-          (goto-char (point-min))
+          (goto-char home)
           (forward-line (1- line))
           (move-to-column column))
          (t
@@ -8021,7 +8067,11 @@ components keep their state where they stay in place."
                         (vui--render-path
                          (vui--stream-item-path
                           handle (car (vui-stream-handle-ids-rev handle)))))
-                    (vui--growing-excursion handle
+                    (vui--keeping-positions
+                        ;; An extension only inserts after the old text:
+                        ;; nothing in it to keep
+                        (if suffix end ls) end
+                     (vui--growing-excursion handle
                       (if suffix
                           (progn
                             (goto-char (marker-position end))
@@ -8036,7 +8086,7 @@ components keep their state where they stay in place."
                         (goto-char (marker-position ls))
                         (vui--keeping-fields (point)
                           (vui--render-vnode vnode))
-                        (set-marker end (point))))
+                        (set-marker end (point)))))
                     ;; The old item may have had the last sticky table:
                     ;; no render of the root follows to put back the
                     ;; header line it replaced, so do it here.  Not on
@@ -8467,13 +8517,15 @@ content takes any VNODE (see `vui-stream-open')."
                     (buffer-undo-list t)
                     (vui--render-path
                      (vui--stream-item-path handle (vui--stream-node-id node))))
-                (vui--growing-excursion handle
-                  (delete-region (marker-position start) (marker-position end))
-                  (goto-char (marker-position start))
-                  (vui--keeping-fields (point)
-                    (vui--render-vnode vnode))
-                  (set-marker end (point))
-                  (vui--stream-sync-end handle (point)))
+                (vui--keeping-positions start end
+                  (vui--growing-excursion handle
+                    (delete-region (marker-position start)
+                                   (marker-position end))
+                    (goto-char (marker-position start))
+                    (vui--keeping-fields (point)
+                      (vui--render-vnode vnode))
+                    (set-marker end (point))
+                    (vui--stream-sync-end handle (point))))
                 ;; As in `vui-stream-update-last'
                 (vui--table-restore-header-line)))
             (vui--stream-relay-empty-transition handle was-empty node)))))))

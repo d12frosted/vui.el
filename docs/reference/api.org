@@ -323,6 +323,12 @@ live =vui-stream=, a re-render leaves the stream's text alone and rewrites
 only what is after it. Point in text that stayed is not looked up again.
 It stays on that text, wherever the text is after the render.
 
+An item of a stream written again in place, by =vui-stream-update-last= or
+=vui-stream-update=, is rewritten text too, though no render runs: the
+positions in it are found again as above. Point on a button of a message
+stays on that button when the message is written again with more text
+before it.
+
 This holds for *every window showing the buffer*, selected or not. Each
 window has its own point, so two windows on one buffer keep two positions,
 and a root in a side window keeps its cursor while you work in another
