@@ -3670,6 +3670,269 @@ Call with the buffer current.  Returns what BODY returns."
                                  (marker-position ,start)
                                  (marker-position ,end))))))
 
+;; Undo and text written in place
+;;
+;; What a render or a stream writes in place is not the user's edit, and
+;; stays out of the undo history: the writes bind `buffer-undo-list' to
+;; t.  The edits that are in the history move with that text, though,
+;; and undo would make them at their old positions: delete a character
+;; the user did not type, in text that came in above it.  So a write
+;; takes the history as it is before its binding (`vui--undo-history')
+;; and moves its positions after it (`vui--undo-writing').
+;;
+;; A write can run in another one: a hook of a render that appends to a
+;; stream, an effect that runs after it.  `buffer-undo-list' is then the
+;; one the outer write bound, which `widget-setup' may have emptied, so
+;; the inner write takes the history of the outer one.  An inner write
+;; in the text of the outer one is part of it.  One elsewhere moves the
+;; history itself, at the positions it has without the outer write's
+;; change, and the outer write leaves its size change out of its own.
+;; A hook can write in another buffer, and that write is not in the
+;; outer one: both variables hold an entry for each buffer.
+
+(defvar vui--undo-history nil
+  "The undo histories writes in place move, an alist (BUFFER . HISTORY).
+HISTORY is `buffer-undo-list' of BUFFER as it was before the first
+write in it bound it to t.  Each write binds this in the `let' that
+binds `buffer-undo-list', to what the function `vui--undo-history'
+returns.")
+
+(cl-defstruct (vui--undo-write (:constructor vui--undo-write-create)
+                               (:copier nil))
+  "A write in place that runs, for `vui--undo-writing'.
+FROM and TO are the text it writes, at the positions without its change
+\(but with those of the writes in it that it passed on), SIZE is the
+size of the buffer when it started, and PASSED how much the writes in
+it that it passed on changed that.  TEXT is the text it writes, as it
+was.  APPENDING is the marker TO when it adds text at the end of the
+text before it (see `vui--undo-appending').  PARENT is the write it
+runs in, in the same buffer."
+  from to size (passed 0) text appending parent)
+
+(defvar vui--undo-write nil
+  "The writes in place that run, an alist (BUFFER . WRITE).
+WRITE is a `vui--undo-write', the innermost one in BUFFER.")
+
+(defun vui--undo-history ()
+  "Return the variable `vui--undo-history' for a write in this buffer.
+When a write in this buffer runs, the alist already holds its history;
+else this adds an entry for this buffer, its `buffer-undo-list'."
+  (if (assq (current-buffer) vui--undo-history)
+      vui--undo-history
+    (cons (cons (current-buffer) buffer-undo-list) vui--undo-history)))
+
+(defmacro vui--undo-writing (from to &rest body)
+  "Run BODY, a write of the text from FROM to TO, and move the undo history.
+FROM and TO are positions or markers, taken before BODY: BODY replaces
+that text, or inserts at FROM when they are one position.  After BODY
+the positions of `vui--undo-history' move as the text did (see
+`vui--undo-move').  Returns what BODY returns."
+  (declare (indent 2) (debug t))
+  `(vui--undo-writing-1 ,from ,to (lambda () ,@body)))
+
+(defmacro vui--undo-appending (from to &rest body)
+  "Run BODY, a write that can add text at the end of the text before TO.
+As `vui--undo-writing', for TO a marker that does not advance at an
+insertion, the end of that text.  When BODY only adds text there (FROM
+is TO), text the user deleted right before TO goes back before the new
+text: the deletion moved TO, so it was the end of that text.  Other text
+deleted at TO goes back after the new text."
+  (declare (indent 2) (debug t))
+  `(vui--undo-writing-1 ,from ,to (lambda () ,@body) t))
+
+(defun vui--undo-writing-1 (from to body &optional appending)
+  "Call BODY, a write of the text FROM to TO, and move the undo history.
+See `vui--undo-writing', and `vui--undo-appending' for APPENDING.
+Nothing moves while `undo' runs: a render that a change of undo starts
+writes in the list that undo walks."
+  (let* ((buffer (current-buffer))
+         (history (cdr (assq buffer vui--undo-history)))
+         (appending (and appending (markerp to) to))
+         (from (vui--position from))
+         (to (vui--position to)))
+    (if (or undo-in-progress
+            (not (consp history))
+            (not (and from to)))
+        (funcall body)
+      (let ((write (vui--undo-write-create
+                    :from from :to to :size (buffer-size)
+                    :text (save-restriction
+                            (widen)
+                            (buffer-substring-no-properties from to))
+                    :appending appending
+                    :parent (cdr (assq buffer vui--undo-write)))))
+        (unwind-protect
+            (let ((vui--undo-write (cons (cons buffer write)
+                                         vui--undo-write)))
+              (funcall body))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (vui--undo-written write history))))))))
+
+(defun vui--undo-written (write history)
+  "Move undo HISTORY for WRITE, a `vui--undo-write' that is done.
+Its change is the part of its text that changed.  When it runs in
+another write and that change is outside the text of that one, it is
+passed on to it: it goes to the positions without that write's change,
+and on to the write that one runs in.  A write that takes it in counts
+it as its own change; when none does, the history moves for it."
+  (let* ((from (vui--undo-write-from write))
+         (to (vui--undo-write-to write))
+         (delta (- (buffer-size) (vui--undo-write-size write)
+                   (vui--undo-write-passed write)))
+         (old (vui--undo-write-text write))
+         (new (save-restriction
+                (widen)
+                (buffer-substring-no-properties
+                 (max (point-min) (min from (point-max)))
+                 (max (point-min) (min (+ to delta) (point-max))))))
+         ;; The text that is the same at its start and at its end
+         (head (let ((n (compare-strings old nil nil new nil nil)))
+                 (if (eq n t) (length old) (1- (abs n)))))
+         (tail (let ((n 0)
+                     (most (- (min (length old) (length new)) head)))
+                 (while (and (< n most)
+                             (eq (aref old (- (length old) n 1))
+                                 (aref new (- (length new) n 1))))
+                   (setq n (1+ n)))
+                 n))
+         (child write)
+         (parent (vui--undo-write-parent write)))
+    (setq from (+ from head)
+          to (- to tail))
+    (unless (and (= delta 0) (= from to))
+      (while (and parent
+                  ;; The change of PARENT until CHILD started, which is
+                  ;; in the text of PARENT
+                  (let* ((own (- (vui--undo-write-size child)
+                                 (vui--undo-write-size parent)
+                                 (- (vui--undo-write-passed parent)
+                                    (vui--undo-write-passed child))
+                                 ;; CHILD passed this change on already
+                                 (if (eq child write) 0 delta)))
+                         (pfrom (vui--undo-write-from parent))
+                         (pto (+ (vui--undo-write-to parent) own)))
+                    (cond
+                     ((and (<= pfrom from) (<= to pto)) nil)
+                     ((<= to pfrom)
+                      (setf (vui--undo-write-from parent) (+ pfrom delta)
+                            (vui--undo-write-to parent)
+                            (+ (vui--undo-write-to parent) delta))
+                      t)
+                     ((<= pto from)
+                      (setq from (- from own)
+                            to (- to own))
+                      t))))
+        (cl-incf (vui--undo-write-passed parent) delta)
+        (setq child parent
+              parent (vui--undo-write-parent parent)))
+      (unless parent
+        (vui--undo-move history from to delta
+                        (and (= from to) (vui--undo-write-appending write)))))))
+
+(defun vui--position (pos)
+  "Return POS, a position or a marker, as a position, or nil."
+  (if (markerp pos) (marker-position pos) pos))
+
+(defun vui--undo-move (history from to delta &optional appending)
+  "Move the positions of undo HISTORY for a write of the text FROM to TO.
+The write replaced that text with text DELTA characters longer, or
+inserted DELTA characters at FROM when FROM is TO.  A position before
+the text stays, and one after it moves by DELTA.  An inserted text is
+after an edit that ends at FROM, and before one that starts there,
+before point there, and before text deleted there.  It is after a
+deletion at FROM when a newer edit inserted text that ends at FROM, or
+when the deletion moved APPENDING, a marker (see
+`vui--undo-appending').
+
+FROM and TO are positions of now, and each entry has the positions of
+its own time: going back in HISTORY, they move back over each edit.  A
+position of point in the text goes to FROM.  An edit in the text that
+was written again cannot be undone any more: its group of changes and
+the ones before it go, and a run of undos that was to undo them stops.
+Entries of the form (apply ...) do not move.  HISTORY is changed in
+place: it is the buffer's own list, so its first cell stays."
+  (let ((cell history)
+        (boundary nil)
+        (dead nil)
+        ;; FROM is right after text that a newer edit inserted
+        (after-text nil))
+    (cl-flet ((move (pos kind)
+                (cond
+                 ((= from to)
+                  (if (if (eq kind 'end) (> pos from) (>= pos from))
+                      (+ pos delta)
+                    pos))
+                 ((<= pos from) pos)
+                 ((>= pos to) (+ pos delta))
+                 (t (setq dead t) pos)))
+              ;; FROM and TO as they were before an insertion of BEG to
+              ;; END, or a deletion of LENGTH characters at AT
+              (unwind-insertion (beg end)
+                (when (and (= from to end) (< beg end))
+                  (setq after-text t))
+                (cl-flet ((back (pos)
+                            (cond ((>= pos end) (- pos (- end beg)))
+                                  ((> pos beg) beg)
+                                  (t pos))))
+                  (setq from (back from)
+                        to (back to))))
+              (unwind-deletion (at length before)
+                (setq from (if (or (> from at)
+                                   (and (= from at) (or (< from to) before)))
+                               (+ from length)
+                             from)
+                      to (if (or (> to at) (and (= to at) before))
+                             (+ to length)
+                           to))))
+      (while (and cell (not dead))
+        (let ((entry (car cell)))
+          (pcase entry
+            ('nil (setq boundary cell))
+            ((pred integerp)
+             (setcar cell (if (< from entry to) from (move entry 'start))))
+            (`(,(and (pred integerp) beg) . ,(and (pred integerp) end))
+             (setcar entry (move beg 'start))
+             (setcdr entry (move end 'end))
+             (unless dead (unwind-insertion beg end)))
+            (`(,(and (pred stringp) text) . ,(and (pred integerp) at))
+             (let* ((pos (abs at))
+                    ;; Emacs records how far the deletion moved a marker
+                    ;; right after it
+                    (before (and (= from to) (= pos from)
+                                 (or after-text
+                                     (and appending
+                                          (cl-loop
+                                           for e in (cdr cell)
+                                           while (and (consp e)
+                                                      (markerp (car e)))
+                                           thereis (and (eq (car e) appending)
+                                                        (< (cdr e) 0)))))))
+                    (kind (if before 'end 'start)))
+               (setcdr entry (if (< at 0)
+                                 (- (move pos kind))
+                               (move pos kind)))
+               (unless dead (unwind-deletion pos (length text) before))))
+            (`(nil ,_ ,_ ,(and (pred integerp) beg)
+                   . ,(and (pred integerp) end))
+             (setcar (nthcdr 3 entry) (move beg 'start))
+             (setcdr (nthcdr 3 entry) (move end 'end))))
+          (unless dead
+            (setq cell (cdr cell)))))
+      (when dead
+        ;; What is left is the groups after the one of CELL.  A run of
+        ;; undos that was to go on in what goes stops there.
+        (let ((tail (if boundary (cdr boundary) history)))
+          (while (and tail (not (eq tail pending-undo-list)))
+            (setq tail (cdr tail)))
+          (when tail
+            (setq pending-undo-list t)))
+        (if boundary
+            (setcdr boundary nil)
+          (setcar history nil)
+          (setcdr history nil))))
+    history))
+
 ;; Fields next to text a render inserts
 ;;
 ;; The overlay of an editable field takes in text inserted at either of
@@ -3957,6 +4220,7 @@ buffer."
                (inhibit-redisplay t)
                (inhibit-modification-hooks t)
                ;; Managed UI text is not part of the document's history
+               (vui--undo-history (vui--undo-history))
                (buffer-undo-list t)
                (pos (car bounds))
                (end-pos (cdr bounds))
@@ -3999,31 +4263,32 @@ buffer."
           (unwind-protect
               (let ((new-bounds nil)
                     (done nil))
-                (save-excursion
-                  (vui--remove-widget-overlays pos end-pos)
-                  (vui--forget-region-fields pos end-pos)
-                  (vui--park-streams pos end-pos instance)
-                  ;; The hooks of the render can move the region, or
-                  ;; unmount it, which ends the render there
-                  (setq done (vui--rendering-root instance
-                               (setq new-bounds
-                                     ;; A row with no text, at the end of
-                                     ;; the regions around it, grows them
-                                     ;; with the text it writes now
-                                     (vui--advancing-ends
-                                         (and row-p (= pos end-pos)
-                                              (vui--regions-ending-at
-                                               (cdr vui--enclosing-regions)
-                                               pos))
-                                       (vui--inline-replace-text
-                                        instance pos end-pos)))))
-                  ;; The header line of a sticky table that is gone, as
-                  ;; in `vui--rerender-buffer'.  Not when a hook killed
-                  ;; the buffer: another one is current then
-                  (when (buffer-live-p buffer)
-                    (vui--table-restore-header-line)
-                    (widget-setup)
-                    (vui--setup-field-placeholders)))
+                (vui--undo-writing pos end-pos
+                  (save-excursion
+                    (vui--remove-widget-overlays pos end-pos)
+                    (vui--forget-region-fields pos end-pos)
+                    (vui--park-streams pos end-pos instance)
+                    ;; The hooks of the render can move the region, or
+                    ;; unmount it, which ends the render there
+                    (setq done (vui--rendering-root instance
+                                 (setq new-bounds
+                                       ;; A row with no text, at the end of
+                                       ;; the regions around it, grows them
+                                       ;; with the text it writes now
+                                       (vui--advancing-ends
+                                           (and row-p (= pos end-pos)
+                                                (vui--regions-ending-at
+                                                 (cdr vui--enclosing-regions)
+                                                 pos))
+                                         (vui--inline-replace-text
+                                          instance pos end-pos)))))
+                    ;; The header line of a sticky table that is gone, as
+                    ;; in `vui--rerender-buffer'.  Not when a hook killed
+                    ;; the buffer: another one is current then
+                    (when (buffer-live-p buffer)
+                      (vui--table-restore-header-line)
+                      (widget-setup)
+                      (vui--setup-field-placeholders))))
                 (when done
                   (when saved-point
                     (goto-char (vui--restored-position
@@ -8338,28 +8603,30 @@ last item of the stream, before anything is written."
         (let ((inhibit-read-only t)
               (inhibit-modification-hooks t)
               ;; Stream text is ephemeral UI, not document history.
+              (vui--undo-history (vui--undo-history))
               (buffer-undo-list t)
               (vui--render-path (vui--stream-item-path handle id)))
-          (vui--growing-excursion handle
-            ;; A component row that ends here stays before the text: its
-            ;; END marker does not advance, and neither does its START
-            ;; marker when the row renders nothing (see
-            ;; `vui--inline-set-bounds').
-            (goto-char (marker-position end))
-            ;; The item before this one may end with a field, and the
-            ;; content after the stream may start with one
-            (vui--keeping-fields (point)
-              (insert (vui-stream-handle-separator handle))
-              (vui--stream-set-last-start handle (point) buf)
-              (vui--render-vnode vnode))
-            ;; If the previous last item was a component row, END is that
-            ;; row's own marker - do NOT move it (that would corrupt the
-            ;; row's region); install a fresh marker.  Otherwise reuse the
-            ;; stream's own END marker.
-            (if (vui-instance-p prev-last)
-                (setf (vui-stream-handle-region-end handle)
-                      (copy-marker (point) nil))
-              (set-marker end (point))))))))))
+          (vui--undo-appending end end
+            (vui--growing-excursion handle
+              ;; A component row that ends here stays before the text: its
+              ;; END marker does not advance, and neither does its START
+              ;; marker when the row renders nothing (see
+              ;; `vui--inline-set-bounds').
+              (goto-char (marker-position end))
+              ;; The item before this one may end with a field, and the
+              ;; content after the stream may start with one
+              (vui--keeping-fields (point)
+                (insert (vui-stream-handle-separator handle))
+                (vui--stream-set-last-start handle (point) buf)
+                (vui--render-vnode vnode))
+              ;; If the previous last item was a component row, END is that
+              ;; row's own marker - do NOT move it (that would corrupt the
+              ;; row's region); install a fresh marker.  Otherwise reuse the
+              ;; stream's own END marker.
+              (if (vui-instance-p prev-last)
+                  (setf (vui-stream-handle-region-end handle)
+                        (copy-marker (point) nil))
+                (set-marker end (point)))))))))))
 
 (defun vui--stream-append-row (handle vnode)
   "Append component VNODE as a stateful inline row at HANDLE's tail."
@@ -8390,60 +8657,63 @@ last item of the stream, before anything is written."
                (with-current-buffer buf
                  (let ((inhibit-read-only t)
                        (inhibit-modification-hooks t)
+                       (vui--undo-history (vui--undo-history))
                        (buffer-undo-list t))
-                   (vui--growing-excursion handle
-                     (goto-char (marker-position end))
-                     (let* ((sep-end nil)
-                            (row-start (+ (point) (length sep)))
-                            (id (vui--stream-new-id handle))
-                            ;; The row renders on its own from here on,
-                            ;; always under its item's path.  It goes below
-                            ;; the rows before it, also the ones that render
-                            ;; nothing and that an empty separator leaves at
-                            ;; this very position.  The separator goes next to
-                            ;; the same fields as an appended content item does.
-                            ;; The renders its hooks ask for wait until the
-                            ;; row is in the stream: a render of the tree
-                            ;; before that writes the stream without the row,
-                            ;; and the row's text is lost.
-                            (row (let ((vui--flushing-rerenders-p t)
-                                       ;; Its streams are in the regions
-                                       ;; of this one
-                                       (vui--enclosing-regions
-                                        (vui-stream-handle-enclosing handle)))
-                                   (vui--keeping-fields (point)
-                                     (insert sep)
-                                     ;; The hooks of the row can write at
-                                     ;; the end of the stream, before
-                                     ;; the separator
-                                     (setq sep-end (point-marker))
-                                     (vui--mount-inline
-                                      vnode (point)
-                                      (vui--stream-item-path handle id) t)))))
-                       ;; The regions it renders in on its own: its first
-                       ;; render can wait for the render in progress
-                       (setf (vui-instance-regions row)
-                             (vui-stream-handle-enclosing handle))
-                       (prog1
-                           (if (not (vui--inline-bounds row))
-                               ;; It unmounted itself in its first render: it
-                               ;; is no item of the stream, and the separator
-                               ;; written for it goes too
-                               (progn
-                                 (delete-region (- sep-end (length sep))
-                                                sep-end)
-                                 nil)
-                             (vui--stream-set-last-start handle row-start buf)
-                             ;; Share the row's region-end as the stream's end:
-                             ;; when the row re-renders on its own
-                             ;; (grows/shrinks), its marker moves and the
-                             ;; stream end - and the box below - stay correct.
-                             (setf (vui-stream-handle-region-end handle)
-                                   (vui-instance-region-end row))
-                             (vui--stream-push handle row id)
-                             (push row (vui-stream-handle-rows handle))
-                             row)
-                         (set-marker sep-end nil))))))))
+                   (vui--undo-appending end end
+                     (vui--growing-excursion handle
+                       (goto-char (marker-position end))
+                       (let* ((sep-end nil)
+                              (row-start (+ (point) (length sep)))
+                              (id (vui--stream-new-id handle))
+                              ;; The row renders on its own from here on,
+                              ;; always under its item's path.  It goes below
+                              ;; the rows before it, also the ones that render
+                              ;; nothing and that an empty separator leaves at
+                              ;; this very position.  The separator goes next
+                              ;; to the same fields as an appended content item
+                              ;; does.  The renders its hooks ask for wait
+                              ;; until the row is in the stream: a render of
+                              ;; the tree before that writes the stream without
+                              ;; the row, and the row's text is lost.
+                              (row (let ((vui--flushing-rerenders-p t)
+                                         ;; Its streams are in the regions
+                                         ;; of this one
+                                         (vui--enclosing-regions
+                                          (vui-stream-handle-enclosing handle)))
+                                     (vui--keeping-fields (point)
+                                       (insert sep)
+                                       ;; The hooks of the row can write at
+                                       ;; the end of the stream, before
+                                       ;; the separator
+                                       (setq sep-end (point-marker))
+                                       (vui--mount-inline
+                                        vnode (point)
+                                        (vui--stream-item-path handle id) t)))))
+                         ;; The regions it renders in on its own: its first
+                         ;; render can wait for the render in progress
+                         (setf (vui-instance-regions row)
+                               (vui-stream-handle-enclosing handle))
+                         (prog1
+                             (if (not (vui--inline-bounds row))
+                                 ;; It unmounted itself in its first render: it
+                                 ;; is no item of the stream, and the separator
+                                 ;; written for it goes too
+                                 (progn
+                                   (delete-region (- sep-end (length sep))
+                                                  sep-end)
+                                   nil)
+                               (vui--stream-set-last-start handle row-start buf)
+                               ;; Share the row's region-end as the stream's
+                               ;; end: when the row re-renders on its own
+                               ;; (grows/shrinks), its marker moves and the
+                               ;; stream end - and the box below - stay
+                               ;; correct.
+                               (setf (vui-stream-handle-region-end handle)
+                                     (vui-instance-region-end row))
+                               (vui--stream-push handle row id)
+                               (push row (vui-stream-handle-rows handle))
+                               row)
+                           (set-marker sep-end nil)))))))))
           ;; The first text of a stream that held only rows with none
           (vui--stream-relay-empty-transition handle was-empty)
           ;; Run the renders the row's hooks asked for.  A render in
@@ -8601,30 +8871,32 @@ components keep their state where they stay in place."
                 (with-current-buffer buf
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t)
+                        (vui--undo-history (vui--undo-history))
                         (buffer-undo-list t)
                         (vui--render-path
                          (vui--stream-item-path
                           handle (car (vui-stream-handle-ids-rev handle)))))
-                    (vui--keeping-positions
-                        ;; An extension only inserts after the old text:
-                        ;; nothing in it to keep
-                        (if suffix end ls) end
-                     (vui--growing-excursion handle
-                      (if suffix
-                          (progn
-                            (goto-char (marker-position end))
+                    (vui--undo-appending (if suffix end ls) end
+                      (vui--keeping-positions
+                          ;; An extension only inserts after the old text:
+                          ;; nothing in it to keep
+                          (if suffix end ls) end
+                        (vui--growing-excursion handle
+                          (if suffix
+                              (progn
+                                (goto-char (marker-position end))
+                                (vui--keeping-fields (point)
+                                  (vui--render-vnode
+                                   (vui-vnode-text--create
+                                    :content suffix
+                                    :face (vui-vnode-text-face vnode)
+                                    :properties (vui-vnode-text-properties vnode))))
+                                (set-marker end (point)))
+                            (vui--forget-text ls end)
+                            (goto-char (marker-position ls))
                             (vui--keeping-fields (point)
-                              (vui--render-vnode
-                               (vui-vnode-text--create
-                                :content suffix
-                                :face (vui-vnode-text-face vnode)
-                                :properties (vui-vnode-text-properties vnode))))
-                            (set-marker end (point)))
-                        (vui--forget-text ls end)
-                        (goto-char (marker-position ls))
-                        (vui--keeping-fields (point)
-                          (vui--render-vnode vnode))
-                        (set-marker end (point)))))
+                              (vui--render-vnode vnode))
+                            (set-marker end (point))))))
                     ;; The old item may have had the last sticky table:
                     ;; no render of the root follows to put back the
                     ;; header line it replaced, so do it here.  Not on
@@ -8983,20 +9255,22 @@ written again, and the item becomes such a row (see `vui-stream-open')."
           ;; becomes a row, with NODE its node (see `vui--stream-mount-row'),
           ;; and a layout that measures the stream lays it out again
           (vui--stream-request-rebuild handle)
-      (let ((was-empty (vui--stream-region-empty-p handle)))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-delta-path node vnode)))
-            (vui--growing-excursion handle
-              (goto-char (marker-position end))
-              ;; The node may end with a field so far
-              (vui--keeping-fields (point)
-                (vui--render-vnode vnode))
-              (set-marker end (point))
-              (vui--stream-sync-end handle (point)))))
-        (vui--stream-relay-empty-transition handle was-empty node))))
+        (let ((was-empty (vui--stream-region-empty-p handle)))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (vui--undo-history (vui--undo-history))
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-delta-path node vnode)))
+              (vui--undo-appending end end
+                (vui--growing-excursion handle
+                  (goto-char (marker-position end))
+                  ;; The node may end with a field so far
+                  (vui--keeping-fields (point)
+                    (vui--render-vnode vnode))
+                  (set-marker end (point))
+                  (vui--stream-sync-end handle (point))))))
+          (vui--stream-relay-empty-transition handle was-empty node))))
     node))
 
 (defun vui-stream-update (node vnode)
@@ -9057,24 +9331,26 @@ content takes any VNODE (see `vui-stream-open')."
               ;; for the same item: the text is as it is.
               (when vnode
                 (vui--stream-request-rebuild handle))
-          (let ((was-empty (vui--stream-region-empty-p handle)))
-            (with-current-buffer buf
-              (let ((inhibit-read-only t)
-                    (inhibit-modification-hooks t)
-                    (buffer-undo-list t)
-                    (vui--render-path
-                     (vui--stream-item-path handle (vui--stream-node-id node))))
-                (vui--keeping-positions start end
-                  (vui--growing-excursion handle
-                    (vui--forget-text start end)
-                    (goto-char (marker-position start))
-                    (vui--keeping-fields (point)
-                      (vui--render-vnode vnode))
-                    (set-marker end (point))
-                    (vui--stream-sync-end handle (point))))
-                ;; As in `vui-stream-update-last'
-                (vui--table-restore-header-line)))
-            (vui--stream-relay-empty-transition handle was-empty node)))))))
+            (let ((was-empty (vui--stream-region-empty-p handle)))
+              (with-current-buffer buf
+                (let ((inhibit-read-only t)
+                      (inhibit-modification-hooks t)
+                      (vui--undo-history (vui--undo-history))
+                      (buffer-undo-list t)
+                      (vui--render-path
+                       (vui--stream-item-path handle (vui--stream-node-id node))))
+                  (vui--undo-writing start end
+                    (vui--keeping-positions start end
+                      (vui--growing-excursion handle
+                        (vui--forget-text start end)
+                        (goto-char (marker-position start))
+                        (vui--keeping-fields (point)
+                          (vui--render-vnode vnode))
+                        (set-marker end (point))
+                        (vui--stream-sync-end handle (point)))))
+                  ;; As in `vui-stream-update-last'
+                  (vui--table-restore-header-line)))
+              (vui--stream-relay-empty-transition handle was-empty node)))))))
   node)
 
 (defun vui-stream-finalize (node)
@@ -9145,34 +9421,38 @@ screen.  A no-op returning nil if NODE is not live."
             ;; stream lays it out again
             (progn (push new (vui-stream-handle-nodes handle))
                    (vui--stream-request-rebuild handle))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-item-path handle id)))
-            (vui--growing-excursion handle
-              (goto-char (marker-position start))
-              (let ((x-start (point)))
-                ;; NODE may start with a field
-                (vui--keeping-fields x-start
-                  (vui--render-vnode vnode)
-                  (let ((x-end (point)))
-                    (insert sep)
-                    ;; NODE's content now begins after the inserted separator.
-                    (set-marker start (point))
-                    ;; A NODE with no text had its end at that same position,
-                    ;; and the end did not move for the insertion.  Take it
-                    ;; along, and the stream's end with it when NODE is last.
-                    (let ((end (vui--stream-node-end node)))
-                      (when (< (marker-position end) (point))
-                        (set-marker end (point))
-                        (vui--stream-sync-end handle (point))))
-                    (when last-p
-                      (vui--stream-set-last-start handle (point) buf))
-                    (vui--stream-node-bind new x-start x-end buf)))))))
-        (push new (vui-stream-handle-nodes handle))
-        ;; The first text of a stream that had none
-        (vui--stream-relay-empty-transition handle was-empty))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (vui--undo-history (vui--undo-history))
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-item-path handle id)))
+              (vui--undo-writing start start
+                (vui--growing-excursion handle
+                  (goto-char (marker-position start))
+                  (let ((x-start (point)))
+                    ;; NODE may start with a field
+                    (vui--keeping-fields x-start
+                      (vui--render-vnode vnode)
+                      (let ((x-end (point)))
+                        (insert sep)
+                        ;; NODE's content now begins after the inserted
+                        ;; separator.
+                        (set-marker start (point))
+                        ;; A NODE with no text had its end at that same
+                        ;; position, and the end did not move for the
+                        ;; insertion.  Take it along, and the stream's end with
+                        ;; it when NODE is last.
+                        (let ((end (vui--stream-node-end node)))
+                          (when (< (marker-position end) (point))
+                            (set-marker end (point))
+                            (vui--stream-sync-end handle (point))))
+                        (when last-p
+                          (vui--stream-set-last-start handle (point) buf))
+                        (vui--stream-node-bind new x-start x-end buf))))))))
+          (push new (vui-stream-handle-nodes handle))
+          ;; The first text of a stream that had none
+          (vui--stream-relay-empty-transition handle was-empty))
         new))))
 
 (defun vui-stream-after (node vnode)
@@ -9226,28 +9506,31 @@ if NODE is not live."
             ;; stream lays it out again
             (progn (push new (vui-stream-handle-nodes handle))
                    (vui--stream-request-rebuild handle))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (vui--render-path (vui--stream-item-path handle id)))
-            (vui--growing-excursion handle
-              (goto-char (marker-position end))
-              ;; NODE may end with a field
-              (vui--keeping-fields (point)
-                (insert sep)
-                (let ((x-start (point)))
-                  (vui--render-vnode vnode)
-                  (let ((x-end (point)))
-                    (vui--stream-node-bind new x-start x-end buf)
-                    (vui--stream-sync-end handle x-end)
-                    ;; If NODE was the last item, the new node is now last:
-                    ;; last-start (used by `vui-stream-update-last') follows it.
-                    (when (eq cell head)
-                      (vui--stream-set-last-start handle x-start buf))))))))
-        (push new (vui-stream-handle-nodes handle))
-        ;; The first text of a stream that had none
-        (vui--stream-relay-empty-transition handle was-empty))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t)
+                  (vui--undo-history (vui--undo-history))
+                  (buffer-undo-list t)
+                  (vui--render-path (vui--stream-item-path handle id)))
+              (vui--undo-appending end end
+                (vui--growing-excursion handle
+                  (goto-char (marker-position end))
+                  ;; NODE may end with a field
+                  (vui--keeping-fields (point)
+                    (insert sep)
+                    (let ((x-start (point)))
+                      (vui--render-vnode vnode)
+                      (let ((x-end (point)))
+                        (vui--stream-node-bind new x-start x-end buf)
+                        (vui--stream-sync-end handle x-end)
+                        ;; If NODE was the last item, the new node is now last:
+                        ;; last-start (used by `vui-stream-update-last')
+                        ;; follows it.
+                        (when (eq cell head)
+                          (vui--stream-set-last-start handle x-start buf)))))))))
+          (push new (vui-stream-handle-nodes handle))
+          ;; The first text of a stream that had none
+          (vui--stream-relay-empty-transition handle was-empty))
         new))))
 
 (defun vui-stream-remove (node)
@@ -9269,72 +9552,74 @@ if NODE is not live."
         (progn (when (vui--stream-row-p row)
                  (vui-unmount row))
                (vui-stream-finalize node))
-    (if (and (vui-stream-handle-measured handle)
-             buf (buffer-live-p buf)
-             start (marker-position start) end (marker-position end))
-        ;; In a layout that measures it: the stream is written again
-        ;; without the item
-        (progn (vui--stream-drop-item handle cell)
-               (vui-stream-finalize node)
-               (vui--stream-request-rebuild handle))
-    (when (and buf (buffer-live-p buf)
+      (if (and (vui-stream-handle-measured handle)
+               buf (buffer-live-p buf)
                start (marker-position start) end (marker-position end))
-      (with-current-buffer buf
-        (save-restriction
-          ;; NODE can be outside a narrowing
-          (widen)
-          (let ((inhibit-read-only t)
-                (inhibit-modification-hooks t)
-                (buffer-undo-list t)
-                (s (marker-position start))
-                (e (marker-position end)))
-            ;; Swallow exactly one separator so the survivors stay singly
-            ;; separated: the one before NODE if anything renders above it,
-            ;; else the one after, else (the only item) none.
-            (cond
-             ((cdr cell) (vui--forget-text (max (point-min) (- s seplen)) e))
-             ((not (eq cell head))
-              (vui--forget-text s (min (point-max) (+ e seplen))))
-             (t (vui--forget-text s e)))
-            ;; As in `vui-stream-update-last'
-            (vui--table-restore-header-line))))
-      ;; splice NODE's cell out of items-rev, and its id out of ids-rev
-      (vui--stream-drop-item handle cell)
-      (vui-stream-finalize node)
-      ;; If NODE was the last item, the handle's last-start now dangles in the
-      ;; deleted span - re-point it at the new last item so a later content
-      ;; `vui-stream-update-last' rewrites the right region.  When that item is
-      ;; static (no live marker), nothing marks where it starts: clear
-      ;; last-start, and the next update-last writes the stream again from
-      ;; its items.
-      (when (eq cell head)
-        (let* ((next (cdr cell))
-               (n (and next (cl-find next (vui-stream-handle-nodes handle)
-                                     :key #'vui--stream-node-cell)))
-               (ns (and n (vui--stream-node-start n))))
-          (if (and ns (marker-position ns))
-              (vui--stream-set-last-start handle (marker-position ns) buf)
-            (when-let* ((ls (vui-stream-handle-last-start handle)))
-              (set-marker ls nil))))
-        ;; A component row that is the last item now ends the stream, and
-        ;; the stream's end is the row's own END marker again, as it was
-        ;; when the row was appended (see `vui--stream-append-row').  The
-        ;; marker the stream had for NODE is at the same position, but it
-        ;; would stay there, before the text, when a row that renders
-        ;; nothing gets its text.
-        (let ((last (car (vui-stream-handle-items-rev handle)))
-              (own (vui-stream-handle-region-end handle)))
-          (when (and (vui-instance-p last) (vui--inline-bounds last)
-                     (not (eq own (vui-instance-region-end last))))
-            (setf (vui-stream-handle-region-end handle)
-                  (vui-instance-region-end last))
-            (set-marker own nil))))
-      ;; Emptying the stream changes the surrounding layout (the container
-      ;; drops the now-empty child and its separator), the mirror of the
-      ;; empty -> non-empty transition - re-lay once so the buffer matches a
-      ;; plain render.  The text is what counts, not the items: the ones
-      ;; left may all write nothing.
-      (vui--stream-relay-empty-transition handle was-empty))))
+          ;; In a layout that measures it: the stream is written again
+          ;; without the item
+          (progn (vui--stream-drop-item handle cell)
+                 (vui-stream-finalize node)
+                 (vui--stream-request-rebuild handle))
+        (when (and buf (buffer-live-p buf)
+                   start (marker-position start) end (marker-position end))
+          (with-current-buffer buf
+            (save-restriction
+              ;; NODE can be outside a narrowing
+              (widen)
+              (let ((inhibit-read-only t)
+                    (inhibit-modification-hooks t)
+                    (vui--undo-history (vui--undo-history))
+                    (buffer-undo-list t)
+                    (s (marker-position start))
+                    (e (marker-position end)))
+                ;; Swallow exactly one separator so the survivors stay singly
+                ;; separated: the one before NODE if anything renders above it,
+                ;; else the one after, else (the only item) none.
+                (let ((from (if (cdr cell) (max (point-min) (- s seplen)) s))
+                      (to (if (or (cdr cell) (eq cell head))
+                              e
+                            (min (point-max) (+ e seplen)))))
+                  (vui--undo-writing from to
+                    (vui--forget-text from to)))
+                ;; As in `vui-stream-update-last'
+                (vui--table-restore-header-line))))
+          ;; splice NODE's cell out of items-rev, and its id out of ids-rev
+          (vui--stream-drop-item handle cell)
+          (vui-stream-finalize node)
+          ;; If NODE was the last item, the handle's last-start now dangles in
+          ;; the deleted span - re-point it at the new last item so a later
+          ;; content `vui-stream-update-last' rewrites the right region.  When
+          ;; that item is static (no live marker), nothing marks where it
+          ;; starts: clear last-start, and the next update-last writes the
+          ;; stream again from its items.
+          (when (eq cell head)
+            (let* ((next (cdr cell))
+                   (n (and next (cl-find next (vui-stream-handle-nodes handle)
+                                         :key #'vui--stream-node-cell)))
+                   (ns (and n (vui--stream-node-start n))))
+              (if (and ns (marker-position ns))
+                  (vui--stream-set-last-start handle (marker-position ns) buf)
+                (when-let* ((ls (vui-stream-handle-last-start handle)))
+                  (set-marker ls nil))))
+            ;; A component row that is the last item now ends the stream, and
+            ;; the stream's end is the row's own END marker again, as it was
+            ;; when the row was appended (see `vui--stream-append-row').  The
+            ;; marker the stream had for NODE is at the same position, but it
+            ;; would stay there, before the text, when a row that renders
+            ;; nothing gets its text.
+            (let ((last (car (vui-stream-handle-items-rev handle)))
+                  (own (vui-stream-handle-region-end handle)))
+              (when (and (vui-instance-p last) (vui--inline-bounds last)
+                         (not (eq own (vui-instance-region-end last))))
+                (setf (vui-stream-handle-region-end handle)
+                      (vui-instance-region-end last))
+                (set-marker own nil))))
+          ;; Emptying the stream changes the surrounding layout (the container
+          ;; drops the now-empty child and its separator), the mirror of the
+          ;; empty -> non-empty transition - re-lay once so the buffer matches a
+          ;; plain render.  The text is what counts, not the items: the ones
+          ;; left may all write nothing.
+          (vui--stream-relay-empty-transition handle was-empty))))
     nil))
 
 ;; --- Box-update independence: re-render around a live stream, not it ---
@@ -10654,13 +10939,15 @@ Returns INSTANCE, or nil if it was already unmounted."
             (let ((inhibit-read-only t)
                   (inhibit-modification-hooks t)
                   ;; Managed UI text is not part of the undo history
+                  (vui--undo-history (vui--undo-history))
                   (buffer-undo-list t)
                   (pos (car bounds))
                   (end-pos (cdr bounds)))
-              (vui--remove-widget-overlays pos end-pos)
-              (vui--forget-region-fields pos end-pos)
-              (vui--park-streams pos end-pos instance)
-              (delete-region pos end-pos)))
+              (vui--undo-writing pos end-pos
+                (vui--remove-widget-overlays pos end-pos)
+                (vui--forget-region-fields pos end-pos)
+                (vui--park-streams pos end-pos instance)
+                (delete-region pos end-pos))))
           ;; Put back the header line a sticky table header replaced
           (vui--table-restore-header-line)))
       (when start (set-marker start nil))

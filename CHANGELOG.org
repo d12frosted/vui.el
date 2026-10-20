@@ -90,6 +90,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Undo works after a =vui-stream= writes in place (an append, an open,
+  =vui-stream-before= and =-after=, =-append-to=, =-update-last=,
+  =-update= or =-remove=) and after an inline region renders again or
+  is unmounted.
+  These writes stay out of the undo history, but the edits in it did not
+  move with the text: undo then deleted the wrong characters, or failed.
+  The positions of the history now move with the writes, also for a
+  write that a hook or an effect makes during another one. An edit in
+  text that changed in such a write cannot be undone any more, and undo
+  stops before it. An edit in a field that renders again as it is (a
+  controlled field) stays.
+
 - An item a lifecycle hook writes to a =vui-stream= that ends right
   where the render is writing (the stream is followed by a component
   that renders nothing, or by an error boundary whose =:on-error=
