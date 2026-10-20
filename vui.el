@@ -1005,6 +1005,47 @@ the containers are on the hot path of every render.
 Every render binds this while it runs: the hooks of a render in another
 buffer, which a render function can start, count there only.")
 
+(defvar vui--hook-point nil
+  "Where the render that runs the current lifecycle hook writes, or nil.
+A marker, bound by `vui--shifting-point' while the hook runs.  A stream
+that ends there and has text before it is written before what the
+render writes next: when a hook writes an item to it in place, the
+render goes on after that item (see `vui--growing-excursion').  A
+render that a hook starts writes in another buffer, or has its own
+hooks, which bind their own marker.")
+
+(defvar vui--hook-starts nil
+  "The start markers of the render that runs the current hook.
+`vui--start-markers' as it was when the hook started, bound by
+`vui--shifting-point' with `vui--hook-point'.  A render that the hook
+starts has a list of its own, and moves the starts of this one when one
+of its effects writes to a stream at this hook point.")
+
+(defvar vui--hook-regions nil
+  "The inline regions the render that runs the current hook writes in.
+`vui--enclosing-regions' as it was when the hook started, bound by
+`vui--shifting-point' with `vui--hook-point'.  A stream whose last row
+is one of them ends where that row does, which is where the render
+writes: the render is in the stream then, not after it.")
+
+(defvar vui--start-markers nil
+  "The markers where the containers of the current render start.
+See `vui--start-marker'.  When a hook writes an item to a stream that
+ends at the render's point (see `vui--hook-point'), a container that
+starts there starts after the item: the item is not its text, and gets
+neither its face, nor its indent or padding, nor goes with the text of
+an error boundary that catches.  Every render binds this.")
+
+(defun vui--start-marker ()
+  "Return a marker at point, where a container of the render starts.
+It is in `vui--start-markers' for the rest of the render.  Outside a
+render (an item a stream writes in place from a command or a timer)
+no hook runs, and it is not kept."
+  (let ((marker (point-marker)))
+    (when vui--rendering-p
+      (push marker vui--start-markers))
+    marker))
+
 (defvar vui--created-instances nil
   "The components that a render created.
 A cons whose car lists the instances `vui--reconcile-component' created,
@@ -3899,6 +3940,7 @@ buffer."
   (let* ((buffer (vui-instance-buffer instance))
          ;; The hooks of this render count for it alone
          (vui--hook-shift vui--hook-shift)
+         (vui--start-markers nil)
          (bounds (vui--inline-bounds instance))
          (row-p (and buffer (buffer-live-p buffer) bounds
                      (vui-instance-base-path instance)))
@@ -4080,7 +4122,8 @@ writes there goes into the region."
   "Do the work of `vui--rerender-buffer' for INSTANCE."
   (let ((buffer (vui-instance-buffer instance))
         ;; The hooks of this render count for it alone
-        (vui--hook-shift vui--hook-shift))
+        (vui--hook-shift vui--hook-shift)
+        (vui--start-markers nil))
     (when (and buffer (buffer-live-p buffer))
       (with-current-buffer buffer
         (let* ((inhibit-read-only t)
@@ -5051,15 +5094,26 @@ INSTANCE is the component instance where the error occurred."
 (defmacro vui--shifting-point (&rest body)
   "Run BODY, a lifecycle hook of a render, with point kept where it is.
 Add to `vui--hook-shift' how far the text before point moved: point
-moves with it.  What renders inside BODY count for themselves, in their
-own buffers, and are not added."
+moves with it, and after an item that the hook writes in place to a
+stream that ends at point (see `vui--hook-point').  What renders inside
+BODY count for themselves, in their own buffers, and are not added."
   (declare (indent 0) (debug t))
   (let ((point (make-symbol "point"))
-        (shift (make-symbol "shift")))
+        (shift (make-symbol "shift"))
+        (hook-point (make-symbol "hook-point")))
     `(let ((,point (point))
-           (,shift vui--hook-shift))
+           (,shift vui--hook-shift)
+           (,hook-point (point-marker)))
        ;; Also when the hook signals: its edits stay
-       (unwind-protect (save-excursion ,@body)
+       (unwind-protect (let ((vui--hook-point ,hook-point)
+                             (vui--hook-regions vui--enclosing-regions)
+                             (vui--hook-starts vui--start-markers))
+                         (save-excursion ,@body))
+         ;; After the item a stream that ends there got in place (see
+         ;; `vui--hook-point')
+         (when (eq (marker-buffer ,hook-point) (current-buffer))
+           (goto-char ,hook-point))
+         (set-marker ,hook-point nil)
          (setq vui--hook-shift (+ ,shift (- (point) ,point)))))))
 
 (defsubst vui--shifted (pos shift)
@@ -5074,7 +5128,7 @@ A marker when the container has a FACE or a KEYMAP to put on its text
 once it is written: the hooks of its children can write or delete text
 above it, or in its text written before them.  Otherwise nothing reads
 the start, and it is nil.  See `vui--finish-container'."
-  (and (or face keymap) (point-marker)))
+  (and (or face keymap) (vui--start-marker)))
 
 (defun vui--finish-container (start face keymap)
   "Put FACE and KEYMAP on the text from START to point; let go of START.
@@ -7522,7 +7576,8 @@ appended after a row is not the row's.  While BODY runs, the end
 markers of the regions that end with the stream advance with that text
 (see `vui--stream-end-regions' and `vui--advancing-ends')."
   (declare (indent 1) (debug t))
-  (let ((pending (make-symbol "pending")))
+  (let ((pending (make-symbol "pending"))
+        (at-hook (make-symbol "at-hook")))
     (macroexp-let2 nil handle handle
       `(vui--advancing-ends (vui--stream-end-regions ,handle)
          (let ((vui--context-stack (vui-stream-handle-context ,handle))
@@ -7545,13 +7600,49 @@ markers of the regions that end with the stream advance with that text
                ;; Fields that wait in `widget-field-new' now belong to
                ;; a render in progress, which sets them up when it is
                ;; done
-               (,pending widget-field-new))
+               (,pending widget-field-new)
+               ;; The stream ends where the render that runs the hook
+               ;; writes (see `vui--hook-point')
+               (,at-hook (vui--stream-ends-at-hook-point ,handle)))
            ;; The stream can be outside a narrowing, and so can the
            ;; fields it writes
            (save-restriction
              (widen)
              (prog1 (save-excursion ,@body)
-               (vui--setup-fields-written ,pending))))))))
+               (vui--setup-fields-written ,pending)
+               (when ,at-hook
+                 (vui--advance-hook-point
+                  (marker-position
+                   (vui-stream-handle-region-end ,handle)))))))))))
+
+(defun vui--stream-ends-at-hook-point (handle)
+  "Non-nil when HANDLE's stream ends at `vui--hook-point', after text.
+Not when it ends with a region the render is in (see
+`vui--hook-regions'): the render writes in the stream then.  Call with
+the stream's buffer current."
+  (let ((start (vui-stream-handle-region-start handle))
+        (end (vui-stream-handle-region-end handle)))
+    (and vui--hook-point
+         (eq (marker-buffer vui--hook-point) (current-buffer))
+         (markerp start) (markerp end)
+         (marker-position start) (marker-position end)
+         (< start vui--hook-point)
+         (= end vui--hook-point)
+         (not (cl-some (lambda (region)
+                         (and (vui-instance-p region)
+                              (eq (vui-instance-region-end region) end)))
+                       vui--hook-regions)))))
+
+(defun vui--advance-hook-point (pos)
+  "Move `vui--hook-point' to POS, after an item a stream wrote there.
+The starts of containers that were at the hook point move too (see
+`vui--hook-starts')."
+  (let ((old (marker-position vui--hook-point)))
+    (dolist (start vui--hook-starts)
+      (when (and (eq (marker-buffer start) (current-buffer))
+                 (= start old))
+        (set-marker start pos)))
+    (set-marker vui--hook-point pos)))
 
 (defun vui--setup-fields-written (pending)
   "Set up the fields written in place since `widget-field-new' was PENDING.
@@ -7815,7 +7906,7 @@ silently dropping every subsequent streamed append."
          ;; A marker: the hooks of the rows can write or delete text
          ;; above the stream, or in the items written before them (see
          ;; `vui--hook-shift')
-         (start (point-marker))
+         (start (vui--start-marker))
          (first t)
          (last-start nil)
          (last-shift nil)
@@ -9573,7 +9664,7 @@ it got is gone too, and nothing is left."
        ((or (vui-vnode-table-p child) (vui-vnode-box-p child))
         ;; A marker: the hooks of the components in the layout can
         ;; write or delete text above it
-        (let ((layout-start (point-marker)))
+        (let ((layout-start (vui--start-marker)))
           (let ((vui--outer-indent (+ vui--outer-indent indent)))
             (vui--render-vnode child))
           ;; Add indent after each internal newline, not after the
@@ -9892,7 +9983,7 @@ is written."
       ;; Record start position for post-processing newlines.  A marker:
       ;; the hooks of the components in the box can write or delete text
       ;; above it.
-      (let ((content-start (point-marker)))
+      (let ((content-start (vui--start-marker)))
         ;; Render content with alignment (render properly to get widgets)
         (pcase align
           (:left
@@ -9926,7 +10017,7 @@ is written."
            (vui--in-measured-layout t)
            ;; Where the table starts: a marker, as the hooks of the
            ;; components in its cells can write or delete text above it
-           (table-start (point-marker))
+           (table-start (vui--start-marker))
            (columns (vui-vnode-table-columns vnode))
            (rows (vui-vnode-table-rows vnode))
            (border (vui-vnode-table-border vnode))
@@ -10151,7 +10242,7 @@ is written."
         ;; error goes, and so do the effects they asked for, which
         ;; would run for components that are not shown.  The start is
         ;; a marker, as their hooks can write or delete text above it.
-        (let* ((start (point-marker))
+        (let* ((start (vui--start-marker))
                (start-pos (point))
                (shift vui--hook-shift)
                (effects vui--pending-effects)
@@ -10312,6 +10403,7 @@ and do not see its context values."
          (vui--render-path nil)
          ;; The hooks of this render count for it alone
          (vui--hook-shift vui--hook-shift)
+         (vui--start-markers nil)
          ;; It does not see the context values of that tree either:
          ;; its re-renders render it on its own and would not
          (vui--context-stack nil))

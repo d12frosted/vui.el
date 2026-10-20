@@ -90,6 +90,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An item a lifecycle hook writes to a =vui-stream= that ends right
+  where the render is writing (the stream is followed by a component
+  that renders nothing, or by an error boundary whose =:on-error=
+  appends) lands in the stream, before what the render writes next. It
+  landed after the rest of the tree, and the stream took in that text,
+  so the next item went after it too. A container that starts there
+  starts after the item: it no longer puts its face on it, and an error
+  boundary that catches no longer drops it.
+
 - An error boundary that drops what its children wrote no longer breaks
   the layout around it when a hook wrote text while its children
   rendered. When a child's =:on-mount= appended to a =vui-stream= in

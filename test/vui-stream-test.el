@@ -877,5 +877,190 @@ to `vui-st-hook-tail--stream'."
             (expect (buffer-string) :to-equal "s1\ns2\ns3\ns4"))
         (kill-buffer "*vui-st-hook-tail*")))))
 
+(defvar vui-st--at-point-stream nil
+  "The stream of the trees in \"a hook that appends to a stream that ends
+at point\" and the describes after it.")
+
+(vui-defcomponent vui-st-silent-appender (fresh)
+  "Render nothing; append \"added\" when mounted, unless FRESH."
+  :on-mount (unless fresh
+              (vui-stream-append vui-st--at-point-stream (vui-text "added")))
+  :render (vui-fragment))
+
+(vui-defcomponent vui-st-boom ()
+  :render (error "Boom"))
+
+(vui-defcomponent vui-st-at-point-tree (shape fresh)
+  "The stream `vui-st--at-point-stream', then what SHAPE puts after it.
+SHAPE is `alone' or `then-text' (a component that renders nothing and
+appends to the stream when mounted, unless FRESH; then text \"FB\"), or
+`on-error' (a boundary whose child signals and whose `:on-error'
+appends, unless FRESH), or `faced' (a faced vstack that starts with that
+component, then \"X\")."
+  :render
+  (pcase shape
+    ('faced
+     (vui-vstack
+      (vui-fragment
+       (vui-stream vui-st--at-point-stream)
+       (vui-vstack :face 'bold
+                   (vui-component 'vui-st-silent-appender :fresh fresh)
+                   (vui-text "X")))
+      (vui-text "bottom")))
+    ('on-error
+     (vui-vstack
+      :indent 2
+      (vui-fragment
+       (vui-stream vui-st--at-point-stream)
+       (vui-error-boundary
+        :on-error (lambda (_)
+                    (unless fresh
+                      (vui-stream-append vui-st--at-point-stream
+                                         (vui-text "added"))))
+        :fallback (lambda (_) (vui-text "FB"))
+        :children (list (vui-component 'vui-st-boom))))
+      (vui-text "bottom")))
+    (_
+     (vui-vstack
+      (apply #'vui-fragment
+             (vui-stream vui-st--at-point-stream)
+             (vui-component 'vui-st-silent-appender :fresh fresh)
+             (when (eq shape 'then-text)
+               (list (vui-text "FB"))))
+      (vui-text "bottom")))))
+
+(defun vui-st--fresh-text (shape items)
+  "Return the text of the SHAPE tree rendered with its stream holding ITEMS.
+No hook appends there: the oracle of what the tree looks like after its
+hook appended to the stream (see `vui-st-at-point-tree')."
+  (let ((vui-lifecycle-error-handler 'ignore)
+        (vui-render-delay nil))
+    (setq vui-st--at-point-stream (vui-make-stream))
+    (dolist (item items)
+      (vui-stream-append vui-st--at-point-stream (vui-text item)))
+    (unwind-protect
+        (let ((instance (vui-mount (vui-component 'vui-st-at-point-tree
+                                                  :shape shape :fresh t)
+                                   "*vui-st-at-point-fresh*")))
+          (prog1 (with-current-buffer "*vui-st-at-point-fresh*"
+                   (vui-st--faces))
+            (vui-unmount instance)))
+      (kill-buffer "*vui-st-at-point-fresh*")
+      (setq vui-st--at-point-stream nil))))
+
+(defun vui-st--faces ()
+  "Return the text of the buffer with the runs of its `face' property.
+\(TEXT . RUNS), RUNS a list of (FROM TO FACE) for each run with a face."
+  (let ((runs nil)
+        (pos (point-min)))
+    (while (< pos (point-max))
+      (let ((next (next-single-property-change pos 'face nil (point-max)))
+            (face (get-text-property pos 'face)))
+        (when face
+          (push (list pos next face) runs))
+        (setq pos next)))
+    (cons (buffer-substring-no-properties (point-min) (point-max))
+          (nreverse runs))))
+
+(describe "a hook that appends to a stream that ends at point"
+  ;; The render is writing right where the stream ends.  The item is
+  ;; the stream's, before what the render writes next, as in a render
+  ;; of the tree with the item in the stream from the start.
+  (after-each
+    (setq vui-st--at-point-stream nil))
+
+  (dolist (shape '(alone then-text on-error faced))
+    (it (format "puts the item before what the render writes next (%s)" shape)
+      (let* ((vui-render-delay nil)
+             (vui-lifecycle-error-handler 'ignore)
+             (expected (vui-st--fresh-text shape '("first" "added")))
+             (later (vui-st--fresh-text shape '("first" "added" "later"))))
+        (setq vui-st--at-point-stream (vui-make-stream))
+        (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+        (let ((instance (vui-mount (vui-component 'vui-st-at-point-tree
+                                                  :shape shape)
+                                   "*vui-st-at-point*")))
+          (unwind-protect
+              (with-current-buffer "*vui-st-at-point*"
+                ;; With the faces: a faced container that starts there
+                ;; starts after the item
+                (expect (vui-st--faces) :to-equal expected)
+                ;; The stream ends after its item, before the rest
+                (vui-stream-append vui-st--at-point-stream (vui-text "later"))
+                (expect (vui-st--faces) :to-equal later))
+            (vui-unmount instance)
+            (kill-buffer "*vui-st-at-point*")))))))
+
+(defvar vui-st--show-row nil
+  "A function that makes `vui-st-growing-row' render its text.")
+
+(vui-defcomponent vui-st-growing-row ()
+  "Nothing at first; then A, a component that appends to the stream
+when mounted (see `vui-st-silent-appender'), and B."
+  :state ((show nil))
+  :render (progn
+            (setq vui-st--show-row (vui-with-async-context
+                                     (vui-set-state :show t)))
+            (if show
+                (vui-fragment "A" (vui-component 'vui-st-silent-appender) "B")
+              (vui-fragment))))
+
+(describe "a hook that appends to a stream in the render of its last row"
+  ;; The row ends the stream, so the stream ends where the row's render
+  ;; writes: the render is in the stream there, and the item goes after
+  ;; the row
+  (it "puts the item after the row"
+    (let ((vui-render-delay nil))
+      (setq vui-st--at-point-stream (vui-make-stream))
+      (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+      (vui-defcomponent vui-st-row-root ()
+        :render (vui-vstack (vui-stream vui-st--at-point-stream)
+                            (vui-text "bottom")))
+      (let ((instance (vui-mount (vui-component 'vui-st-row-root)
+                                 "*vui-st-row-at-point*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-row-at-point*"
+              (vui-stream-append vui-st--at-point-stream
+                                 (vui-component 'vui-st-growing-row))
+              (funcall vui-st--show-row)
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "first\nAB\nadded\nbottom")
+              (vui-stream-append vui-st--at-point-stream (vui-text "later"))
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "first\nAB\nadded\nlater\nbottom"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-row-at-point*"))))))
+
+(describe "a hook that appends to a stream right before an error boundary"
+  ;; The item is the stream's, not what the boundary's children wrote:
+  ;; it stays when the boundary drops their text
+  (it "keeps the item when the boundary catches"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore))
+      (setq vui-st--at-point-stream (vui-make-stream))
+      (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+      (vui-defcomponent vui-st-boundary-root ()
+        :render (vui-vstack
+                 (vui-fragment
+                  (vui-stream vui-st--at-point-stream)
+                  (vui-error-boundary
+                   :fallback (lambda (_) (vui-text "FB"))
+                   :children (list (vui-component 'vui-st-silent-appender)
+                                   "T"
+                                   (vui-component 'vui-st-boom)))
+                  "x")
+                 "y"))
+      (let ((instance (vui-mount (vui-component 'vui-st-boundary-root)
+                                 "*vui-st-boundary-at-point*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-boundary-at-point*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "first\naddedFBx\ny")
+              (vui-stream-append vui-st--at-point-stream (vui-text "later"))
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "first\nadded\nlaterFBx\ny"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-boundary-at-point*"))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
