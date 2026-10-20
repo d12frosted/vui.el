@@ -90,6 +90,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- What a hook of a =vui-stream= row appends to the row's own stream
+  goes after the row. An =:on-mount= or an effect of a row appended in
+  place put what it appended before the row, and =vui-stream-update-last=
+  then took the row for the last item. Now the appends, opens, updates
+  of the last item and edits of the nodes it opened wait until the row
+  is in the stream, and run in the order of the calls. This also holds
+  for a stream that the row is in: its end was still before the row's
+  text.
+  When the row mounted in the first render of its tree, what its hook
+  appended or updated did not show until the next render.
+
 - Undo works after a =vui-stream= writes in place (an append, an open,
   =vui-stream-before= and =-after=, =-append-to=, =-update-last=,
   =-update= or =-remove=) and after an inline region renders again or

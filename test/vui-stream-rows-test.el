@@ -1868,6 +1868,303 @@ the root, SEPARATOR is the separator of the stream."
                     :to-equal "top\nl0\nl1"))
           (expect (buffer-string) :to-equal "host\ntop\nl0\nl1\ntail"))))))
 
+(vui-defcomponent vui-sr-own-effect-row (label hook)
+  "LABEL in brackets; an effect of its first render calls HOOK."
+  :render (progn
+            (vui-use-effect ()
+              (funcall hook))
+            (vui-text (format "[%s]" label))))
+
+(describe "vui-stream rows: a row whose hooks append to its own stream"
+  ;; The row is in the stream before what its hooks append: they come
+  ;; after it, as they do when a render of the tree writes the stream
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "puts what its on-mount appends after it (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-append log (vui-text "t")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|t|panel|footer"))
+          ;; The item it appended is the last one
+          (vui-stream-update-last log (vui-text "t2"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|t2|panel|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[r]|t2|panel|footer"))))
+
+      (it (format "puts what an effect of its first render appends after it (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-own-effect-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-append log (vui-text "t")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|t|panel|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[r]|t|panel|footer"))))
+
+      (it (format "puts a row its on-mount appends after it (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "a"
+                              :hook (lambda ()
+                                      (vui-stream-append
+                                       log (vui-component 'vui-sr-hook-row
+                                                          :label "b")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|[b]|panel|footer"))
+          (vui-update (car (vui-stream-handle-items-rev log)) '(:label "b2"))
+          (vui-stream-append log (vui-text "l1"))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[a]|[b2]|l1|panel|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[a]|[b2]|l1|panel|footer"))))
+
+      (it (format "appends in order when its on-mount appends twice (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-append log (vui-text "t1"))
+                                      (vui-stream-append log (vui-text "t2")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|t1|t2|panel|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[r]|t1|t2|panel|footer"))))))
+
+  (it "shows what its on-mount appends when the tree mounts"
+    ;; The row is in the stream before the mount, so the first render of
+    ;; the tree mounts it
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (panel (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-stream-append
+       log (vui-component 'vui-sr-hook-row
+                          :label "r"
+                          :hook (lambda ()
+                                  (vui-stream-append log (vui-text "t")))))
+      (vui-mount (vui-component 'vui-sr-hook-root
+                                :log log :panel panel :mode 'first)
+                 "*vui-sr-h*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-h*"
+            (expect (vui-sr-hook--text) :to-equal "l0|[r]|t|panel|footer")
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal "l0|[r]|t|panel|footer"))
+        (vui-sr--kill "*vui-sr-h*")))))
+
+(defun vui-sr-own--items (stream)
+  "Return the items of STREAM: the text of content, the label of a row."
+  (mapcar (lambda (item)
+            (if (vui-instance-p item)
+                (plist-get (vui-instance-props item) :label)
+              (vui-vnode-text-content item)))
+          (reverse (vui-stream-handle-items-rev stream))))
+
+(vui-defcomponent vui-sr-own-kid (hook)
+  "Calls HOOK when it mounts."
+  :on-mount (funcall hook)
+  :render (vui-text "(k)"))
+
+(vui-defcomponent vui-sr-own-failing-row (label hook)
+  "LABEL, and a child that calls HOOK; its own `:on-mount' signals."
+  :on-mount (error "Boom")
+  :render (vui-vstack (vui-text (format "[%s]" label))
+                      (vui-component 'vui-sr-own-kid :hook hook)))
+
+(vui-defcomponent vui-sr-own-card (label inner)
+  "LABEL in brackets, with the stream INNER below it."
+  :render (vui-vstack (vui-text (format "[%s]" label)) (vui-stream inner)))
+
+(describe "vui-stream rows: other edits of its own stream from a row's hooks"
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "opens a node after it, in the order of the calls (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component
+                'vui-sr-hook-row
+                :label "r"
+                :hook (lambda ()
+                        (vui-stream-append log (vui-text "t"))
+                        (let ((node (vui-stream-open log (vui-text "o"))))
+                          (vui-stream-append-to node (vui-text "+"))))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|t|o+|panel|footer"))
+          (expect (vui-sr-hook--render-whole)
+                  :to-equal (concat x "l0|[r]|t|o+|panel|footer"))))
+
+      (it (format "updates the item it appended after it (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-append log (vui-text "t"))
+                                      (vui-stream-update-last
+                                       log (vui-text "u")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r]|u|panel|footer"))))
+
+      (it (format "updates itself as the last item (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append
+           log (vui-component 'vui-sr-hook-row
+                              :label "r"
+                              :hook (lambda ()
+                                      (vui-stream-update-last
+                                       log (vui-component 'vui-sr-hook-row
+                                                          :label "r2")))))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[r2]|panel|footer"))))
+
+      (it (format "keeps what a hook appended when its first render signals (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (let ((vui-lifecycle-error-handler 'signal))
+            (expect (vui-stream-append
+                     log (vui-component
+                          'vui-sr-own-failing-row
+                          :label "r"
+                          :hook (lambda ()
+                                  (vui-stream-append log (vui-text "t")))))
+                    :to-throw 'error))
+          (vui-stream-append log (vui-text "l1"))
+          (expect (vui-sr-own--items log) :to-equal '("l0" "t" "l1"))))
+
+      (it (format "writes after it in a stream it is in, and in its own (%s)"
+                  mode)
+        ;; The row mounts in a stream of a card, the last item of LOG,
+        ;; and its hook appends to both
+        (vui-sr-hook--with mode nil
+          (let ((inner (vui-make-stream)))
+            (vui-stream-append inner (vui-text "i0"))
+            (vui-stream-append log (vui-component 'vui-sr-own-card
+                                                  :label "c" :inner inner))
+            (vui-stream-append
+             inner (vui-component 'vui-sr-hook-row
+                                  :label "ir"
+                                  :hook (lambda ()
+                                          (vui-stream-append log (vui-text "t"))
+                                          (vui-stream-append
+                                           inner (vui-text "i2")))))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[c]|i0|[ir]|i2|t|panel|footer"))
+            (vui-stream-append inner (vui-text "i3"))
+            (vui-stream-append log (vui-text "l1"))
+            (expect (vui-sr-hook--text)
+                    :to-equal
+                    (concat x "l0|[c]|i0|[ir]|i2|i3|t|l1|panel|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal
+                    (concat x "l0|[c]|i0|[ir]|i2|i3|t|l1|panel|footer")))))
+
+      (it (format "writes after it in a stream it is in, from another buffer (%s)"
+                  mode)
+        ;; A timer or a process filter appends, in a buffer of its own
+        (vui-sr-hook--with mode nil
+          (let ((inner (vui-make-stream)))
+            (vui-stream-append inner (vui-text "i0"))
+            (vui-stream-append log (vui-component 'vui-sr-own-card
+                                                  :label "c" :inner inner))
+            (with-temp-buffer
+              (vui-stream-append
+               inner (vui-component 'vui-sr-hook-row
+                                    :label "ir"
+                                    :hook (lambda ()
+                                            (vui-stream-append
+                                             log (vui-text "t"))))))
+            (vui-stream-append inner (vui-text "i3"))
+            (vui-stream-append log (vui-text "l1"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[c]|i0|[ir]|i3|t|l1|panel|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal
+                    (concat x "l0|[c]|i0|[ir]|i3|t|l1|panel|footer")))))
+
+      (it (format "makes all its edits when one of them signals (%s)" mode)
+        ;; The row it appends fails to render; the edits after it are made,
+        ;; and the error comes after them
+        (vui-sr-hook--with mode nil
+          (let ((node nil))
+            (expect (vui-stream-append
+                     log (vui-component
+                          'vui-sr-hook-row
+                          :label "r"
+                          :hook (lambda ()
+                                  (vui-stream-append
+                                   log (vui-component
+                                        'vui-stream-rows-test-failing))
+                                  (setq node (vui-stream-open
+                                              log (vui-text "o")))
+                                  (vui-stream-append log (vui-text "t")))))
+                    :to-throw 'error)
+            (expect (vui--stream-node-waiting node) :to-be nil)
+            (expect (vui-stream-append-to node (vui-text "+")) :to-be node)
+            (expect (vui-sr-own--items log) :to-equal '("l0" "r" "o+" "t")))))
+
+      (it (format "returns the node from the edits of a node it opened (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (let ((results nil))
+            (vui-stream-append
+             log (vui-component
+                  'vui-sr-hook-row
+                  :label "r"
+                  :hook (lambda ()
+                          (let ((node (vui-stream-open log (vui-text "o"))))
+                            (setq results
+                                  (list (eq (vui-stream-append-to
+                                             node (vui-text "+"))
+                                            node)
+                                        (eq (vui-stream-update
+                                             node (vui-text "O"))
+                                            node)
+                                        (eq (vui-stream-finalize node)
+                                            node)))))))
+            (expect results :to-equal '(t t t))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[r]|O|panel|footer")))))
+
+      (it (format "shows what it wrote when the tree mounts (%s)" mode)
+        ;; The row is the last item, appends, and unmounts itself; or it
+        ;; updates the last item, after it
+        (dolist (case '(unmount update))
+          (let ((vui-render-delay nil)
+                (log (vui-make-stream))
+                (panel (vui-make-stream)))
+            (vui-stream-append log (vui-text "l0"))
+            (vui-stream-append
+             log (vui-component
+                  'vui-sr-hook-row
+                  :label "r"
+                  :hook (if (eq case 'unmount)
+                            (lambda ()
+                              (vui-stream-append log (vui-text "t"))
+                              (vui-unmount vui--current-instance))
+                          (lambda ()
+                            (vui-stream-update-last log (vui-text "l1b"))))))
+            (when (eq case 'update)
+              (vui-stream-append log (vui-text "l1")))
+            (vui-mount (vui-component 'vui-sr-hook-root
+                                      :log log :panel panel :mode mode)
+                       "*vui-sr-h*")
+            (unwind-protect
+                (with-current-buffer "*vui-sr-h*"
+                  (expect (vui-sr-hook--text)
+                          :to-equal (concat x (if (eq case 'unmount)
+                                                  "l0|t|panel|footer"
+                                                "l0|[r]|l1b|panel|footer"))))
+              (vui-sr--kill "*vui-sr-h*"))))))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here
