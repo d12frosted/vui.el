@@ -125,7 +125,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   for a stream that the row is in: its end was still before the row's
   text.
   When the row mounted in the first render of its tree, what its hook
-  appended or updated did not show until the next render.
+  appended or updated did not show until the next render. When the
+  row's first render waited for another render in progress, what its
+  hook wrote went into the row's region, and the row's next render
+  deleted it.
 
 - Undo works after a =vui-stream= writes in place (an append, an open,
   =vui-stream-before= and =-after=, =-append-to=, =-update-last=,

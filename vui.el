@@ -4197,6 +4197,8 @@ its tree sets state (see `vui--unmounting')."
     (vui--widening (vui-instance-buffer instance)
                    (lambda () (vui--rerender-buffer instance))))))
 
+(defvar vui--stream-mounting-rows)
+
 (defun vui--rerender-inline (instance)
   "Re-render inline INSTANCE inside the region it manages.
 The host buffer outside the region is left untouched.  Region
@@ -4219,9 +4221,39 @@ stream is written again with a render of the tree (see
           ;; changes with the row's text, so the stream is written again
           ;; (see `vui-stream-handle-measured')
           (vui--stream-request-rebuild stream)
-        (vui--widening (vui-instance-buffer instance)
-                       (lambda () (vui--rerender-inline-1 instance))
-                       instance)))))
+        (let ((waiting (vui--stream-first-render-waiting instance))
+              (done nil))
+          (unwind-protect
+              (progn
+                (let ((vui--stream-mounting-rows
+                       (if waiting
+                           (cons waiting vui--stream-mounting-rows)
+                         vui--stream-mounting-rows)))
+                  (vui--widening (vui-instance-buffer instance)
+                                 (lambda () (vui--rerender-inline-1 instance))
+                                 instance))
+                (setq done t))
+            (when waiting
+              (vui--stream-run-waiting (nreverse (cdr waiting)) done))))))))
+
+(defun vui--stream-first-render-waiting (instance)
+  "Return an entry for `vui--stream-mounting-rows' for INSTANCE, or nil.
+INSTANCE is about to render.  When that is the first render of a row
+that is in its stream already (it waited in the queue for a render in
+progress), the writes its hooks make to the stream, or to one around
+it, wait until it is done, as in `vui--stream-append-row': the end of
+the stream is the row's own end then, and what they write would go
+into its region.  Nil also when an entry holds the stream already: the
+writes wait for that one."
+  (let ((buffer (vui-instance-buffer instance)))
+    (when (and (not (vui-instance-mounted-p instance))
+               (vui-instance-base-path instance)
+               buffer (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (when-let* ((stream (vui--stream-of-row instance)))
+          (unless (cl-find-if (lambda (entry) (memq stream (car entry)))
+                              vui--stream-mounting-rows)
+            (list (vui--stream-and-around stream))))))))
 
 (defun vui--widening (buffer fn &optional instance)
   "Call FN, a render in BUFFER, with BUFFER widened.
@@ -8646,7 +8678,8 @@ until the row is in its stream."
   handle)
 
 (defvar vui--stream-mounting-rows nil
-  "An alist of the streams with a row that mounts in place right now.
+  "An alist of the streams with a row whose first render runs now.
+The row mounts in place, or its first render waited in the queue.
 Each entry is (HANDLES . WRITES), the innermost first.  HANDLES are the
 stream of the row and the streams it is in, and WRITES the writes to
 them that wait until the row is in its stream, as functions, the newest
@@ -8658,9 +8691,10 @@ Also when the row mounts in a stream that is in HANDLE.  A hook of the
 row runs in the row's first render, before the row is an item of its
 stream, and what it appends would go before the row: the end of its
 stream, and of the streams around it, is still before the row's text.
-Return non-nil when WRITE waits.  `vui--stream-append-row' calls the
-waiting writes in order once the row's first render is done, or
-signalled: the row is in its stream then, unless it unmounted itself
+Return non-nil when WRITE waits.  `vui--stream-append-row' (or
+`vui--rerender-inline', for a first render that waited in the queue)
+calls the waiting writes in order once the row's first render is done,
+or signalled: the row is in its stream then, unless it unmounted itself
 or failed."
   (when-let* ((entry (cl-find-if (lambda (entry) (memq handle (car entry)))
                                  vui--stream-mounting-rows)))

@@ -2165,6 +2165,106 @@ the root, SEPARATOR is the separator of the stream."
                                                 "l0|[r]|l1b|panel|footer"))))
               (vui-sr--kill "*vui-sr-h*"))))))))
 
+(describe "vui-stream rows: a row whose first render waits in the queue"
+  ;; A row opened from a render of another row renders when that render
+  ;; is done.  What its hooks open then goes after it, and stays out of
+  ;; its region.
+  (dolist (mode '(first middle))
+    (let ((x (if (eq mode 'first) "" "x|")))
+      (it (format "keeps what its hook opened when it renders again (%s)" mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append panel (vui-text "p0"))
+          (vui-stream-append log (vui-component 'vui-sr-hook-update-row
+                                                :label "u"))
+          (let ((once t)
+                (node nil)
+                (later nil))
+            (vui-update (car (vui-stream-handle-items-rev log))
+                        (list :label "u2"
+                              :hook (lambda ()
+                                      (when once
+                                        (setq once nil)
+                                        (setq node
+                                              (vui-stream-open
+                                               log
+                                               (vui-component
+                                                'vui-sr-hook-row
+                                                :label "c"
+                                                :hook (lambda ()
+                                                        (setq later
+                                                              (vui-stream-open
+                                                               log (vui-text "t")))))))))))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[u2]|[c]|t|panel|p0|footer"))
+            (vui-stream-update node (vui-component 'vui-sr-hook-row :label "c2"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[u2]|[c2]|t|panel|p0|footer"))
+            (vui-stream-update later (vui-text "t3"))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[u2]|[c2]|t3|panel|p0|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|[u2]|[c2]|t3|panel|p0|footer")))))
+
+      (it (format "keeps what its hook writes in a stream it is in (%s)" mode)
+        ;; The row is in the stream of a card, the last item of LOG
+        (vui-sr-hook--with mode nil
+          (let ((inner (vui-make-stream))
+                (once t))
+            (vui-stream-append inner (vui-text "i0"))
+            (vui-stream-append log (vui-component 'vui-sr-own-card
+                                                  :label "k" :inner inner))
+            (vui-stream-append inner (vui-component 'vui-sr-hook-update-row
+                                                    :label "u"))
+            (vui-update (car (vui-stream-handle-items-rev inner))
+                        (list :label "u2"
+                              :hook (lambda ()
+                                      (when once
+                                        (setq once nil)
+                                        (vui-stream-append
+                                         inner
+                                         (vui-component
+                                          'vui-sr-hook-row
+                                          :label "c"
+                                          :hook (lambda ()
+                                                  (vui-stream-append
+                                                   inner (vui-text "i2"))
+                                                  (vui-stream-append
+                                                   log (vui-text "t")))))))))
+            (dolist (row (vui-stream-handle-rows inner))
+              (vui-rerender row))
+            (expect (vui-sr-hook--text)
+                    :to-equal (concat x "l0|[k]|i0|[u2]|[c]|i2|t|panel|footer"))
+            (expect (vui-sr-hook--render-whole)
+                    :to-equal (concat x "l0|[k]|i0|[u2]|[c]|i2|t|panel|footer")))))
+
+      (it (format "keeps what its hook wrote when its first render signals (%s)"
+                  mode)
+        (vui-sr-hook--with mode nil
+          (vui-stream-append log (vui-component 'vui-sr-hook-update-row
+                                                :label "u"))
+          (let ((once t)
+                (vui-lifecycle-error-handler 'signal))
+            (expect
+             (vui-update (car (vui-stream-handle-items-rev log))
+                         (list :label "u2"
+                               :hook (lambda ()
+                                       (when once
+                                         (setq once nil)
+                                         (vui-stream-append
+                                          log
+                                          (vui-component
+                                           'vui-sr-hook-row
+                                           :label "c"
+                                           :hook (lambda ()
+                                                   (vui-stream-append
+                                                    log (vui-text "t"))
+                                                   (error "Boom"))))))))
+             :to-throw 'error))
+          (dolist (row (vui-stream-handle-rows log))
+            (vui-rerender row))
+          (expect (vui-sr-hook--text)
+                  :to-equal (concat x "l0|[u2]|[c]|t|panel|footer")))))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here
