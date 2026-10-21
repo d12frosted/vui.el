@@ -197,6 +197,149 @@
                 (expect (overlay-end ov) :to-equal 4)))
           (kill-buffer "*eqskip*"))))))
 
+(defvar eqskip-state--memo nil
+  "The tree `eqskip-memo-root' renders each time.")
+
+(defvar eqskip-state--counter nil
+  "The instance of the last `eqskip-counter' rendered.")
+
+(vui-defcomponent eqskip-counter ()
+  :state ((n 0))
+  :render (progn
+            (setq eqskip-state--counter vui--current-instance)
+            (vui-text (format "c%d" n))))
+
+(vui-defcomponent eqskip-memo-root ()
+  "Gives the same tree object each time."
+  :state ((m 0))
+  :render (or eqskip-state--memo
+              (setq eqskip-state--memo
+                    (vui-vstack (vui-component 'eqskip-counter)
+                                (vui-text "root")))))
+
+(vui-defcomponent eqskip-quiet-root ()
+  "Never renders again for its own state."
+  :should-update nil
+  :state ((m 0))
+  :render (vui-vstack (vui-component 'eqskip-counter) (vui-text "root")))
+
+(describe "whole-tree eq-skip and the state of a child"
+  ;; A child whose state changes renders again with the render of its
+  ;; root.  The root gives the same tree as last time, but that tree
+  ;; does not show the child's new state: the commit writes it.
+  (dolist (flag '(nil t))
+    (dolist (root '(eqskip-memo-root eqskip-quiet-root))
+      (it (format "shows the new state of a child of %s (flag %s)"
+                  root (if flag "on" "off"))
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil)
+              (eqskip-state--memo nil))
+          (let ((inst (vui-mount (vui-component root) "*eqskip-state*")))
+            (unwind-protect
+                (with-current-buffer "*eqskip-state*"
+                  ;; The render of the root leaves a record, and the
+                  ;; renders after it compare with it
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :m 1))
+                  (let ((vui--current-instance eqskip-state--counter))
+                    (vui-set-state :n 1))
+                  (expect (buffer-string) :to-equal "c1\nroot")
+                  (let ((vui--current-instance eqskip-state--counter))
+                    (vui-set-state :n 2))
+                  (expect (buffer-string) :to-equal "c2\nroot")
+                  ;; The root's own state still skips: nothing changed
+                  (let ((ov (make-overlay 1 3)))
+                    (let ((vui--current-instance inst))
+                      (vui-set-state :m 2))
+                    (expect (buffer-string) :to-equal "c2\nroot")
+                    (expect (overlay-end ov) :to-equal 3)))
+              (kill-buffer "*eqskip-state*"))))))))
+
+(vui-defcomponent eqskip-middle ()
+  "A counter in a stack."
+  :render (vui-vstack (vui-component 'eqskip-counter)))
+
+(defvar eqskip-state--build nil
+  "The function that makes the tree of `eqskip-built-root'.")
+
+(vui-defcomponent eqskip-built-root ()
+  "Gives the same tree each time, made once by `eqskip-state--build'."
+  :state ((m 0))
+  :render (or eqskip-state--memo
+              (setq eqskip-state--memo (funcall eqskip-state--build))))
+
+(describe "whole-tree eq-skip and the state of a child, more trees"
+  (dolist (flag '(nil t))
+    (let ((fl (if flag "on" "off")))
+      (it (format "shows the new state of a grandchild (flag %s)" fl)
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil)
+              (eqskip-state--memo nil)
+              (eqskip-state--build
+               (lambda () (vui-vstack (vui-component 'eqskip-middle)
+                                      (vui-text "root")))))
+          (let ((inst (vui-mount (vui-component 'eqskip-built-root)
+                                 "*eqskip-state*")))
+            (unwind-protect
+                (with-current-buffer "*eqskip-state*"
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :m 1))
+                  (vui-batch
+                    (let ((vui--current-instance eqskip-state--counter))
+                      (vui-set-state :n 1))
+                    (let ((vui--current-instance inst))
+                      (vui-set-state :m 2)))
+                  (expect (buffer-string) :to-equal "c1\nroot"))
+              (kill-buffer "*eqskip-state*")))))
+
+      (it (format "shows state a child's hook sets in the first render of the root (flag %s)"
+                  fl)
+        ;; The root has no record of a render yet when the hook runs
+        (let ((vui-incremental-render flag)
+              (vui-render-delay nil))
+          (vui-defcomponent eqskip-self-setting ()
+            :state ((n 0))
+            :on-update (when (= n 0) (vui-set-state :n 1))
+            :render (vui-text (format "c%d" n)))
+          (vui-defcomponent eqskip-quiet-host ()
+            :should-update nil
+            :state ((m 0))
+            :render (vui-vstack (vui-component 'eqskip-self-setting)
+                                (vui-text "root")))
+          (let ((inst (vui-mount (vui-component 'eqskip-quiet-host)
+                                 "*eqskip-state*")))
+            (unwind-protect
+                (with-current-buffer "*eqskip-state*"
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :m 1))
+                  (expect (buffer-string) :to-equal "c1\nroot"))
+              (kill-buffer "*eqskip-state*")))))
+
+      (it (format "shows a child after a stream, and leaves the stream (flag %s)"
+                  fl)
+        (let* ((vui-incremental-render flag)
+               (vui-render-delay nil)
+               (stream (vui-make-stream))
+               (eqskip-state--memo nil)
+               (eqskip-state--build
+                (lambda () (vui-vstack (vui-stream stream)
+                                       (vui-component 'eqskip-counter)))))
+          (let ((inst (vui-mount (vui-component 'eqskip-built-root)
+                                 "*eqskip-state*")))
+            (unwind-protect
+                (with-current-buffer "*eqskip-state*"
+                  (dotimes (i 3)
+                    (vui-stream-append stream (vui-text (format "s%d" i))))
+                  (let ((vui--current-instance inst))
+                    (vui-set-state :m 1))
+                  (let ((mark (copy-marker 4)))
+                    (let ((vui--current-instance eqskip-state--counter))
+                      (vui-set-state :n 1))
+                    (expect (buffer-string) :to-equal "s0\ns1\ns2\nc1")
+                    ;; The stream is patched around, not written again
+                    (expect (marker-position mark) :to-equal 4)))
+              (kill-buffer "*eqskip-state*"))))))))
+
 (describe "whole-tree eq-skip keeps the root's component children"
   ;; A root that gives the same tree object as last time (its
   ;; should-update says skip, or its render returns a memoized tree)

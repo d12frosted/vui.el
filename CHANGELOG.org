@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A child's new state shows when its root gives the same tree object as
+  last time (a memoized tree, or a root whose =:should-update= says
+  no). The render of the root skipped the commit of such a tree, so
+  once the root had rendered again, a child's =vui-set-state= changed
+  nothing on screen.
+
 - What a hook of a =vui-stream= row appends to the row's own stream
   goes after the row. An =:on-mount= or an effect of a row appended in
   place put what it appended before the row, and =vui-stream-update-last=

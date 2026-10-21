@@ -2135,6 +2135,13 @@ as a literal value, not an updater."
               (or (eq (cdr arity) 'many)
                   (>= (cdr arity) 1))))))
 
+(defvar vui--roots-with-changed-state nil
+  "The roots with a component whose state changed since they rendered.
+Not the root's own state: its render shows that in the tree it gives.
+The tree of a root in the list has to be written again even when it is
+the tree it gave last time, as that tree does not show the new state of
+the component (see `vui--commit-root').")
+
 (defun vui-set-state (key value)
   "Set state KEY to VALUE in the appropriate component and re-render.
 Searches for the component that owns KEY, starting from the current
@@ -2180,7 +2187,18 @@ sort.  In-place mutation is invisible to change detection
                     (vui-component-def-name (vui-instance-def target))
                     key new-value)
     (setf (vui-instance-state target)
-          (plist-put current-state key new-value)))
+          (plist-put current-state key new-value))
+    ;; The root renders the target again with its tree, and the tree it
+    ;; gives can be the one it gave last time: it has to be written all
+    ;; the same (see `vui--commit-root')
+    (let ((root (vui--find-root target)))
+      (when (and (not (eq root target))
+                 (not (eq new-value current-value))
+                 ;; A mounted root of a buffer: an inline region or a
+                 ;; stream row has no such commit
+                 (vui-instance-buffer root)
+                 (not (vui--inline-p root)))
+        (cl-pushnew root vui--roots-with-changed-state :test #'eq))))
   ;; Schedule re-render (respects batching)
   (vui--schedule-render))
 
@@ -5659,6 +5677,8 @@ requests for this tree become no-ops."
   ;; Cancel after cleanups: an on-unmount hook calling `vui-set-state'
   ;; would otherwise leave a fresh timer behind.
   (vui--cancel-render-timer instance)
+  (setq vui--roots-with-changed-state
+        (delq instance vui--roots-with-changed-state))
   (vui--detach-instance instance))
 
 (defun vui--build-reconcile-lookup (parent children)
@@ -7613,11 +7633,18 @@ already matches VTREE and nothing was rendered.
 
 A stream that asked to be written again (see
 `vui--stream-rebuild-pending') keeps this commit from skipping a tree
-that did not change, and from patching around that stream."
+that did not change, and from patching around that stream.  A
+component in the tree whose state changed (see
+`vui--roots-with-changed-state') also keeps it from skipping such a
+tree."
   (let* ((instance vui--current-instance)
          (record (vui-instance-render-record instance))
-         (pending vui--stream-rebuild-pending))
+         (pending vui--stream-rebuild-pending)
+         (changed (memq instance vui--roots-with-changed-state)))
     (setq vui--stream-rebuild-pending nil)
+    (when changed
+      (setq vui--roots-with-changed-state
+            (delq instance vui--roots-with-changed-state)))
     (cond
      ;; Nothing to show: remove what the last commit wrote, the way the
      ;; wholesale rebuild below does.  Drop the record as well, so the
@@ -7638,8 +7665,11 @@ that did not change, and from patching around that stream."
      ;; `eq', and needs no bookkeeping, so it does not depend on the
      ;; experimental `vui-incremental-render' flag.  No child component
      ;; renders either, so tell `vui--render-instance' to keep them.
-     ;; Not while a stream waits to be written again.
-     ((and record (not pending) (eq vtree (plist-get record :vnode)))
+     ;; Not while a stream waits to be written again, nor when the state
+     ;; of a component in the tree changed (see
+     ;; `vui--roots-with-changed-state').
+     ((and record (not pending) (not changed)
+           (eq vtree (plist-get record :vnode)))
       'unchanged)
      ;; Stream-tail patch: a flat container whose first child is a live
      ;; stream.  The stream's region is already current (append /
