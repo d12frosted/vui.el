@@ -2265,6 +2265,98 @@ the root, SEPARATOR is the separator of the stream."
           (expect (vui-sr-hook--text)
                   :to-equal (concat x "l0|[u2]|[c]|t|panel|footer")))))))
 
+(defvar vui-sr-rebuild--edit nil
+  "A function `vui-sr-rebuild-row' calls once when it renders again.")
+
+(vui-defcomponent vui-sr-rebuild-row (label)
+  "LABEL in brackets; calls `vui-sr-rebuild--edit' once on update."
+  :on-update (when vui-sr-rebuild--edit
+               (let ((edit vui-sr-rebuild--edit))
+                 (setq vui-sr-rebuild--edit nil)
+                 (funcall edit)))
+  :render (vui-text (format "[%s]" label)))
+
+(describe "vui-stream rows: a row's hook edits a node below it in a rebuild"
+  ;; A render of the tree writes PANEL again, and its row renders again
+  ;; there, before the node below it is written
+  (dolist (case '((append-to "p0|[r]|n+")
+                  (update "p0|[r]|N")
+                  (before "p0|[r]|b|n")
+                  (after "p0|[r]|n|a")
+                  (remove "p0|[r]")
+                  (finalize "p0|[r]|n")))
+    (it (format "makes the edit (%s)" (car case))
+      (vui-sr-hook--with 'middle nil
+        (vui-stream-append panel (vui-text "p0"))
+        (vui-stream-append panel (vui-component 'vui-sr-rebuild-row :label "r"))
+        (let ((node (vui-stream-open panel (vui-text "n"))))
+          (setq vui-sr-rebuild--edit
+                (lambda ()
+                  (pcase (car case)
+                    ('append-to (vui-stream-append-to node (vui-text "+")))
+                    ('update (vui-stream-update node (vui-text "N")))
+                    ('before (vui-stream-before node (vui-text "b")))
+                    ('after (vui-stream-after node (vui-text "a")))
+                    ('remove (vui-stream-remove node))
+                    ('finalize (vui-stream-finalize node)))))
+          (unwind-protect
+              (vui-rerender (vui-get-instance))
+            (setq vui-sr-rebuild--edit nil))
+          (expect vui-sr-rebuild--edit :to-be nil)
+          (let ((want (concat "x|l0|panel|" (cadr case) "|footer")))
+            (expect (vui-sr-hook--text) :to-equal want)
+            (when (eq (car case) 'finalize)
+              ;; A finalized node takes no more edits
+              (vui-stream-append-to node (vui-text "!"))
+              (expect (vui-sr-hook--text) :to-equal want))
+            (expect (vui-sr-hook--render-whole) :to-equal want))))))
+
+  (dolist (side '(before after))
+    (it (format "returns the node %s a node above it" side)
+      ;; That node is written already: the edit is made at once
+      (vui-sr-hook--with 'middle nil
+        (vui-stream-append panel (vui-text "p0"))
+        (let ((node (vui-stream-open panel (vui-text "n")))
+              (new nil))
+          (vui-stream-append panel (vui-component 'vui-sr-rebuild-row :label "r"))
+          (setq vui-sr-rebuild--edit
+                (lambda ()
+                  (setq new (if (eq side 'before)
+                                (vui-stream-before node (vui-text "a"))
+                              (vui-stream-after node (vui-text "a"))))))
+          (unwind-protect
+              (vui-rerender (vui-get-instance))
+            (setq vui-sr-rebuild--edit nil))
+          (expect (vui-stream-node-p new) :to-be-truthy)
+          (vui-stream-append-to new (vui-text "+"))
+          (let ((want (concat "x|l0|panel|p0|"
+                              (if (eq side 'before) "a+|n" "n|a+")
+                              "|[r]|footer")))
+            (expect (vui-sr-hook--text) :to-equal want)
+            (expect (vui-sr-hook--render-whole) :to-equal want))))))
+
+  (it "shows an error of the edit as one of the hook, and renders the rest"
+    (vui-sr-hook--with 'middle nil
+      (vui-stream-append panel (vui-text "p0"))
+      (vui-stream-append panel (vui-component 'vui-sr-rebuild-row :label "r"))
+      (let* ((node (vui-stream-open panel (vui-text "n")))
+             (vui-lifecycle-error-handler 'ignore)
+             ;; The write of the edit signals
+             (boom (lambda (vnode)
+                     (when (and (vui-vnode-text-p vnode)
+                                (equal (vui-vnode-text-content vnode) "BOOM"))
+                       (error "Boom")))))
+        (setq vui-sr-rebuild--edit
+              (lambda ()
+                (vui-stream-update node (vui-text "BOOM"))))
+        (advice-add 'vui--render-vnode :before boom)
+        (unwind-protect
+            (vui-rerender (vui-get-instance))
+          (advice-remove 'vui--render-vnode boom)
+          (setq vui-sr-rebuild--edit nil))
+        ;; The footer after the stream is written
+        (expect (vui-sr-hook--text) :to-match "|footer\\'")))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here

@@ -8273,6 +8273,20 @@ as a measure pass does for any mounted component (see
          (vui--child-index 0))
     (vui--render-vnode vtree)))
 
+(defvar vui--stream-render-edits nil
+  "The edits of nodes made while a render writes their stream, an alist.
+Each entry is (HANDLE INDEX . EDITS): INDEX is the item the render
+writes now, in the order of the items, and EDITS the functions that
+make the edits that wait, the newest first.  A hook of a row of HANDLE,
+or of a component in it, runs while the stream is written: a node of
+the row's item, or of one below it, is not written yet, and the render
+binds each node from its list of nodes.  So an edit of such a node
+waits, and is made when the stream is written (see
+`vui--stream-render'): `vui-stream-before' and `vui-stream-after'
+return nil then.  An edit of a node above is made at once.  An error
+of an edit that waited is one of the hook that made it (see
+`vui-lifecycle-error-handler').")
+
 (defvar vui--streams-in-render nil
   "The streams a render writes from their items now, an alist.
 Each entry is (HANDLE . MISSED): MISSED is non-nil when an append or an
@@ -8323,6 +8337,8 @@ silently dropping every subsequent streamed append."
          (old-end (vui-stream-handle-region-end handle))
          ;; Whether an item came in that this render does not write
          (missed (list handle))
+         ;; The edits of its nodes that wait until it is written
+         (edits (list handle 0))
          ;; Whether OLD-END is the end marker of a row
          (shared nil)
          ;; The live content nodes, each with the index of its item in
@@ -8340,9 +8356,14 @@ silently dropping every subsequent streamed append."
            ;; The hooks of its rows edit it while it is written
            (if vui--measuring-p
                vui--streams-in-render
-             (cons missed vui--streams-in-render))))
+             (cons missed vui--streams-in-render)))
+          (vui--stream-render-edits
+           (if vui--measuring-p
+               vui--stream-render-edits
+             (cons edits vui--stream-render-edits))))
       (dolist (item (reverse (vui-stream-handle-items-rev handle)))
         (setq index (1+ index))
+        (setcar (cdr edits) index)
         (let ((vui--render-path (cons (pop ids) path))
               (cell (pop cells)))
           (cond
@@ -8443,6 +8464,12 @@ silently dropping every subsequent streamed append."
       ;; when the stream had no buffer yet (the first render of its tree).
       (when (cdr missed)
         (vui--stream-request-rebuild handle))
+      ;; The edits of its nodes from the hooks of its rows, now that its
+      ;; nodes are bound to its text.  They write in place, above where
+      ;; the render goes on.
+      (when (cddr edits)
+        (vui--shifting-point
+          (vui--stream-run-waiting (nreverse (cddr edits)) t)))
       ;; The component that placed the stream records it: the stream's
       ;; text grows without a render of the component, and the
       ;; component-list patcher has to know (see `vui--instance-streams')
@@ -9189,10 +9216,28 @@ node that waited to be opened, and does not wait any more."
     node))
 
 (defun vui--stream-node-wait (node write)
-  "Make WRITE, an edit of NODE as a function, wait while NODE waits.
-Return non-nil when it waits (see `vui--stream-node-waiting')."
-  (and (vui--stream-node-waiting node)
-       (vui--stream-wait-for-row (vui--stream-node-handle node) write)))
+  "Make WRITE, an edit of NODE as a function, wait when it has to.
+It waits while NODE waits to be opened (see `vui--stream-node-waiting'),
+and while a render writes the stream of NODE from its items (see
+`vui--stream-render-edits').  Return non-nil when it waits."
+  (let ((handle (vui--stream-node-handle node)))
+    (or (and (vui--stream-node-waiting node)
+             (vui--stream-wait-for-row handle write))
+        (when-let* ((entry (assq handle vui--stream-render-edits))
+                    (cell (vui--stream-node-cell node))
+                    ;; Not written yet: at the item the render writes,
+                    ;; or below it
+                    ((>= (1- (length cell)) (cadr entry))))
+          (let ((instance vui--current-instance))
+            ;; An error is the hook's, as if the edit were made there
+            (push (lambda ()
+                    (condition-case err
+                        (funcall write)
+                      (error
+                       (vui--handle-error 'lifecycle "stream edit" err
+                                          instance))))
+                  (cddr entry)))
+          t))))
 
 (defun vui--stream-node-id (node)
   "Return the id of NODE's item, its step in the render path.

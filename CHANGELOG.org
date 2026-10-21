@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A hook of a =vui-stream= row can edit a node below the row while a
+  render of the tree writes the stream again. =vui-stream-append-to=,
+  =-update=, =-before=, =-after= and =-remove= did nothing then, in
+  the buffer and in the stream's items, as that node was not written
+  yet, and a =vui-stream-finalize= was undone. Such an edit now waits,
+  and is made once the stream is written.
+
 - A field next to a =vui-stream= row or an inline region stays a field
   when text is written at its edge. Its overlay covered the new text
   while it was written, and a row that unmounted itself in its first
