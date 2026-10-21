@@ -876,6 +876,122 @@ and cleanups in `vui-lifecycle-test--effects'."
             (expect vui-lifecycle-test--mounts :to-equal 1))
         (kill-buffer "*test-hook-unmount*")))))
 
+(defvar vui-lifecycle-test--unmounts nil
+  "The components whose `:on-unmount' ran, newest first.")
+
+(vui-defcomponent lifecycle-unmounting-leaver (name how)
+  "Unmounts its tree when it unmounts, HOW: `buffer' or `root'."
+  :on-unmount (progn
+                (push name vui-lifecycle-test--unmounts)
+                (if (eq how 'buffer)
+                    (vui-unmount "*test-leaver*")
+                  (vui-unmount (vui-get-instance "*test-leaver*"))))
+  :render (progn
+            (vui-use-effect ()
+              (lambda () (push (list 'cleanup name) vui-lifecycle-test--unmounts)))
+            (vui-text name)))
+
+(vui-defcomponent lifecycle-leaver-stay ()
+  :on-unmount (push "stay" vui-lifecycle-test--unmounts)
+  :render (vui-text "stay"))
+
+(vui-defcomponent lifecycle-leaver-root (how)
+  :state ((show t))
+  :on-unmount (push "root" vui-lifecycle-test--unmounts)
+  :render (vui-vstack
+           (when show
+             (vui-component 'lifecycle-unmounting-leaver
+                            :key 'leaver :name "leaver" :how how))
+           (vui-component 'lifecycle-leaver-stay :key 'stay)
+           (vui-button "hide" :on-click (lambda () (vui-set-state :show nil)))))
+
+(describe "a removed component whose on-unmount unmounts its tree"
+  ;; The render that removes it runs its hook, and the unmount of the
+  ;; tree walks the components still in the tree: it is one of them
+  (dolist (how '(buffer root))
+    (it (format "runs each hook once (unmounts the %s)" how)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'signal)
+            (vui-lifecycle-test--unmounts nil))
+        (save-window-excursion
+          (vui-mount (vui-component 'lifecycle-leaver-root :how how)
+                     "*test-leaver*"))
+        (unwind-protect
+            (with-current-buffer "*test-leaver*"
+              (goto-char (point-min))
+              (search-forward "hide")
+              (push-button (match-beginning 0))
+              ;; Once each, and no error from the hooks
+              (expect (sort (mapcar #'prin1-to-string
+                                    vui-lifecycle-test--unmounts)
+                            #'string<)
+                      :to-equal '("\"leaver\"" "\"root\"" "\"stay\""
+                                  "(cleanup \"leaver\")"))
+              (expect (vui-get-instance) :to-be nil)
+              (expect (buffer-string) :to-equal ""))
+          (kill-buffer "*test-leaver*"))))))
+
+(vui-defcomponent lifecycle-leaver-parent (how)
+  :state ((show t))
+  :on-update (push "parent-update" vui-lifecycle-test--unmounts)
+  :on-unmount (push "parent" vui-lifecycle-test--unmounts)
+  :render (vui-vstack
+           (when show
+             (vui-component 'lifecycle-unmounting-leaver
+                            :key 'leaver :name "leaver" :how how))
+           (vui-button "hide" :on-click (lambda () (vui-set-state :show nil)))))
+
+(vui-defcomponent lifecycle-leaver-boom ()
+  :render (error "Boom"))
+
+(vui-defcomponent lifecycle-leaver-boundary-root ()
+  :state ((fail nil))
+  :render (vui-vstack
+           (vui-error-boundary
+            :id 'leaver
+            :fallback (lambda (_e) (vui-text "fallback"))
+            :children (list (when fail
+                              (vui-component 'lifecycle-unmounting-leaver
+                                             :name "leaver" :how 'buffer))
+                            (when fail (vui-component 'lifecycle-leaver-boom))))
+           (vui-component 'lifecycle-leaver-stay)
+           (vui-button "fail" :on-click (lambda () (vui-set-state :fail t)))))
+
+(describe "a render whose tree a removed component unmounts"
+  ;; The render stops once its tree is gone
+  (it "runs no hook of the parent after its on-unmount"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lifecycle-test--unmounts nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-leaver-parent :how 'buffer)
+                   "*test-leaver*"))
+      (unwind-protect
+          (with-current-buffer "*test-leaver*"
+            (goto-char (point-min))
+            (search-forward "hide")
+            (push-button (match-beginning 0))
+            (expect (reverse vui-lifecycle-test--unmounts)
+                    :to-equal '((cleanup "leaver") "leaver" "parent"))
+            (expect (buffer-string) :to-equal ""))
+        (kill-buffer "*test-leaver*"))))
+
+  (it "writes nothing after an error boundary drops the component"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lifecycle-test--unmounts nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'lifecycle-leaver-boundary-root)
+                   "*test-leaver*"))
+      (unwind-protect
+          (with-current-buffer "*test-leaver*"
+            (goto-char (point-min))
+            (search-forward "fail")
+            (push-button (match-beginning 0))
+            (expect (vui-get-instance) :to-be nil)
+            (expect (buffer-string) :to-equal ""))
+        (kill-buffer "*test-leaver*")))))
+
 (vui-defcomponent lifecycle-effect-unmount-first ()
   :render (vui-vstack
            (vui-component 'lifecycle-unmounting-effect :go t)

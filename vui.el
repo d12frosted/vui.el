@@ -5535,6 +5535,8 @@ its tree renders with it.  See `vui--render-component'."
             (vui--shifting-point
               (vui--call-unmount-recursive old-child))))
         (setf (vui-instance-children instance) new-children)
+        ;; Such a hook can unmount the tree: the render stops then
+        (vui--stop-if-unmounted)
         ;; Record the contexts this instance's whole subtree depends on:
         ;; its own reads plus every child's recorded set.  Used only to
         ;; decide whether the instance may bail out of a future re-render,
@@ -5605,13 +5607,25 @@ the render that removed INSTANCE to that buffer."
   (save-current-buffer
     (vui--call-unmount-recursive-1 instance)))
 
+(defvar vui--unmounting-instances nil
+  "The instances whose unmount runs now, innermost first.
+A hook or cleanup of one of them can unmount its whole tree.  That
+unmount walks the instances still in the tree and leaves out those in
+this list: the unmount that already runs them finishes them (see
+`vui--call-unmount-recursive-1').")
+
 (defun vui--call-unmount-recursive-1 (instance)
   "Do the work of `vui--call-unmount-recursive' for INSTANCE.
 An instance unmounted already is left alone: an error boundary drops a
 component that mounted in a child, and then the child goes with that
-component in it (see `vui--drop-created')."
-  (unless (eq (vui-instance-mounted-p instance) 'unmounted)
-    (vui--call-unmount-recursive-2 instance)))
+component in it (see `vui--drop-created').  So is one whose unmount
+runs now: a hook or cleanup of it, or of a component in it, unmounted
+its tree (see `vui--unmounting-instances')."
+  (unless (or (eq (vui-instance-mounted-p instance) 'unmounted)
+              (memq instance vui--unmounting-instances))
+    (let ((vui--unmounting-instances
+           (cons instance vui--unmounting-instances)))
+      (vui--call-unmount-recursive-2 instance))))
 
 (defun vui--call-unmount-recursive-2 (instance)
   "Unmount INSTANCE and its children; see `vui--call-unmount-recursive-1'."
@@ -10764,6 +10778,8 @@ is written."
                (setcar vui--created-instances created)
                (vui--shifting-point
                  (vui--drop-created failed created)))
+             ;; A hook of one of them can unmount the tree
+             (vui--stop-if-unmounted)
              ;; Store the error for this boundary
              (puthash boundary-key err table)
              ;; Call on-error callback if provided.  It can unmount the

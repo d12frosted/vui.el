@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An =:on-unmount= (or an effect cleanup) of a component a render
+  removes can unmount its whole tree. The unmount of the tree found the
+  component still among the children, and ran its hook again, over and
+  over, until Emacs stopped it at =max-lisp-eval-depth=. The render then
+  stops: the parent's =:on-update= does not run after its =:on-unmount=,
+  and an error boundary that drops such a component writes nothing more.
+
 - A child's new state shows when its root gives the same tree object as
   last time (a memoized tree, or a root whose =:should-update= says
   no). The render of the root skipped the commit of such a tree, so
