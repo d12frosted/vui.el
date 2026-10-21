@@ -8477,6 +8477,30 @@ silently dropping every subsequent streamed append."
         (push handle vui--rendered-streams)))
     (set-marker start nil)))
 
+(defun vui--boundary-after-streams (start)
+  "Move START, the marker of an error boundary's start, past the streams.
+A stream that starts before START and ends after it, at or before
+point, took items there while the boundary rendered: a hook of a child
+appended to it in place, at its end, which was START.  That text is the
+stream's, before the text of the children, so the boundary's text
+starts after it.  START goes to the furthest end of such a stream; each
+stream is compared with START as it was.  Call with point at the end of
+the boundary's text."
+  (let ((from (marker-position start))
+        (to nil))
+    (dolist (handle vui--streams)
+      (let ((s (vui-stream-handle-region-start handle))
+            (e (vui-stream-handle-region-end handle)))
+        (when (and s e (marker-position s) (marker-position e)
+                   (eq (marker-buffer e) (current-buffer))
+                   (< s from) (> e from)
+                   ;; Not a stream that holds the boundary in one of its
+                   ;; rows
+                   (<= e (point)))
+          (setq to (max (or to 0) e)))))
+    (when to
+      (set-marker start to))))
+
 (defun vui--stream-park (handle)
   "Leave the markers of HANDLE pointing nowhere: its text is gone.
 The markers of the stream, of its component rows and of its live nodes
@@ -10872,7 +10896,14 @@ is written."
           (condition-case err
               (vui--render-children children layout)
             (error
-             (let ((end (max start (point))))
+             ;; A stream that ends where the boundary starts takes the
+             ;; items a hook of the children appended in place: they are
+             ;; at its end, before the children's text, and stay.  The
+             ;; streams the children wrote still go, from where they
+             ;; started.
+             (let ((children-start (copy-marker start))
+                   (end (progn (vui--boundary-after-streams start)
+                               (max start (point)))))
                ;; The fields the render wrote in that text are not set
                ;; up yet: they wait in `widget-field-new' for
                ;; `widget-setup', with no overlay.  Those a stream wrote
@@ -10880,13 +10911,14 @@ is written."
                ;; `vui--setup-fields-written').  A field around the text
                ;; is set up, and stays.
                (vui--forget-fields-in start end)
-               (vui--park-streams start end)
+               (vui--park-streams children-start end)
+               (set-marker children-start nil)
                (delete-region start end)
                ;; What the hooks of the children wrote in that text went
                ;; with it: the text before point moved only as far as
                ;; the start of the boundary did (see `vui--hook-shift').
-               ;; Text a hook wrote right at the start cannot be told
-               ;; from the children's, and goes too
+               ;; Other text a hook wrote right at the start cannot be
+               ;; told from the children's, and goes too
                (setq vui--hook-shift (+ shift (- start start-pos))))
              (goto-char start)
              ;; A sticky table in that text goes too
@@ -10912,11 +10944,12 @@ is written."
                (vui--shifting-point
                  (funcall on-error err))
                (vui--stop-if-unmounted))
-             ;; Render fallback
+             ;; Render fallback, out of a field that ends where it starts
              (when fallback
                (let ((fallback-vnode (funcall fallback err))
                      (vui--render-path fallback-path))
-                 (vui--render-children-1 fallback-vnode layout)))))
+                 (vui--keeping-fields (point)
+                   (vui--render-children-1 fallback-vnode layout))))))
           (set-marker start nil)))))
 
    ;; String shorthand

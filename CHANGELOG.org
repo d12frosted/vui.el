@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An error boundary that catches no longer drops an item that a hook of
+  its children appended to a =vui-stream= ending right where the
+  boundary starts (a fragment with the stream, then the boundary). The
+  text of the item went with the children's while the stream kept the
+  item, so it came back with the next render of the stream.
+
 - A hook of a =vui-stream= row can edit a node below the row while a
   render of the tree writes the stream again. =vui-stream-append-to=,
   =-update=, =-before=, =-after= and =-remove= did nothing then, in

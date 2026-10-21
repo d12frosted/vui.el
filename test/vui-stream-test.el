@@ -1062,5 +1062,135 @@ when mounted (see `vui-st-silent-appender'), and B."
           (vui-unmount instance)
           (kill-buffer "*vui-st-boundary-at-point*"))))))
 
+(vui-defcomponent vui-st-text-appender ()
+  "Render \"C\"; append \"added\" when mounted."
+  :on-mount (vui-stream-append vui-st--at-point-stream (vui-text "added"))
+  :render (vui-text "C"))
+
+(describe "a hook that appends to a stream ending where an error boundary starts"
+  ;; The child renders text before its hook appends: the item goes at
+  ;; the end of the stream, which is the start of the boundary, before
+  ;; that text.  It is the stream's, and stays when the boundary drops
+  ;; the text of its children.
+  (dolist (separator '("\n" ""))
+    (it (format "keeps the item when the boundary catches (separator %S)"
+                separator)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'ignore)
+            (sep separator))
+        (setq vui-st--at-point-stream (vui-make-stream separator))
+        (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+        (vui-defcomponent vui-st-boundary-text-root ()
+          :render (vui-vstack
+                   (vui-fragment
+                    (vui-stream vui-st--at-point-stream)
+                    (vui-error-boundary
+                     :fallback (lambda (_) (vui-text "FB"))
+                     :children (list (vui-component 'vui-st-text-appender)
+                                     (vui-component 'vui-st-boom)))
+                    "x")
+                   "y"))
+        (let ((instance (vui-mount (vui-component 'vui-st-boundary-text-root)
+                                   "*vui-st-boundary-text*")))
+          (unwind-protect
+              (with-current-buffer "*vui-st-boundary-text*"
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal (concat "first" sep "addedFBx\ny"))
+                (expect (length (vui-stream-handle-items-rev
+                                 vui-st--at-point-stream))
+                        :to-equal 2)
+                (vui-stream-append vui-st--at-point-stream (vui-text "later"))
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal (concat "first" sep "added" sep "laterFBx\ny"))
+                (let ((root (vui-get-instance)))
+                  (setf (vui-instance-render-record root) nil)
+                  (vui-rerender root))
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal (concat "first" sep "added" sep "laterFBx\ny")))
+            (vui-unmount instance)
+            (kill-buffer "*vui-st-boundary-text*")))))))
+
+(defvar vui-st--inner-stream nil
+  "A stream inside the error boundary of `vui-st-boundary-inner-root'.")
+
+(vui-defcomponent vui-st-two-appender ()
+  "Render \"C\"; append to both streams when mounted."
+  :on-mount (progn
+              (vui-stream-append vui-st--at-point-stream (vui-text "added"))
+              (vui-stream-append vui-st--inner-stream (vui-text "in2")))
+  :render (vui-text "C"))
+
+(vui-defcomponent vui-st-field-appender ()
+  "Render \"C\"; append an item with a field when mounted."
+  :on-mount (vui-stream-append vui-st--at-point-stream
+                               (vui-fragment (vui-text "q:")
+                                             (vui-field :value "ab" :size 3)))
+  :render (vui-text "C"))
+
+(describe "a boundary that catches, after a stream that took a hook's item"
+  (it "drops a stream it holds"
+    ;; That stream started where the boundary starts: it goes with the
+    ;; children's text, and its edits write nothing
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore))
+      (setq vui-st--at-point-stream (vui-make-stream "")
+            vui-st--inner-stream (vui-make-stream ""))
+      (vui-stream-append vui-st--at-point-stream (vui-text "out"))
+      (vui-stream-append vui-st--inner-stream (vui-text "in"))
+      (vui-defcomponent vui-st-boundary-inner-root ()
+        :render (vui-vstack
+                 (vui-fragment
+                  (vui-stream vui-st--at-point-stream)
+                  (vui-error-boundary
+                   :fallback (lambda (_) (vui-text "FB"))
+                   :children (list (vui-stream vui-st--inner-stream)
+                                   (vui-component 'vui-st-two-appender)
+                                   (vui-component 'vui-st-boom)))
+                  "x")
+                 "y"))
+      (let ((instance (vui-mount (vui-component 'vui-st-boundary-inner-root)
+                                 "*vui-st-boundary-inner*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-boundary-inner*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "outaddedFBx\ny")
+              (vui-stream-append vui-st--inner-stream (vui-text "L"))
+              (vui-stream-append vui-st--at-point-stream (vui-text "M"))
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "outaddedMFBx\ny"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-boundary-inner*")))))
+
+  (it "keeps the field of the item out of the fallback"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore))
+      (setq vui-st--at-point-stream (vui-make-stream ""))
+      (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+      (vui-defcomponent vui-st-boundary-field-root ()
+        :render (vui-vstack
+                 (vui-fragment
+                  (vui-stream vui-st--at-point-stream)
+                  (vui-error-boundary
+                   :fallback (lambda (_) (vui-text "FB"))
+                   :children (list (vui-component 'vui-st-field-appender)
+                                   (vui-component 'vui-st-boom)))
+                  "x")
+                 "y"))
+      (let ((instance (vui-mount (vui-component 'vui-st-boundary-field-root)
+                                 "*vui-st-boundary-field*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-boundary-field*"
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "firstq:ab FBx\ny")
+              (goto-char (point-min))
+              (search-forward "ab")
+              (insert "Z")
+              (expect (widget-value (widget-field-at (1- (point))))
+                      :to-equal "abZ")
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "firstq:abZFBx\ny"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-boundary-field*"))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
