@@ -193,6 +193,152 @@
               (expect render-count :to-equal 1))
           (kill-buffer "*test-no-change*"))))))
 
+(vui-defcomponent batch-ready-on-mount ()
+  :state ((ready nil))
+  :on-mount (vui-set-state :ready t)
+  :render (vui-text (if ready "ready" "not-ready")))
+
+(vui-defcomponent batch-ready-by-effect ()
+  :state ((ready nil))
+  :render (progn
+            (vui-use-effect ()
+              (vui-set-state :ready t))
+            (vui-text (if ready "ready" "not-ready"))))
+
+(vui-defcomponent batch-counter (name)
+  :state ((n 0))
+  :render (vui-text (format "%s%d" name n)))
+
+(describe "vui-batch and the trees it renders"
+  ;; Each tree that a state change in the batch asks to render renders
+  ;; once at its end, not only the tree of the code that started it
+  (dolist (component '(batch-ready-on-mount batch-ready-by-effect))
+    (it (format "renders a tree mounted in it (%s)" component)
+      (let ((vui-render-delay nil))
+        (unwind-protect
+            (progn
+              (vui-batch
+                (vui-mount (vui-component component) "*test-batch-mount*"))
+              (expect (with-current-buffer "*test-batch-mount*"
+                        (buffer-string))
+                      :to-equal "ready"))
+          (kill-buffer "*test-batch-mount*")))))
+
+  (it "renders a tree mounted in it with a render delay"
+    (let ((vui-render-delay 0.01))
+      (unwind-protect
+          (progn
+            (vui-batch
+              (vui-mount (vui-component 'batch-ready-on-mount)
+                         "*test-batch-mount*"))
+            (vui-test--wait-for-render (vui-get-instance "*test-batch-mount*"))
+            (expect (with-current-buffer "*test-batch-mount*"
+                      (buffer-string))
+                    :to-equal "ready"))
+        (kill-buffer "*test-batch-mount*"))))
+
+  (it "renders a tree that a handler of another tree mounts in it"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent batch-mounting-button ()
+        :render (vui-button "go"
+                  :on-click (lambda ()
+                              (vui-batch
+                                (vui-mount (vui-component 'batch-ready-on-mount)
+                                           "*test-batch-mount*")))))
+      (save-window-excursion
+        (vui-mount (vui-component 'batch-mounting-button) "*test-batch-button*"))
+      (unwind-protect
+          (progn
+            (with-current-buffer "*test-batch-button*"
+              (save-window-excursion
+                (push-button (point-min))))
+            (expect (with-current-buffer "*test-batch-mount*" (buffer-string))
+                    :to-equal "ready"))
+        (kill-buffer "*test-batch-button*")
+        (when (get-buffer "*test-batch-mount*")
+          (kill-buffer "*test-batch-mount*")))))
+
+  (it "renders each tree whose state it changes"
+    (let ((vui-render-delay nil))
+      (let ((a (vui-mount (vui-component 'batch-counter :name "a")
+                          "*test-batch-a*"))
+            (b (vui-mount (vui-component 'batch-counter :name "b")
+                          "*test-batch-b*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer "*test-batch-a*"
+                (vui-batch
+                  (let ((vui--current-instance a))
+                    (vui-set-state :n 1))
+                  (with-current-buffer "*test-batch-b*"
+                    (let ((vui--current-instance b))
+                      (vui-set-state :n 1)))))
+              (expect (with-current-buffer "*test-batch-a*" (buffer-string))
+                      :to-equal "a1")
+              (expect (with-current-buffer "*test-batch-b*" (buffer-string))
+                      :to-equal "b1"))
+          (kill-buffer "*test-batch-a*")
+          (kill-buffer "*test-batch-b*")))))
+
+  (it "renders each tree once, in the order they asked"
+    (let ((vui-render-delay nil)
+          (renders nil))
+      (vui-defcomponent batch-logged (name)
+        :state ((n 0))
+        :render (progn (push name renders)
+                       (vui-text (format "%s%d" name n))))
+      (let ((a (vui-mount (vui-component 'batch-logged :name "a")
+                          "*test-batch-a*"))
+            (b (vui-mount (vui-component 'batch-logged :name "b")
+                          "*test-batch-b*")))
+        (unwind-protect
+            (cl-flet ((set (instance value)
+                        (with-current-buffer (vui-instance-buffer instance)
+                          (let ((vui--current-instance instance))
+                            (vui-set-state :n value)))))
+              (setq renders nil)
+              (vui-batch (set b 1) (set a 1) (set b 2))
+              (expect (reverse renders) :to-equal '("b" "a")))
+          (kill-buffer "*test-batch-a*")
+          (kill-buffer "*test-batch-b*")))))
+
+  (it "leaves alone a tree unmounted in it"
+    (let ((vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent batch-counted ()
+        :state ((n 0))
+        :render (progn (cl-incf renders) (vui-text (format "%d" n))))
+      (let ((a (vui-mount (vui-component 'batch-counted) "*test-batch-a*")))
+        (unwind-protect
+            (with-current-buffer "*test-batch-a*"
+              (setq renders 0)
+              (vui-batch
+                (let ((vui--current-instance a))
+                  (vui-set-state :n 1))
+                (vui-unmount "*test-batch-a*"))
+              (expect renders :to-equal 0))
+          (kill-buffer "*test-batch-a*")))))
+
+  (it "renders the other trees when the render of one signals"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent batch-failing ()
+        :state ((n 0))
+        :render (if (> n 0) (error "Boom") (vui-text "ok")))
+      (let ((x (vui-mount (vui-component 'batch-failing) "*test-batch-a*"))
+            (b (vui-mount (vui-component 'batch-counter :name "b")
+                          "*test-batch-b*")))
+        (unwind-protect
+            (cl-flet ((set (instance)
+                        (with-current-buffer (vui-instance-buffer instance)
+                          (let ((vui--current-instance instance))
+                            (vui-set-state :n 1)))))
+              (expect (vui-batch (set x) (set b)) :to-throw 'error)
+              (expect (with-current-buffer "*test-batch-b*" (buffer-string))
+                      :to-equal "b1")
+              (expect vui--batch-roots :to-be nil))
+          (kill-buffer "*test-batch-a*")
+          (kill-buffer "*test-batch-b*"))))))
+
 (describe "vui-flush-sync"
   (it "forces immediate render"
     (let ((vui-render-delay 10)  ; Long delay

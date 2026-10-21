@@ -2079,7 +2079,15 @@ edit of a field finds the markers of the streams around it here too
   "Current nesting depth of `vui-batch' calls.")
 
 (defvar vui--render-pending-p nil
-  "Non-nil if a re-render is pending (during batched updates).")
+  "Non-nil if a re-render is pending (during batched updates).
+Code compiled with an older `vui-batch' reads it.")
+
+(defvar vui--batch-roots nil
+  "The roots whose render the outermost `vui-batch' holds.
+A root is added when a state change in the batch asks it to render:
+the root of the code that started the batch, a tree mounted in it, or
+a tree in another buffer.  The list is in reverse order of the first
+request of each root.")
 
 (defcustom vui-render-delay 0.01
   "Seconds to wait before rendering when using deferred rendering.
@@ -2315,7 +2323,14 @@ Otherwise, render immediately or after delay based on config."
     (when root
       (if (> vui--batch-depth 0)
           ;; Inside a batch - just mark as pending
-          (setq vui--render-pending-p t)
+          (progn
+            ;; The first request of a batch: the list can hold the
+            ;; roots of a batch that code compiled with an older
+            ;; `vui-batch' ended, which does not empty it
+            (unless vui--render-pending-p
+              (setq vui--batch-roots nil))
+            (setq vui--render-pending-p t)
+            (cl-pushnew root vui--batch-roots :test #'eq))
         ;; Not in a batch - render based on config
         (if vui-render-delay
             ;; Deferred rendering
@@ -2349,7 +2364,7 @@ cancels another root's pending render."
              (vui--rerender-instance root))))))
 
 (defmacro vui-batch (&rest body)
-  "Batch state updates in BODY into a single re-render.
+  "Batch state updates in BODY into one re-render of each tree they change.
 
 Use this when making multiple state changes that should
 result in only one re-render, for better performance.
@@ -2358,22 +2373,38 @@ Example:
   (vui-batch
     (vui-set-state \\='count (1+ count))
     (vui-set-state \\='name \"Bob\"))"
-  ;; Capture root at start before BODY runs (BODY might switch buffers)
-  `(let ((vui--batch-depth (1+ vui--batch-depth))
-         (vui--batch-root (vui--get-root-instance)))
-    (unwind-protect
-        (progn ,@body)
-      (cl-decf vui--batch-depth)
-      (when (and (= vui--batch-depth 0)
-             vui--render-pending-p
-             vui--batch-root)
-       ;; End of outermost batch - schedule deferred re-render
-       ;; Using deferred rendering avoids re-rendering while still
-       ;; inside a widget callback, which can cause issues
-       (setq vui--render-pending-p nil)
-       (if vui-render-delay
-           (vui--schedule-deferred-render-for vui--batch-root)
-         (vui--rerender-instance vui--batch-root))))))
+  `(let ((vui--batch-depth (1+ vui--batch-depth)))
+     (unwind-protect
+         (progn ,@body)
+       (cl-decf vui--batch-depth)
+       (when (= vui--batch-depth 0)
+         (vui--end-batch)))))
+
+(defun vui--end-batch ()
+  "Render the roots the outermost `vui-batch' held, once each.
+They render after `vui-render-delay' when it is non-nil, in the order
+they first asked to.  A root unmounted since is left alone.  When the
+render of one signals, the others still render, and the first error is
+signalled after them.  A quit stops the renders."
+  (let ((roots (and vui--render-pending-p (nreverse vui--batch-roots)))
+        (failure nil))
+    (setq vui--batch-roots nil
+          vui--render-pending-p nil)
+    (dolist (root roots)
+      (when (vui-instance-buffer root)
+        (condition-case err
+            (if vui-render-delay
+                (vui--schedule-deferred-render-for root)
+              (vui--rerender-instance root))
+          (error
+           (if failure
+               (display-warning
+                'vui (format "VUI re-render failed: %s"
+                             (error-message-string err))
+                :warning)
+             (setq failure err))))))
+    (when failure
+      (signal (car failure) (cdr failure)))))
 
 (defun vui-flush-sync ()
   "Force immediate re-render of the current root, bypassing its pending timer.

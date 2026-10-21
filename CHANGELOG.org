@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-batch= renders each tree that a state change in it asks to
+  render. It rendered only the tree of the code that started it, taken
+  when the batch started: a tree mounted in the batch, whose hooks set
+  its state, showed its first state until some later render, and a
+  state change in another buffer's tree did not show.
+
 - An =:on-unmount= (or an effect cleanup) of a component a render
   removes can unmount its whole tree. The unmount of the tree found the
   component still among the children, and ran its hook again, over and
