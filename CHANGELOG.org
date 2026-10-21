@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A field next to a =vui-stream= row or an inline region stays a field
+  when text is written at its edge. Its overlay covered the new text
+  while it was written, and a row that unmounted itself in its first
+  render removed it, as did the first render of a row appended right
+  before a field that follows the stream. The field could not be
+  edited any more.
+
 - =vui-batch= renders each tree that a state change in it asks to
   render. It rendered only the tree of the code that started it, taken
   when the batch started: a tree mounted in the batch, whose hooks set

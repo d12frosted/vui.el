@@ -4314,8 +4314,10 @@ buffer."
                     (done nil))
                 (vui--undo-writing pos end-pos
                   (save-excursion
-                    (vui--remove-widget-overlays pos end-pos)
-                    (vui--forget-region-fields pos end-pos)
+                    ;; Not the fields of the text around the region,
+                    ;; which can cover the region's edges
+                    (vui--remove-widget-overlays pos end-pos t)
+                    (vui--forget-region-fields pos end-pos t)
                     (vui--park-streams pos end-pos instance)
                     ;; The hooks of the render can move the region, or
                     ;; unmount it, which ends the render there
@@ -5105,16 +5107,22 @@ them."
       (set-window-point win pos))
     pos))
 
-(defun vui--remove-widget-overlays (&optional start end)
+(defun vui--remove-widget-overlays (&optional start end own)
   "Remove widget-related overlays between START and END.
 Bounds default to the whole buffer.  Preserves unrelated overlays
-like hl-line."
-  (dolist (ov (overlays-in (or start (point-min)) (or end (point-max))))
-    (when (or (overlay-get ov 'button)
-              (overlay-get ov 'widget)
-              (overlay-get ov 'field)
-              (overlay-get ov 'vui-placeholder))
-      (delete-overlay ov))))
+like hl-line.  With OWN non-nil, only the overlays that are all in the
+text go: one that starts before START or ends after END is the field
+of the text around it, which can cover the text's edge while text is
+inserted there (see `vui--keeping-fields')."
+  (let ((start (or start (point-min))))
+    (dolist (ov (overlays-in start (or end (point-max))))
+      (when (and (or (overlay-get ov 'button)
+                     (overlay-get ov 'widget)
+                     (overlay-get ov 'field)
+                     (overlay-get ov 'vui-placeholder))
+                 (not (and own (or (< (overlay-start ov) start)
+                                   (and end (> (overlay-end ov) end))))))
+        (delete-overlay ov)))))
 
 (defun vui--apply-region-props (start end face keymap)
   "Apply container-level FACE and KEYMAP to the region START..END.
@@ -5248,7 +5256,7 @@ INSTANCE."
       (setq tail (cdr tail)))
     result))
 
-(defun vui--forget-region-fields (start end)
+(defun vui--forget-region-fields (start end &optional own)
   "Drop field-widget bookkeeping for fields between START and END.
 Field widgets whose text is about to be deleted would otherwise
 linger in `widget-field-list' with collapsed bounds, confusing
@@ -5257,12 +5265,17 @@ no longer exists are dropped as well.
 
 A field that starts at END is after the region and stays: it belongs
 to the text that follows, a field of the host buffer right after an
-inline region, or the first field of the next component."
+inline region, or the first field of the next component.  With OWN
+non-nil, so does a field that ends after END: it starts at the edge of
+the region, and covers the text that follows (see
+`vui--remove-widget-overlays')."
   (let ((in-region-p
          (lambda (widget)
            (let ((field-start (widget-field-start widget)))
              (or (null field-start)
-                 (and (>= field-start start) (< field-start end)))))))
+                 (and (>= field-start start) (< field-start end)
+                      (not (and own
+                                (> (widget-field-end widget) end)))))))))
     (setq widget-field-list (cl-remove-if in-region-p widget-field-list))
     (setq widget-field-new (cl-remove-if in-region-p widget-field-new))))
 
@@ -11183,8 +11196,12 @@ Returns INSTANCE, or nil if it was already unmounted."
                   (pos (car bounds))
                   (end-pos (cdr bounds)))
               (vui--undo-writing pos end-pos
-                (vui--remove-widget-overlays pos end-pos)
-                (vui--forget-region-fields pos end-pos)
+                ;; Not the fields of the text around the region, which
+                ;; can cover the region's edges: a row that unmounts
+                ;; itself in its first render does it while it is
+                ;; written next to that text
+                (vui--remove-widget-overlays pos end-pos t)
+                (vui--forget-region-fields pos end-pos t)
                 (vui--park-streams pos end-pos instance)
                 (delete-region pos end-pos))))
           ;; Put back the header line a sticky table header replaced

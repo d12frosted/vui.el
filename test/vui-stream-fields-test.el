@@ -230,4 +230,97 @@ STREAM is bound to its stream.  The stream holds one text item."
                 (list (widget-get (car widget-field-list)
                                   :field-overlay)))))))
 
+(vui-defcomponent vui-sf-self-unmounting ()
+  "Unmounts itself when it mounts."
+  :on-mount (vui-unmount vui--current-instance)
+  :render (vui-text "[gone]"))
+
+(vui-defcomponent vui-sf-field-around (stream)
+  "STREAM between two lines, with a field right after it."
+  :render (vui-vstack (vui-text "top")
+                      (vui-stream stream)
+                      (vui-field :value "after" :size 8)
+                      (vui-text "bottom")))
+
+(describe "a field next to a row that unmounts itself"
+  ;; The row's text is in the overlay of the field before it while it
+  ;; renders, and the unmount of the row takes its text away
+  (it "keeps the field of the last item"
+    (let* ((vui-render-delay nil)
+           (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-fragment (vui-text "in:")
+                                              (vui-field :value "item" :size 6)))
+      (let ((instance (vui-mount (vui-component 'vui-sf-field-around
+                                                :stream stream)
+                                 "*vui-sf*")))
+        (unwind-protect
+            (with-current-buffer "*vui-sf*"
+              (let ((before (vui-sf--fields)))
+                (vui-stream-append stream (vui-component 'vui-sf-self-unmounting))
+                (expect (buffer-string)
+                        :to-equal "top\nin:item  \nafter   \nbottom")
+                (expect (vui-sf--fields) :to-equal before)
+                (vui-sf--goto "ite")
+                (insert "X")
+                (expect (widget-value (widget-field-at (point)))
+                        :to-equal "iteXm")
+                (vui-sf--goto "aft")
+                (insert "Y")
+                (expect (widget-value (widget-field-at (point)))
+                        :to-equal "aftYer")))
+          (vui-unmount instance)
+          (kill-buffer "*vui-sf*"))))))
+
+(vui-defcomponent vui-sf-row ()
+  "A row."
+  :render (vui-text "[row]"))
+
+(vui-defcomponent vui-sf-field-touching (stream)
+  "STREAM with a field right after it, on the same line."
+  :render (vui-fragment (vui-text "top ")
+                        (vui-stream stream)
+                        (vui-field :value "after" :size 6)
+                        (vui-text " bottom")))
+
+(describe "a field right after a stream"
+  ;; The field starts where the stream ends, and the text appended there
+  ;; is in its overlay while it is written
+  (dolist (case '(("" vui-sf-self-unmounting "top aafter  bottom")
+                  ("\n" vui-sf-self-unmounting "top aafter  bottom")
+                  ("\n" vui-sf-row "top a\n[row]after  bottom")))
+    (it (format "stays when %s is appended (separator %S)"
+                (cadr case) (car case))
+      (let* ((vui-render-delay nil)
+             (stream (vui-make-stream (car case))))
+        (vui-stream-append stream (vui-text "a"))
+        (let ((instance (vui-mount (vui-component 'vui-sf-field-touching
+                                                  :stream stream)
+                                   "*vui-sf*")))
+          (unwind-protect
+              (with-current-buffer "*vui-sf*"
+                (vui-stream-append stream (vui-component (cadr case)))
+                (expect (buffer-string) :to-equal (caddr case))
+                (vui-sf--goto "aft")
+                (insert "Y")
+                (expect (widget-value (widget-field-at (point)))
+                        :to-equal "aftYer"))
+            (vui-unmount instance)
+            (kill-buffer "*vui-sf*")))))))
+
+(describe "a field of the host next to an inline region that unmounts itself"
+  (dolist (where '(ends starts))
+    (it (format "stays when it %s where the region starts" where)
+      (with-temp-buffer
+        (insert "HEAD ")
+        (let* ((pos (and (eq where 'starts) (point)))
+               (host (widget-create 'editable-field :size 4 "host")))
+          (unless pos
+            (setq pos (point)))
+          (insert "\nTAIL")
+          (widget-setup)
+          (vui-mount-inline (vui-component 'vui-sf-self-unmounting) pos)
+          (expect (buffer-string) :to-equal "HEAD host\nTAIL")
+          (expect (memq host widget-field-list) :to-be-truthy)
+          (expect (widget-field-start host) :to-equal 6))))))
+
 ;;; vui-stream-fields-test.el ends here
