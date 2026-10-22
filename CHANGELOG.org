@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component row appended to a =vui-stream= while a render runs (from
+  a hook) leaves no text behind when its first render, which waits for
+  that render, signals. Its separator and the text written before the
+  error stayed, and it stayed an item of the stream and an inline
+  instance of the buffer.
+
 - A container with a =:face= or a =:keymap= no longer puts it on an
   item that a hook of its children appended to a =vui-stream= ending
   right where the container starts (a fragment with the stream, then

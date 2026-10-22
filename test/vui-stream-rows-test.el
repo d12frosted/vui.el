@@ -1427,6 +1427,99 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect (buffer-string) :to-equal "top\na0\nb0\nX\nb1\npanel"))
         (kill-buffer "*test-failing-row*")))))
 
+(defvar vui-stream-rows-test--queued-stream nil
+  "The stream `vui-stream-rows-test-queuing-root' appends to when it mounts.")
+
+(vui-defcomponent vui-stream-rows-test-queuing-root (stream)
+  "Appends a row whose render fails to STREAM when it mounts: the
+render of the row waits for the render in progress."
+  :on-mount (vui-stream-append stream (vui-component
+                                       'vui-stream-rows-test-render-failing))
+  :render (vui-vstack (vui-text "top") (vui-stream stream) (vui-text "panel")))
+
+(defvar vui-stream-rows-test--queued-plan nil
+  "What `vui-stream-rows-test-plan-root' appends when it mounts.")
+
+(vui-defcomponent vui-stream-rows-test-ok-row ()
+  :render (vui-text "A"))
+
+(vui-defcomponent vui-stream-rows-test-plan-root (stream)
+  "Appends `vui-stream-rows-test--queued-plan' to STREAM when it mounts:
+the renders of the rows wait for the render in progress."
+  :on-mount (dolist (vnode vui-stream-rows-test--queued-plan)
+              (vui-stream-append stream vnode))
+  :render (vui-vstack (vui-text "top") (vui-stream stream) (vui-text "panel")))
+
+(describe "a stream row whose first render waits in the queue and signals"
+  (dolist (separator '("\n" ""))
+    (it (format "leaves the stream as it was (separator %S)" separator)
+      (let ((vui-render-delay nil)
+            (vui-stream-rows-test--render-log nil)
+            (stream (vui-make-stream separator)))
+        (vui-stream-append stream (vui-text "l0"))
+        (unwind-protect
+            (progn
+              (expect (save-window-excursion
+                        (vui-mount (vui-component
+                                    'vui-stream-rows-test-queuing-root
+                                    :stream stream)
+                                   "*test-failing-row*"))
+                      :to-throw 'error)
+              (with-current-buffer "*test-failing-row*"
+                (expect (buffer-string) :to-equal "top\nl0\npanel")
+                (expect vui--inline-instances :to-be nil)
+                (expect (vui-stream-handle-rows stream) :to-be nil)
+                (expect (length (vui-stream-handle-items-rev stream))
+                        :to-equal 1)
+                (expect (sort (mapcar #'symbol-name
+                                      vui-stream-rows-test--render-log)
+                              #'string<)
+                        :to-equal '("mount" "unmount"))
+                (vui-stream-append stream (vui-text "l1"))
+                (expect (buffer-string)
+                        :to-equal (concat "top\nl0" separator "l1\npanel"))
+                (vui-stream-update-last stream (vui-text "L1"))
+                (expect (buffer-string)
+                        :to-equal (concat "top\nl0" separator "L1\npanel"))))
+          (kill-buffer "*test-failing-row*")))))
+
+  (it "leaves the stream ending after a row appended with it"
+    (let ((vui-render-delay nil)
+          (vui-stream-rows-test--queued-plan
+           (list (vui-component 'vui-stream-rows-test-ok-row)
+                 (vui-component 'vui-stream-rows-test-render-failing)))
+          (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "l0"))
+      (unwind-protect
+          (progn
+            (expect (save-window-excursion
+                      (vui-mount (vui-component 'vui-stream-rows-test-plan-root
+                                                :stream stream)
+                                 "*test-failing-row*"))
+                    :to-throw 'error)
+            (with-current-buffer "*test-failing-row*"
+              (expect (buffer-string) :to-equal "top\nl0\nA\npanel")
+              (vui-stream-append stream (vui-text "l1"))
+              (expect (buffer-string) :to-equal "top\nl0\nA\nl1\npanel")))
+        (kill-buffer "*test-failing-row*"))))
+
+  (it "leaves nothing in the undo history of a host buffer"
+    (let ((vui-render-delay nil)
+          (vui-stream-rows-test--queued-plan
+           (list (vui-component 'vui-stream-rows-test-render-failing)))
+          (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "l0"))
+      (with-temp-buffer
+        (buffer-enable-undo)
+        (insert "HEAD\n\nTAIL")
+        (setq buffer-undo-list nil)
+        (expect (vui-mount-inline (vui-component 'vui-stream-rows-test-plan-root
+                                                 :stream stream)
+                                  6)
+                :to-throw 'error)
+        (expect buffer-undo-list :to-be nil)
+        (expect (buffer-string) :to-equal "HEAD\ntop\nl0\npanel\nTAIL")))))
+
 (defvar vui-stream-rows-test--rebuild-hooks nil
   "Alist of a place and the function its `:on-update' calls once.
 The places are the label of a `vui-stream-rows-test-hooked-row', `kid'

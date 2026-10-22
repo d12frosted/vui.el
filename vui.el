@@ -4248,6 +4248,7 @@ stream is written again with a render of the tree (see
           ;; (see `vui-stream-handle-measured')
           (vui--stream-request-rebuild stream)
         (let ((waiting (vui--stream-first-render-waiting instance))
+              (queued (vui--stream-queued-row instance))
               (done nil))
           (unwind-protect
               (progn
@@ -4255,9 +4256,17 @@ stream is written again with a render of the tree (see
                        (if waiting
                            (cons waiting vui--stream-mounting-rows)
                          vui--stream-mounting-rows)))
-                  (vui--widening (vui-instance-buffer instance)
-                                 (lambda () (vui--rerender-inline-1 instance))
-                                 instance))
+                  (condition-case err
+                      (vui--widening (vui-instance-buffer instance)
+                                     (lambda () (vui--rerender-inline-1 instance))
+                                     instance)
+                    (error
+                     (when queued
+                       (vui--stream-drop-queued-row instance queued))
+                     (signal (car err) (cdr err)))))
+                (when queued
+                  (set-marker (nth 1 queued) nil)
+                  (set-marker (nth 2 queued) nil))
                 (setq done t))
             (when waiting
               (vui--stream-run-waiting (nreverse (cdr waiting)) done))))))))
@@ -9636,6 +9645,81 @@ the stream shows its fallback with no row left behind."
         (vui--drop-created (car created) nil)
         (vui--drop-created (list row) nil)))
     (and (vui--stream-row-p row) row)))
+
+(defun vui--stream-queued-row (instance)
+  "Return where the first render of INSTANCE, a row, writes, or nil.
+When INSTANCE is about to render for the first time, a row that is in
+its stream already (its render waited in the queue), return (STREAM
+FROM TO): FROM is a marker where the separator before the row starts,
+and TO one that goes after what the render writes.  See
+`vui--stream-drop-queued-row'."
+  (let ((buffer (vui-instance-buffer instance))
+        (start (vui-instance-region-start instance)))
+    (when (and (not (vui-instance-mounted-p instance))
+               (vui-instance-base-path instance)
+               buffer (buffer-live-p buffer)
+               start (marker-position start))
+      (with-current-buffer buffer
+        (when-let* ((stream (vui--stream-of-row instance)))
+          (list stream
+                (copy-marker
+                 (max (point-min)
+                      (- start (length (vui-stream-handle-separator stream)))))
+                (copy-marker start t)))))))
+
+(defun vui--stream-drop-queued-row (row queued)
+  "Take ROW out of its stream: its first render signalled.
+QUEUED is from `vui--stream-queued-row'.  The render waited in the
+queue, so the row is an item of its stream already, with its separator
+written.  Its text goes, from the separator on, and the row is no item,
+row or inline instance any more.  A row whose render is done stays when
+one of its hooks signals, as a tree does."
+  (pcase-let ((`(,stream ,from ,to) queued))
+    (when (and (not (vui-instance-mounted-p row))
+               (buffer-live-p (marker-buffer from)))
+      (with-current-buffer (marker-buffer from)
+        (save-restriction
+        (widen)
+        (let ((inhibit-read-only t)
+              (inhibit-modification-hooks t)
+              (vui--undo-history (vui--undo-history))
+              (buffer-undo-list t)
+              (shared (eq (vui-stream-handle-region-end stream)
+                          (vui-instance-region-end row))))
+          (vui--undo-writing from to
+            (vui--remove-widget-overlays from to t)
+            (vui--forget-fields-in from to)
+            (vui--park-streams from to row)
+            (delete-region from to))
+          (setq vui--inline-instances (delq row vui--inline-instances))
+          (setf (vui-stream-handle-rows stream)
+                (delq row (vui-stream-handle-rows stream)))
+          (let ((cell (memq row (vui-stream-handle-items-rev stream))))
+            (when cell
+              (when (eq cell (vui-stream-handle-items-rev stream))
+                ;; Nothing marks where the item before starts
+                (let ((ls (vui-stream-handle-last-start stream)))
+                  (when ls (set-marker ls nil))))
+              (vui--stream-drop-item stream cell)))
+          ;; The end of the row was the end of the stream
+          (when shared
+            (let ((last (car (vui-stream-handle-items-rev stream))))
+              (setf (vui-stream-handle-region-end stream)
+                    (if (and (vui-instance-p last) (vui--inline-bounds last))
+                        (vui-instance-region-end last)
+                      (copy-marker from)))))
+          (dolist (node (vui-stream-handle-nodes stream))
+            (when (eq (vui--stream-node-instance node) row)
+              (setf (vui--stream-node-instance node) nil)))
+          (dolist (marker (list (vui-instance-region-start row)
+                                (vui-instance-region-end row)))
+            (when (markerp marker)
+              (set-marker marker nil)))
+          (setf (vui-instance-region-start row) nil
+                (vui-instance-region-end row) nil)
+          (vui--drop-created (list row) nil)))))
+    (set-marker from nil)
+    (set-marker to nil)))
 
 (defun vui-stream-open (handle vnode)
   "Append VNODE to HANDLE as a LIVE node and return that node.
