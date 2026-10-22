@@ -1609,5 +1609,70 @@ when mounted (see `vui-st-silent-appender'), and B."
           (when (get-buffer "*vui-st-b*")
             (kill-buffer "*vui-st-b*")))))))
 
+(defvar vui-st-other--mode 'direct
+  "How `vui-st-other-app' appends to `vui-st-other--stream' on mount.")
+
+(defvar vui-st-other--stream nil
+  "The stream `vui-st-other-root' shows.")
+
+(vui-defcomponent vui-st-other-inner ()
+  :on-mount (vui-stream-append vui-st-other--stream (vui-text "added"))
+  :render (vui-text "inner"))
+
+(vui-defcomponent vui-st-other-inner-update ()
+  :on-mount (progn
+              (vui-stream-append vui-st-other--stream (vui-text "add"))
+              (vui-stream-update-last vui-st-other--stream (vui-text "added")))
+  :render (vui-text "inner"))
+
+(vui-defcomponent vui-st-other-inner-effect ()
+  :render (progn
+            (vui-use-effect ()
+              (vui-stream-append vui-st-other--stream (vui-text "added")))
+            (vui-text "inner")))
+
+(vui-defcomponent vui-st-other-app ()
+  :on-mount (pcase vui-st-other--mode
+              ('direct
+               (vui-stream-append vui-st-other--stream (vui-text "added")))
+              ('mount
+               (vui-mount (vui-component 'vui-st-other-inner)
+                          "*vui-st-other-b*"))
+              ('effect
+               (vui-mount (vui-component 'vui-st-other-inner-effect)
+                          "*vui-st-other-b*"))
+              ('update
+               (vui-mount (vui-component 'vui-st-other-inner-update)
+                          "*vui-st-other-b*")))
+  :render (vui-fragment))
+
+(vui-defcomponent vui-st-other-root ()
+  :render (vui-vstack
+           (vui-fragment (vui-stream vui-st-other--stream)
+                         (vui-component 'vui-st-other-app)
+                         "x")
+           "y"))
+
+(describe "a hook that appends to a stream ending where a render writes"
+  ;; A hook of the first render mounts a tree in another buffer, and a
+  ;; hook of that tree appends to the stream, which ends where the first
+  ;; render writes: the render goes on after the item, as it does when
+  ;; its own hook appends
+  (dolist (mode '(direct mount effect update))
+    (it (format "puts the item where the stream ends (%s)" mode)
+      (let ((vui-render-delay nil)
+            (vui-st-other--mode mode)
+            (vui-st-other--stream (vui-make-stream)))
+        (vui-stream-append vui-st-other--stream (vui-text "first"))
+        (vui-mount (vui-component 'vui-st-other-root) "*vui-st-other-a*")
+        (unwind-protect
+            (with-current-buffer "*vui-st-other-a*"
+              (expect (buffer-string) :to-equal "first\naddedx\ny")
+              (vui-stream-append vui-st-other--stream (vui-text "later"))
+              (expect (buffer-string) :to-equal "first\nadded\nlaterx\ny"))
+          (kill-buffer "*vui-st-other-a*")
+          (when (get-buffer "*vui-st-other-b*")
+            (kill-buffer "*vui-st-other-b*")))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here

@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- When a hook mounts a tree in another buffer and a hook of that tree
+  appends to (or edits the end of) a =vui-stream= that ends where the
+  first render writes, the item now goes at the end of the stream.
+  Before, the first render wrote the rest of its text before the item,
+  so the item showed after it.
+
 - A =vui-flex= in an indented vstack gives the indent to the lines after
   the first of a multi-line child, as a box does. They started at column
   0: =(vui-vstack :indent 4 (vui-flex (vui-vstack "a" "a2") "b"))= gave
