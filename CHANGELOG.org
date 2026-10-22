@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= in an indented =vui-vstack= indents its items as the
+  vstack indents the children of a fragment: each item that starts a
+  line gets the indent, and so does each line of a layout or of a
+  component row. Before, only the first line of the stream got the
+  indent, in a render and in the edits made in place.
+
 - With =vui-lifecycle-error-handler= set to =signal=, an =:on-unmount=
   (or the cleanup an =:on-mount= returned) that signals while a render
   drops the components it created (the render signalled, an error

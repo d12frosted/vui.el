@@ -886,7 +886,8 @@ Maps boundary keys to caught errors.  Lazily initialized by
   base-path    ; Render path an inline instance starts from (stream rows only)
   regions      ; The inline regions around a stream row, innermost first
   providers    ; The context stack a stream row renders with (that of its stream)
-  measured)    ; Non-nil for a stream row in a layout that measures its stream
+  measured     ; Non-nil for a stream row in a layout that measures its stream
+  layout)      ; (INDENT INDENT-STR) of the vstack a stream row's stream is in
 
 ;; Registry of component definitions
 (defvar vui--component-registry (make-hash-table :test 'eq)
@@ -966,10 +967,11 @@ list: a hook can unmount another tree.")
 
 (defvar vui--children-layout nil
   "The indent a region or an error boundary gives its children, or nil.
-Bound by `vui--render-in-vstack' around a region or a boundary in an
-indented vstack, to (INDENT INDENT-STR FIRST); see
-`vui--render-children'.  The region or the boundary takes it at once,
-so that nothing under it sees it.")
+Bound by `vui--render-in-vstack' around a region, a boundary or a
+stream in an indented vstack, to (INDENT INDENT-STR FIRST); see
+`vui--render-children' and `vui--stream-render'.  The region, the
+boundary or the stream takes it at once, so that nothing under it sees
+it.")
 
 (defvar vui--in-measured-layout nil
   "Non-nil while a box, a table, a flex or a grid renders its children.
@@ -4554,7 +4556,9 @@ writes there goes into the region."
         ;; A field of the host buffer that ends or starts here is not
         ;; part of the region
         (vui--keeping-fields pos
-          (vui--render-instance instance))
+          ;; A stream row in an indented vstack renders in its indent
+          (vui--render-instance
+           instance nil (vui--stream-row-layout (vui-instance-layout instance))))
       (setq new-end-pos (marker-position new-end))
       (set-marker new-end nil)
       ;; Not when a hook unmounted INSTANCE: its region is gone then
@@ -8053,7 +8057,12 @@ MEASURED is non-nil when the stream was last rendered in a layout that
 measures its children (see `vui--in-measured-layout'): a box, say.  Its
 text changes that layout, so its edits do not write in place: they
 write the stream again, and so does a row of it that renders again on
-its own."
+its own.
+
+LAYOUT is (INDENT INDENT-STR) when the stream was last rendered in a
+vstack indented by INDENT, and nil otherwise.  Its items are written as
+that vstack writes the children of a fragment, in its last render and
+in place (see `vui--stream-render-item' and `vui--stream-row-layout')."
   buffer
   region-start
   region-end
@@ -8070,7 +8079,44 @@ its own."
   (context nil)
   (parent nil)
   (root nil)
-  (measured nil))
+  (measured nil)
+  (layout nil))
+
+(defun vui--stream-render-item (vnode layout)
+  "Render content item VNODE of a stream at point, in LAYOUT.
+LAYOUT is nil or (INDENT INDENT-STR), as in `vui-stream-handle-layout':
+in an indented vstack an item renders as a child of it.  One that
+starts a line, after a separator or an item that ends one, gets the
+indent on it; one that goes on from a line gets none (see
+`vui--render-in-vstack')."
+  (if layout
+      (vui--render-in-vstack vnode (nth 0 layout) (nth 1 layout)
+                             (if (bolp) nil 0))
+    (vui--render-vnode vnode)))
+
+(defun vui--stream-row-layout (layout)
+  "Return the layout a stream row renders its tree in, at point.
+LAYOUT is the layout of its stream, as in `vui-stream-handle-layout'.
+The row starts a line, or goes on from one, as a content item does
+\(see `vui--stream-render-item').  See `vui--render-instance'."
+  (and layout (list (nth 0 layout) (nth 1 layout) (if (bolp) nil 0))))
+
+(defun vui--stream-joins-lines-p (handle cell)
+  "Non-nil when an edit of the item in CELL can move the start of a line.
+In an indented vstack an item writes the indent of the line it starts
+\(see `vui--stream-render-item').  With an empty separator, whether the
+item after the one in CELL starts a line depends on how that one ends:
+an edit of it writes the stream again, so that the next item gets the
+indent it needs, or loses it.  Not for the last item, which has none
+after it.  CELL is a cell of `vui-stream-handle-items-rev'."
+  (and (vui-stream-handle-layout handle)
+       (equal (vui-stream-handle-separator handle) "")
+       (not (eq cell (vui-stream-handle-items-rev handle)))))
+
+(defvar vui--mounting-row-layout nil
+  "The layout of the stream a row that mounts now goes in, or nil.
+Bound by `vui--stream-append-row' around the mount of the row, and
+taken by `vui--mount-inline' (see `vui-instance-layout').")
 
 (defun vui--regions-ending-at (regions pos)
   "Return the end markers of REGIONS that end at POS, with their types.
@@ -8249,6 +8295,13 @@ the context providers around the stream, as if they were its children.
 This is also true for an item written in place by code under other
 providers (or under none), and for a component row that renders again
 on its own.
+
+In an indented vstack the stream writes its items as the vstack writes
+the children of a fragment: an item that starts a line gets the indent
+on it, and a layout or a component in an item gets it on each of its
+lines.  A newline in a text gets none, as for any text in the vstack.
+The vstack writes the indent of the first line before the stream, also
+when the first item writes nothing.
 
 A stream shows in one place at a time.  A render of it in a buffer
 while its text is in another live buffer signals an error; once that
@@ -8442,7 +8495,8 @@ the first time passes it, to drop them when that render does not finish
           ;; The row and what it holds belong to its stream: an error
           ;; boundary around the stream does not drop them
           (vui--created-instances created))
-      (vui--render-instance row))
+      (vui--render-instance row nil
+                            (vui--stream-row-layout (vui-instance-layout row))))
     ;; Around what the row wrote, with the insertion types of a region
     ;; with text or of an empty one (see `vui--inline-set-bounds').  The
     ;; render stopped writing at point, which its hooks do not move (see
@@ -8451,18 +8505,19 @@ the first time passes it, to drop them when that render does not finish
     (when (vui--stream-row-p row)
       (vui--inline-set-bounds row (marker-position start) (point)))))
 
-(defun vui--stream-measure-row (row)
+(defun vui--stream-measure-row (row layout)
   "Render what stream ROW renders when the stream is rebuilt, to measure it.
 ROW is not touched: this renders the tree a render of ROW would commit,
 as a measure pass does for any mounted component (see
-`vui--measure-instance-vtree')."
+`vui--measure-instance-vtree').  LAYOUT is the layout of the stream, as
+in `vui-stream-handle-layout'."
   (let* ((vnode (vui-vnode-component--create
                  :type (vui-component-def-name (vui-instance-def row))
                  :props (vui-instance-props row)))
          (vtree (vui--measure-instance-vtree row vnode))
          (vui--measure-live-parent row)
          (vui--child-index 0))
-    (vui--render-vnode vtree)))
+    (vui--stream-render-item vtree layout)))
 
 (defvar vui--stream-render-edits nil
   "The edits of nodes made while a render writes their stream, an alist.
@@ -8534,7 +8589,13 @@ pass), unless the tree there may not show it any more (see
       (error (concat "vui-stream: the stream shows in %s already; a stream"
                      " shows in one place at a time")
              (buffer-name other))))
-  (let* ((sep (vui-stream-handle-separator handle))
+  (let* (;; The indent of the vstack it is in, which it takes at once
+         ;; (see `vui--children-layout')
+         (layout (and vui--children-layout
+                      (list (nth 0 vui--children-layout)
+                            (nth 1 vui--children-layout))))
+         (vui--children-layout nil)
+         (sep (vui-stream-handle-separator handle))
          ;; A marker: the hooks of the rows can write or delete text
          ;; above the stream, or in the items written before them (see
          ;; `vui--hook-shift')
@@ -8572,6 +8633,9 @@ pass), unless the tree there may not show it any more (see
                                       (vui-vnode-component-p (car cell)))
                            collect (cons (1- (length cell)) node))))
          (index -1))
+    ;; Its edits in place write their items in the same layout
+    (unless vui--measuring-p
+      (setf (vui-stream-handle-layout handle) layout))
     (let ((vui--streams-in-render
            ;; The hooks of its rows edit it while it is written
            (if vui--measuring-p
@@ -8614,7 +8678,7 @@ pass), unless the tree there may not show it any more (see
                   last-start (point)
                   last-shift vui--hook-shift
                   last-row nil)
-            (vui--render-vnode item)
+            (vui--stream-render-item item layout)
             (when nodes
               (when-let* ((node (cdr (assq index nodes))))
                 (vui--stream-node-bind node (vui--shifted last-start last-shift)
@@ -8647,9 +8711,10 @@ pass), unless the tree there may not show it any more (see
                     last-shift vui--hook-shift
                     last-row item)
               (if vui--measuring-p
-                  (vui--stream-measure-row item)
+                  (vui--stream-measure-row item layout)
                 (when (eq (vui-instance-region-end item) old-end)
                   (setq shared t))
+                (setf (vui-instance-layout item) layout)
                 (vui--stream-reseat-row item vui--render-path)
                 ;; A hook of the row unmounted it in this render, before
                 ;; it had a region around its text: the text goes, with
@@ -9143,7 +9208,7 @@ stream is written again from its items."
   (lambda ()
     (condition-case nil
         (let ((inhibit-read-only t))
-          (vui--render-vnode vnode)
+          (vui--stream-render-item vnode (vui-stream-handle-layout handle))
           (set-marker end (point))
           (vui--stream-sync-end handle (point)))
       (error
@@ -9219,7 +9284,8 @@ last item of the stream, before anything is written."
                       nil
                     (insert (vui-stream-handle-separator handle))
                     (vui--stream-set-last-start handle (point) buf)
-                    (vui--render-vnode vnode))))
+                    (vui--stream-render-item
+                     vnode (vui-stream-handle-layout handle)))))
               ;; If the previous last item was a component row, END is that
               ;; row's own marker - do NOT move it (that would corrupt the
               ;; row's region); install a fresh marker.  Otherwise reuse the
@@ -9331,7 +9397,11 @@ tree does."
                                              ;; Its streams are in the regions
                                              ;; of this one
                                              (vui--enclosing-regions
-                                              (vui-stream-handle-enclosing handle)))
+                                              (vui-stream-handle-enclosing handle))
+                                             ;; It renders in the layout of
+                                             ;; the stream
+                                             (vui--mounting-row-layout
+                                              (vui-stream-handle-layout handle)))
                                          (vui--keeping-fields (point)
                                            (insert sep)
                                            ;; The hooks of the row can write at
@@ -9480,6 +9550,11 @@ row, or what the hook appended after it."
                               ;; otherwise leave the prefix's stale properties
                               ;; in the buffer.
                               (and (> (length n) (length o))
+                                   ;; An empty item wrote no indent, which
+                                   ;; the new text needs when it starts a
+                                   ;; line in an indented vstack
+                                   (or (> (length o) 0)
+                                       (null (vui-stream-handle-layout handle)))
                                    (vui--string-prefix-equal-including-properties-p o n)
                                    (substring n (length o)))))))
           (if (and node (vui--stream-node-start node)
@@ -9565,7 +9640,7 @@ row, or what the hook appended after it."
                               (vui--keeping-fields (point)
                                 (vui--stream-writing put-back
                                     (vui--stream-restore-item handle old end)
-                                  (vui--render-vnode vnode)))
+                                  (vui--stream-render-item vnode (vui-stream-handle-layout handle))))
                               (set-marker end (point))))))
                       ;; The old item may have had the last sticky table:
                       ;; no render of the root follows to put back the
@@ -9791,7 +9866,8 @@ the stream shows its fallback with no row left behind."
          (stopped nil))
     (setf (vui-instance-buffer row) (current-buffer)
           (vui-instance-region-start row) (copy-marker pos)
-          (vui-instance-region-end row) (copy-marker pos))
+          (vui-instance-region-end row) (copy-marker pos)
+          (vui-instance-layout row) (vui-stream-handle-layout handle))
     (vui--inline-register row pos t t)
     ;; Release component resources when the buffer is killed
     (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
@@ -10084,6 +10160,7 @@ written again, and the item becomes such a row (see `vui-stream-open')."
           (setq old (car cell))
           (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
         (if (or (vui--holds-component-p vnode) (vui-stream-handle-measured handle)
+                (vui--stream-joins-lines-p handle cell)
                 ;; Nothing marks the separators around a stream with no
                 ;; text: the tree lays them out (see `vui--stream-in-place-p')
                 (and (vui--stream-written-p handle)
@@ -10107,7 +10184,17 @@ written again, and the item becomes such a row (see `vui-stream-open')."
                       (vui--stream-writing
                           (lambda () (when cell (setcar cell old)))
                           nil
-                        (vui--render-vnode vnode)))
+                        (if (and cell (vui-vnode-text-p (car cell))
+                                 (vui-stream-handle-layout handle)
+                                 (< (vui--stream-node-start node) (point)))
+                            ;; Text that goes on the text of the node is
+                            ;; one text with it, which gets the indent of
+                            ;; its first line only
+                            (vui--render-vnode vnode)
+                          ;; A part of a fragment, as a render of the item
+                          ;; writes it
+                          (vui--stream-render-item
+                           vnode (vui-stream-handle-layout handle)))))
                     (set-marker end (point))
                     (vui--stream-sync-end handle (point))))))
             (vui--stream-relay-empty-transition handle was-empty node))))
@@ -10170,6 +10257,7 @@ content takes any VNODE (see `vui-stream-open')."
                     (and (vui--stream-written-p handle)
                          (not (vui--stream-in-place-p handle)))
                     (vui--holds-component-p vnode)
+                    (vui--stream-joins-lines-p handle cell)
                     (vui-stream-handle-measured handle))
                 ;; The stream is written again: an item that holds a
                 ;; component becomes a row (see `vui--stream-mount-row'), and
@@ -10195,7 +10283,7 @@ content takes any VNODE (see `vui-stream-open')."
                                 (lambda () (when cell (setcar cell old)))
                                 (and old
                                      (vui--stream-restore-item handle old end))
-                              (vui--render-vnode vnode)))
+                              (vui--stream-render-item vnode (vui-stream-handle-layout handle))))
                           (set-marker end (point))
                           (vui--stream-sync-end handle (point)))))
                     ;; As in `vui-stream-update-last'
@@ -10242,7 +10330,8 @@ screen.  A no-op returning nil if NODE is not live."
            ;; NODE is the last item when its cell heads items-rev.  Inserting
            ;; above it moves its start, so the handle's last-start (used by
            ;; `vui-stream-update-last') must follow to the re-seated start.
-           (last-p (eq cell (vui-stream-handle-items-rev handle))))
+           (last-p (eq cell (vui-stream-handle-items-rev handle)))
+           (first-p (null (cdr cell))))
       ;; A component node has the markers of its row, not its own
       (when (and buf (buffer-live-p buf)
                  (or (and start (marker-position start))
@@ -10263,6 +10352,13 @@ screen.  A no-op returning nil if NODE is not live."
           (if (or (vui--holds-component-p vnode)
                   (vui-stream-handle-measured handle)
                   (vui--stream-node-instance node)
+                  ;; In an indented vstack the vstack wrote the indent of
+                  ;; the first line, before the stream: an item that goes
+                  ;; above the first one takes that line, and the first
+                  ;; one needs an indent of its own.  With an empty
+                  ;; separator the new item can start a line, or end one.
+                  (and (vui-stream-handle-layout handle)
+                       (or first-p (equal sep "")))
                   ;; As in `vui-stream-append-to'.  Not during a render,
                   ;; which only queues that: the new node would have no
                   ;; place until it is written, and edits of it would be
@@ -10293,7 +10389,7 @@ screen.  A no-op returning nil if NODE is not live."
                               (vui--stream-drop-new-item
                                handle (vui--stream-node-cell new)))
                             nil
-                          (vui--render-vnode vnode))
+                          (vui--stream-render-item vnode (vui-stream-handle-layout handle)))
                         (let ((x-end (point)))
                           (insert sep)
                           ;; NODE's content now begins after the inserted
@@ -10355,6 +10451,7 @@ if NODE is not live."
           (if (or (vui--holds-component-p vnode)
                   (vui-stream-handle-measured handle)
                   (vui--stream-node-instance node)
+                  (vui--stream-joins-lines-p handle cell)
                   ;; As in `vui-stream-append-to'.  Not during a render,
                   ;; which only queues that: the new node would have no
                   ;; place until it is written, and edits of it would be
@@ -10387,7 +10484,7 @@ if NODE is not live."
                             nil
                           (insert sep)
                           (setq x-start (point))
-                          (vui--render-vnode vnode))
+                          (vui--stream-render-item vnode (vui-stream-handle-layout handle)))
                         (let ((x-end (point)))
                           (vui--stream-node-bind new x-start x-end buf)
                           (vui--stream-sync-end handle x-end)
@@ -10422,7 +10519,14 @@ if NODE is not live."
           (progn (when (vui--stream-row-p row)
                    (vui-unmount row))
                  (vui-stream-finalize node))
-        (if (and (vui-stream-handle-measured handle)
+        (if (and (or (vui-stream-handle-measured handle)
+                     ;; In an indented vstack the item after the first
+                     ;; one wrote an indent of its own, and the line of
+                     ;; the first one has the indent of the vstack (see
+                     ;; `vui-stream-before')
+                     (and (vui-stream-handle-layout handle)
+                          (null (cdr cell)) (not (eq cell head)))
+                     (vui--stream-joins-lines-p handle cell))
                  buf (buffer-live-p buf)
                  start (marker-position start) end (marker-position end))
             ;; In a layout that measures it: the stream is written again
@@ -10728,7 +10832,9 @@ subtracts it from its width.  A component gives it to
 its tree, which renders as it would if it were written in the
 component's place.  A fragment, a provider, a region or an error
 boundary gives it to each of its children, and a child that starts a
-line gets it on that line.  Anything else gets the indent before its
+line gets it on that line.  A stream does the same for its items,
+also for the ones it writes in place later (see
+`vui-stream-handle-layout').  Anything else gets the indent before its
 first line only.  A newline gets none: it ends a line, it does not
 start one.
 
@@ -10810,7 +10916,8 @@ it got is gone too, and nothing is left."
        ;; of their first line is written before them, as for a box: the
        ;; face of a region is not on it, and the fallback of a boundary
        ;; that caught an error goes after it.
-       ((or (vui-vnode-region-p child) (vui-vnode-error-boundary-p child))
+       ((or (vui-vnode-region-p child) (vui-vnode-error-boundary-p child)
+            (vui-vnode-stream-p child))
         (let ((vui--children-layout (list indent indent-str 0)))
           (vui--render-vnode child)))
        ;; Tables and boxes: render with indent, then add indent after
@@ -11783,7 +11890,8 @@ whatever they render (see `vui--stream-append-row')."
     ;; A stream row renders with the providers of its stream, which are
     ;; those of the edit that mounts it (see `vui--growing-excursion')
     (when base-path
-      (setf (vui-instance-providers instance) vui--context-stack))
+      (setf (vui-instance-providers instance) vui--context-stack
+            (vui-instance-layout instance) vui--mounting-row-layout))
     ;; An empty region until the first render, which may be queued:
     ;; both markers stay before text inserted at POS.  Every render
     ;; puts them around what it wrote (see `vui--inline-set-bounds').
