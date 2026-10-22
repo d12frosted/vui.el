@@ -90,6 +90,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A container with a =:face= or a =:keymap= no longer puts it on an
+  item that a hook of its children appended to a =vui-stream= ending
+  right where the container starts (a fragment with the stream, then
+  the container), or on the last item it wrote again. The item kept the
+  face until the next render of the tree. An error boundary there that
+  catches keeps such an item that was written again too, and the stream
+  stays in the buffer.
+
 - A component row appended to a =vui-stream= whose first render
   signals (its own render, or that of a component in it) leaves no
   text behind. Its separator and the text written before the error

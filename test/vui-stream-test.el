@@ -1353,5 +1353,136 @@ when mounted (see `vui-st-silent-appender'), and B."
           (vui-unmount instance)
           (kill-buffer "*vui-st-failing*"))))))
 
+(vui-defcomponent vui-st-faced-root (shape)
+  "The stream, then a faced container of SHAPE whose first child appends."
+  :render (vui-vstack
+           (vui-fragment
+            (vui-stream vui-st--at-point-stream)
+            (if (eq shape 'hstack)
+                (vui-hstack :face 'bold
+                            (vui-component 'vui-st-text-appender) (vui-text "z"))
+              (vui-vstack :face 'bold
+                          (vui-component 'vui-st-text-appender) (vui-text "z"))))
+           (vui-text "bot")))
+
+(defun vui-st--bold-text ()
+  "Return the text of the current buffer that is bold."
+  (let ((pos (point-min))
+        (acc nil))
+    (while (< pos (point-max))
+      (when (eq (get-text-property pos 'face) 'bold)
+        (push (char-after pos) acc))
+      (setq pos (1+ pos)))
+    (concat (nreverse acc))))
+
+(describe "a hook that appends to a stream ending where a faced container starts"
+  ;; The item is the stream's: the face of the container is not on it
+  (dolist (shape '(hstack vstack))
+    (dolist (separator '("\n" ""))
+      (it (format "keeps the face off the item (%s, separator %S)"
+                  shape separator)
+        (let ((vui-render-delay nil))
+          (setq vui-st--at-point-stream (vui-make-stream separator))
+          (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+          (let ((instance (vui-mount (vui-component 'vui-st-faced-root
+                                                    :shape shape)
+                                     "*vui-st-faced*")))
+            (unwind-protect
+                (with-current-buffer "*vui-st-faced*"
+                  (expect (vui-st--bold-text)
+                          :to-equal (if (eq shape 'hstack) "C z" "C\nz")))
+              (vui-unmount instance)
+              (kill-buffer "*vui-st-faced*"))))))))
+
+(vui-defcomponent vui-st-text-rewriter ()
+  "Render \"C\"; write the stream's only item again when mounted."
+  :on-mount (vui-stream-update-last vui-st--at-point-stream (vui-text "FIRST!"))
+  :render (vui-text "C"))
+
+(defvar vui-st--map (make-sparse-keymap)
+  "A keymap for `vui-st-keymap-root'.")
+
+(vui-defcomponent vui-st-keymap-root ()
+  :render (vui-vstack
+           (vui-fragment
+            (vui-stream vui-st--at-point-stream)
+            (vui-vstack :keymap vui-st--map
+                        (vui-component 'vui-st-text-appender) (vui-text "z")))
+           (vui-text "bot")))
+
+(vui-defcomponent vui-st-rewrite-root (where)
+  :render (vui-vstack
+           (vui-fragment
+            (vui-stream vui-st--at-point-stream)
+            (if (eq where 'boundary)
+                (vui-error-boundary
+                 :fallback (lambda (_) (vui-text "FB"))
+                 :children (list (vui-component 'vui-st-text-rewriter)
+                                 (vui-component 'vui-st-boom)))
+              (vui-vstack :face 'bold
+                          (vui-component 'vui-st-text-rewriter)
+                          (vui-text "z"))))
+           (vui-text "bot")))
+
+(vui-defcomponent vui-st-stream-in-face-root ()
+  :render (vui-vstack :face 'bold
+                      (vui-stream vui-st--at-point-stream)
+                      (vui-text "z")))
+
+(describe "a container after a stream that a hook writes, more cases"
+  (it "keeps a keymap off the item"
+    (let ((vui-render-delay nil))
+      (setq vui-st--at-point-stream (vui-make-stream ""))
+      (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+      (let ((instance (vui-mount (vui-component 'vui-st-keymap-root)
+                                 "*vui-st-faced*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-faced*"
+              (goto-char (point-min))
+              (search-forward "added")
+              (expect (get-text-property (match-beginning 0) 'keymap)
+                      :to-be nil)
+              (search-forward "C")
+              (expect (get-text-property (match-beginning 0) 'keymap)
+                      :to-be vui-st--map))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-faced*")))))
+
+  (dolist (where '(face boundary))
+    (it (format "keeps the only item a hook wrote again out of it (%s)" where)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'ignore))
+        (setq vui-st--at-point-stream (vui-make-stream ""))
+        (vui-stream-append vui-st--at-point-stream (vui-text "first"))
+        (let ((instance (vui-mount (vui-component 'vui-st-rewrite-root
+                                                  :where where)
+                                   "*vui-st-faced*")))
+          (unwind-protect
+              (with-current-buffer "*vui-st-faced*"
+                (if (eq where 'face)
+                    (expect (vui-st--bold-text) :to-equal "C\nz")
+                  (expect (buffer-substring-no-properties (point-min)
+                                                          (point-max))
+                          :to-equal "FIRST!FB\nbot"))
+                ;; The stream is still there, for the next item
+                (vui-stream-append vui-st--at-point-stream (vui-text "+next"))
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-match "FIRST!\\+next"))
+            (vui-unmount instance)
+            (kill-buffer "*vui-st-faced*"))))))
+
+  (it "keeps the face on a stream at the start of the container"
+    (let ((vui-render-delay nil))
+      (setq vui-st--at-point-stream (vui-make-stream))
+      (vui-stream-append vui-st--at-point-stream (vui-text "s0"))
+      (let ((instance (vui-mount (vui-component 'vui-st-stream-in-face-root)
+                                 "*vui-st-faced*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-faced*"
+              (vui-rerender (vui-get-instance))
+              (expect (vui-st--bold-text) :to-equal "s0\nz"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-faced*"))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here

@@ -5507,19 +5507,37 @@ Not before the start of the buffer: a hook can delete from above POS
 to past it."
   (max (point-min) (+ pos (- vui--hook-shift shift))))
 
+(defvar vui--stream-writes 0
+  "How many writes of streams in place there were, a counter.
+See `vui--streams-ending-at'.")
+
+(defvar vui--container-endings
+  (make-hash-table :test #'eq :weakness 'key)
+  "What `vui--streams-ending-at' gave at the start of a container.
+Keyed by the marker of the start (see `vui--container-start').")
+
 (defun vui--container-start (face keymap)
   "Return the start of a container that is written from point.
 A marker when the container has a FACE or a KEYMAP to put on its text
 once it is written: the hooks of its children can write or delete text
 above it, or in its text written before them.  Otherwise nothing reads
 the start, and it is nil.  See `vui--finish-container'."
-  (and (or face keymap) (vui--start-marker)))
+  (when (or face keymap)
+    (let ((start (vui--start-marker)))
+      (when-let* ((ending (and vui--streams (vui--streams-ending-at))))
+        (puthash start ending vui--container-endings))
+      start)))
 
 (defun vui--finish-container (start face keymap)
   "Put FACE and KEYMAP on the text from START to point; let go of START.
 START is from `vui--container-start'."
   (when start
     (when (marker-position start)
+      ;; Not on the items a hook of a child appended to a stream that
+      ;; ends where the container starts (see `vui--start-after-streams')
+      (when-let* ((ending (gethash start vui--container-endings)))
+        (remhash start vui--container-endings)
+        (vui--start-after-streams start ending))
       (vui--apply-region-props start (point) face keymap))
     (set-marker start nil)))
 
@@ -8017,6 +8035,7 @@ markers of the regions that end with the stream advance with that text
                ;; The stream ends where the render that runs the hook
                ;; writes (see `vui--hook-point')
                (,at-hook (vui--stream-ends-at-hook-point ,handle)))
+           (cl-incf vui--stream-writes)
            ;; The stream can be outside a narrowing, and so can the
            ;; fields it writes
            (save-restriction
@@ -8526,29 +8545,45 @@ silently dropping every subsequent streamed append."
         (push handle vui--rendered-streams)))
     (set-marker start nil)))
 
-(defun vui--boundary-after-streams (start)
-  "Move START, the marker of an error boundary's start, past the streams.
-A stream that starts before START and ends after it, at or before
-point, took items there while the boundary rendered: a hook of a child
-appended to it in place, at its end, which was START.  That text is the
-stream's, before the text of the children, so the boundary's text
-starts after it.  START goes to the furthest end of such a stream; each
-stream is compared with START as it was.  Call with point at the end of
-the boundary's text."
-  (let ((from (marker-position start))
-        (to nil))
+(defun vui--streams-ending-at ()
+  "Return what `vui--start-after-streams' needs for text written at point.
+A cons (WRITES . STREAMS): WRITES is `vui--stream-writes' now, and
+STREAMS the streams of the buffer that end at point and start before
+it.  Nil when there is no such stream: nothing to move past then."
+  (let ((streams nil))
     (dolist (handle vui--streams)
       (let ((s (vui-stream-handle-region-start handle))
             (e (vui-stream-handle-region-end handle)))
         (when (and s e (marker-position s) (marker-position e)
                    (eq (marker-buffer e) (current-buffer))
-                   (< s from) (> e from)
-                   ;; Not a stream that holds the boundary in one of its
-                   ;; rows
-                   (<= e (point)))
-          (setq to (max (or to 0) e)))))
-    (when to
-      (set-marker start to))))
+                   (< s (point)) (= e (point)))
+          (push handle streams))))
+    (and streams (cons vui--stream-writes streams))))
+
+(defun vui--start-after-streams (start ending)
+  "Move START past the items a stream that ended at START took.
+START is a marker: the start of an error boundary, or of a container
+with a face or a keymap.  ENDING is from `vui--streams-ending-at', at
+START when the text there was not written yet.  A stream in it that
+ends after START now, at or before point, took items there while the
+text was written: a hook of a child wrote to it in place, at its end,
+which was START.  That text is the stream's, before the text of the
+children, so the written text starts after it.  START goes to the
+furthest end of such a stream.  Call with point at the end of the
+written text."
+  (when (and ending (/= (car ending) vui--stream-writes))
+    (let ((to nil))
+      (dolist (handle (cdr ending))
+        (let ((e (vui-stream-handle-region-end handle)))
+          (when (and e (marker-position e)
+                     (eq (marker-buffer e) (current-buffer))
+                     (> e start)
+                     ;; Not a stream that holds the text in one of its
+                     ;; rows
+                     (<= e (point)))
+            (setq to (max (or to 0) e)))))
+      (when to
+        (set-marker start to)))))
 
 (defun vui--stream-drop-row-text (handle from &optional row)
   "Delete the text of a row of HANDLE that unmounted itself, FROM point.
@@ -8596,7 +8631,7 @@ stream that is not rendered yet."
       (with-current-buffer buffer
         (setq vui--streams (delq handle vui--streams))))))
 
-(defun vui--park-streams (&optional start end row)
+(defun vui--park-streams (&optional start end row keep)
   "Park the streams of the current buffer whose text is about to go.
 Call it before deleting the text between START and END (the whole
 buffer when they are nil); see `vui--stream-park'.  A stream with no
@@ -8609,7 +8644,8 @@ edit of a node or of the last item, a row that renders text (see
 
 ROW is the inline instance whose region is deleted, if any.  When it is
 the only item of a stream, the stream has the same text as ROW, and it
-is not the stream that goes."
+is not the stream that goes.  The streams in KEEP stay too: their text
+is before START, though their start can be at START."
   (dolist (handle (copy-sequence vui--streams))
     (let ((s (vui-stream-handle-region-start handle))
           (e (vui-stream-handle-region-end handle)))
@@ -8622,6 +8658,7 @@ is not the stream that goes."
         (vui--stream-park handle))
        ((and (<= start s) (<= e end)
              (or (< s e) (< start s end))
+             (not (memq handle keep))
              (not (and row (= s start) (= e end)
                        (memq row (vui-stream-handle-items-rev handle)))))
         (vui--stream-park handle))))))
@@ -11077,6 +11114,8 @@ is written."
         ;; would run for components that are not shown.  The start is
         ;; a marker, as their hooks can write or delete text above it.
         (let* ((start (vui--start-marker))
+               ;; The streams that end where it starts
+               (ending (and vui--streams (vui--streams-ending-at)))
                (start-pos (point))
                (shift vui--hook-shift)
                (effects vui--pending-effects)
@@ -11098,7 +11137,7 @@ is written."
              ;; streams the children wrote still go, from where they
              ;; started.
              (let ((children-start (copy-marker start))
-                   (end (progn (vui--boundary-after-streams start)
+                   (end (progn (vui--start-after-streams start ending)
                                (max start (point)))))
                ;; The fields the render wrote in that text are not set
                ;; up yet: they wait in `widget-field-new' for
@@ -11107,7 +11146,7 @@ is written."
                ;; `vui--setup-fields-written').  A field around the text
                ;; is set up, and stays.
                (vui--forget-fields-in start end)
-               (vui--park-streams children-start end)
+               (vui--park-streams children-start end nil (cdr ending))
                (set-marker children-start nil)
                (delete-region start end)
                ;; What the hooks of the children wrote in that text went
