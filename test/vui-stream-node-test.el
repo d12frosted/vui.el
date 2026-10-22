@@ -908,5 +908,156 @@
                       :to-equal "header\na\nN3\nb\nM3\nc\nfooter"))
           (vui-snode-gap--kill))))))
 
+(defvar vui-snode-cross--edit nil
+  "A function a `vui-snode-cross-row' calls once in its update hook.")
+
+(vui-defcomponent vui-snode-cross-row (label)
+  :on-update (when-let* ((edit vui-snode-cross--edit))
+               (setq vui-snode-cross--edit nil)
+               (funcall edit))
+  :render (vui-text (format "[%s]" label)))
+
+(defvar vui-snode-cross--foot-edit nil
+  "A function a `vui-snode-cross-foot' calls once in its update hook.")
+
+(vui-defcomponent vui-snode-cross-foot ()
+  :on-update (when-let* ((edit vui-snode-cross--foot-edit))
+               (setq vui-snode-cross--foot-edit nil)
+               (funcall edit))
+  :render (vui-text "footer"))
+
+(vui-defcomponent vui-snode-cross-panel (stream)
+  :render (vui-vstack (vui-text "panel") (vui-stream stream)))
+
+(vui-defcomponent vui-snode-cross-root (log panel)
+  :render (vui-vstack (vui-text "x")
+                      (vui-stream log)
+                      (vui-component 'vui-snode-cross-panel :stream panel)
+                      (vui-component 'vui-snode-cross-foot)))
+
+(describe "vui-stream nodes: a hook of a row in one stream edits a node of another"
+  ;; The render writes the stream of the row first: the other stream has
+  ;; no text then, and the edit waits until the render writes it
+  (dolist (case '(("appends to" . "n+") ("updates" . "N")))
+    (it (format "%s the node of a stream the render writes after" (car case))
+      (let ((vui-render-delay nil)
+            (vui-snode-cross--edit nil)
+            (log (vui-make-stream))
+            (panel (vui-make-stream)))
+        (vui-stream-append log (vui-text "l0"))
+        (vui-mount (vui-component 'vui-snode-cross-root :log log :panel panel)
+                   "*vui-snode-cross*")
+        (unwind-protect
+            (with-current-buffer "*vui-snode-cross*"
+              (vui-stream-append panel (vui-text "p0"))
+              (let ((n (vui-stream-open panel (vui-text "n"))))
+                (vui-stream-append log (vui-component 'vui-snode-cross-row
+                                                      :label "lr"))
+                (setq vui-snode-cross--edit
+                      (if (equal (car case) "updates")
+                          (lambda () (vui-stream-update n (vui-text "N")))
+                        (lambda () (vui-stream-append-to n (vui-text "+")))))
+                (let ((root (vui-get-instance)))
+                  (setf (vui-instance-render-record root) nil)
+                  (vui-rerender root))
+                (let ((want (format "x\nl0\n[lr]\npanel\np0\n%s\nfooter"
+                                    (cdr case))))
+                  (expect (buffer-string) :to-equal want)
+                  ;; The node is still live, and in the stream's items
+                  (vui-stream-append-to n (vui-text "!"))
+                  (setq want (format "x\nl0\n[lr]\npanel\np0\n%s!\nfooter"
+                                     (cdr case)))
+                  (expect (buffer-string) :to-equal want)
+                  (let ((root (vui-get-instance)))
+                    (setf (vui-instance-render-record root) nil)
+                    (vui-rerender root))
+                  (expect (buffer-string) :to-equal want))))
+          (kill-buffer "*vui-snode-cross*")))))
+
+  (it "makes the edit before the hooks that run after the stream is written"
+    (let ((vui-render-delay nil)
+          (vui-snode-cross--edit nil)
+          (vui-snode-cross--foot-edit nil)
+          (log (vui-make-stream))
+          (panel (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-mount (vui-component 'vui-snode-cross-root :log log :panel panel)
+                 "*vui-snode-cross*")
+      (unwind-protect
+          (with-current-buffer "*vui-snode-cross*"
+            (vui-stream-append panel (vui-text "p0"))
+            (let ((n (vui-stream-open panel (vui-text "n")))
+                  (seen nil))
+              (vui-stream-append log (vui-component 'vui-snode-cross-row
+                                                    :label "lr"))
+              (setq vui-snode-cross--edit
+                    (lambda () (vui-stream-update n (vui-text "H")))
+                    vui-snode-cross--foot-edit
+                    (lambda ()
+                      (setq seen (buffer-string))
+                      (vui-stream-update n (vui-text "F"))))
+              (let ((root (vui-get-instance)))
+                (setf (vui-instance-render-record root) nil)
+                (vui-rerender root))
+              ;; The footer's hook runs after the panel is written: it
+              ;; sees the edit, and its own edit is the last one
+              (expect seen :to-equal "x\nl0\n[lr]\npanel\np0\nH\nfooter")
+              (expect (buffer-string)
+                      :to-equal "x\nl0\n[lr]\npanel\np0\nF\nfooter")))
+        (kill-buffer "*vui-snode-cross*"))))
+
+  (it "drops the edit of a stream the render does not write"
+    (let ((vui-render-delay nil)
+          (vui-snode-cross--edit nil)
+          (log (vui-make-stream))
+          (other (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-stream-append other (vui-text "o0"))
+      (let ((n (vui-stream-open other (vui-text "n"))))
+        (vui-mount (vui-component 'vui-snode-cross-root :log log :panel other)
+                   "*vui-snode-cross*")
+        (unwind-protect
+            (with-current-buffer "*vui-snode-cross*"
+              ;; The other stream goes away, and a hook edits it while
+              ;; the tree renders
+              (vui-stream-append log (vui-component 'vui-snode-cross-row
+                                                    :label "lr"))
+              (setq vui-snode-cross--edit
+                    (lambda () (vui-stream-append-to n (vui-text "+"))))
+              (vui-update (vui-get-instance)
+                          (list :log log :panel (vui-make-stream)))
+              (expect vui--stream-late-edits :to-be nil)
+              (expect (buffer-string)
+                      :to-equal "x\nl0\n[lr]\npanel\nfooter")
+              ;; Shown again, the stream is as it was
+              (vui-update (vui-get-instance) (list :log log :panel other))
+              (expect (buffer-string)
+                      :to-equal "x\nl0\n[lr]\npanel\no0\nn\nfooter"))
+          (kill-buffer "*vui-snode-cross*")))))
+
+  (it "finalizes a node of a stream the render does not write"
+    (let ((vui-render-delay nil)
+          (vui-snode-cross--edit nil)
+          (log (vui-make-stream))
+          (other (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (let ((n (vui-stream-open other (vui-text "n"))))
+        (vui-mount (vui-component 'vui-snode-cross-root :log log :panel other)
+                   "*vui-snode-cross*")
+        (unwind-protect
+            (with-current-buffer "*vui-snode-cross*"
+              (vui-stream-append log (vui-component 'vui-snode-cross-row
+                                                    :label "lr"))
+              (setq vui-snode-cross--edit (lambda () (vui-stream-finalize n)))
+              (vui-update (vui-get-instance)
+                          (list :log log :panel (vui-make-stream)))
+              (expect (memq n (vui-stream-handle-nodes other)) :to-be nil)
+              ;; Shown again, the node is text that no edit changes
+              (vui-update (vui-get-instance) (list :log log :panel other))
+              (vui-stream-append-to n (vui-text "+"))
+              (expect (buffer-string)
+                      :to-equal "x\nl0\n[lr]\npanel\nn\nfooter"))
+          (kill-buffer "*vui-snode-cross*"))))))
+
 (provide 'vui-stream-node-test)
 ;;; vui-stream-node-test.el ends here

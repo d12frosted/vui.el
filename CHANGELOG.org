@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A hook that edits a live node of a =vui-stream=
+  (=vui-stream-append-to=, =vui-stream-update= and the like) while the
+  render that runs it writes that stream later (a hook of a row of
+  another stream above it, say) makes the edit once the stream is
+  written. Before, the edit was lost.
+
 - A =vui-stream= rendered in a second buffer while it shows in another
   one signals an error. Both buffers wrote into the one place the
   stream keeps, and the first one showed items in the wrong places. The

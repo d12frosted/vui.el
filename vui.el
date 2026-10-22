@@ -1082,6 +1082,17 @@ Drained by `vui--flush-queued-rerenders' after the in-progress render
 commits and runs its effects, or while its error propagates when it
 signals (see `vui--draining-queue-on-error').")
 
+(defvar vui--stream-late-edits nil
+  "Edits of stream nodes that wait for the render in progress to write them.
+The newest first, each (HANDLE . FUNCTION).  A hook that runs in a
+render can edit a node of a stream with no text yet: the render may
+still write that stream, as when a hook of a row of one stream edits a
+node of another one further down (see `vui--stream-node-wait').  The
+render of HANDLE makes them when it has written the stream (see
+`vui--stream-render').  The edits of a stream that the render, and the
+renders it queued, do not write are made when it is done, as for a
+stream that is not shown (see `vui--stream-run-late-edits').")
+
 (defvar vui--flushing-rerenders-p nil
   "Non-nil while `vui--flush-queued-rerenders' drains the queue.
 Prevents nested drains so the top-level loop can detect runaway
@@ -4138,8 +4149,23 @@ it drains the rest."
               ;; The debugger, if any, has seen it where it was signalled
               (let ((debug-on-quit nil))
                 (signal (car ,quit) (cdr ,quit)))))
-         (unless (or ,done (not ,top) vui--flushing-rerenders-p)
-           (vui--drain-queue-after-error))))))
+         (when (and ,top (not vui--flushing-rerenders-p))
+           (unless ,done
+             (vui--drain-queue-after-error))
+           ;; The edits that waited for a stream no render wrote: it is
+           ;; not shown, and they are made as for such a stream
+           (vui--stream-run-late-edits))))))
+
+(defun vui--stream-run-late-edits ()
+  "Make the edits that wait in `vui--stream-late-edits', the oldest first.
+Their streams were not written: an edit of a content node does nothing
+then, but a finalize still drops the node.  An error of one is shown
+as a message, and the others are made."
+  (when vui--stream-late-edits
+    (let ((edits (nreverse (mapcar #'cdr vui--stream-late-edits)))
+          (vui--rendering-p nil))
+      (setq vui--stream-late-edits nil)
+      (vui--stream-run-waiting edits nil))))
 
 (defmacro vui--advancing-ends (ends &rest body)
   "Run BODY with the end markers of ENDS advancing with text written at them.
@@ -8622,6 +8648,17 @@ pass), unless the tree there may not show it any more (see
       (when (cddr edits)
         (vui--shifting-point
           (vui--stream-run-waiting (nreverse (cddr edits)) t)))
+      ;; And the edits of its nodes from hooks that ran before the
+      ;; stream had its text in this render
+      (when (assq handle vui--stream-late-edits)
+        (let ((mine nil))
+          (setq vui--stream-late-edits
+                (cl-remove-if (lambda (entry)
+                                (when (eq (car entry) handle)
+                                  (push (cdr entry) mine)))
+                              vui--stream-late-edits))
+          (vui--shifting-point
+            (vui--stream-run-waiting mine t))))
       ;; The component that placed the stream records it: the stream's
       ;; text grows without a render of the component, and the
       ;; component-list patcher has to know (see `vui--instance-streams')
@@ -9535,8 +9572,10 @@ node that waited to be opened, and does not wait any more."
 (defun vui--stream-node-wait (node write)
   "Make WRITE, an edit of NODE as a function, wait when it has to.
 It waits while NODE waits to be opened (see `vui--stream-node-waiting'),
-and while a render writes the stream of NODE from its items (see
-`vui--stream-render-edits').  Return non-nil when it waits."
+while a render writes the stream of NODE from its items (see
+`vui--stream-render-edits'), and while a render runs and the stream
+of NODE has no text: the render may write it later (see
+`vui--stream-late-edits').  Return non-nil when it waits."
   (let ((handle (vui--stream-node-handle node)))
     (or (and (vui--stream-node-waiting node)
              (vui--stream-wait-for-row handle write))
@@ -9545,16 +9584,30 @@ and while a render writes the stream of NODE from its items (see
                     ;; Not written yet: at the item the render writes,
                     ;; or below it
                     ((>= (1- (length cell)) (cadr entry))))
-          (let ((instance vui--current-instance))
-            ;; An error is the hook's, as if the edit were made there
-            (push (lambda ()
-                    (condition-case err
-                        (funcall write)
-                      (error
-                       (vui--handle-error 'lifecycle "stream edit" err
-                                          instance))))
-                  (cddr entry)))
+          (push (vui--stream-hook-edit write) (cddr entry))
+          t)
+        ;; A content node: a component node is a row, which has a place
+        ;; of its own
+        (when (and vui--rendering-p
+                   (not vui--measuring-p)
+                   (not (vui--stream-node-instance node))
+                   (not (assq handle vui--stream-render-edits))
+                   (not (vui--stream-written-p handle))
+                   (memq node (vui-stream-handle-nodes handle)))
+          (push (cons handle (vui--stream-hook-edit write))
+                vui--stream-late-edits)
           t))))
+
+(defun vui--stream-hook-edit (write)
+  "Return a function that runs WRITE later as an edit of the current hook.
+An error of it is the hook's, as if the edit were made there (see
+`vui-lifecycle-error-handler')."
+  (let ((instance vui--current-instance))
+    (lambda ()
+      (condition-case err
+          (funcall write)
+        (error
+         (vui--handle-error 'lifecycle "stream edit" err instance))))))
 
 (defun vui--stream-node-id (node)
   "Return the id of NODE's item, its step in the render path.
