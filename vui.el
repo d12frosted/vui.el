@@ -11024,7 +11024,8 @@ from a hook or an effect of another tree: it does not see the context
 values of that tree, so put a provider in VNODE to give it one.  As
 for `vui-mount' there, the re-renders the tree asks for while it mounts
 wait for the render of that tree to be done.  Return the root
-instance."
+instance, or nil when the render waits for the trees of BUFFER to
+unmount, as in `vui-mount'."
   (vui--mount-root (vui-component 'vui--rendered :vnode vnode)
                    (or buffer (current-buffer))
                    nil))
@@ -11047,14 +11048,47 @@ Called from a hook or an effect of a render in progress, the mount
 renders the tree once, and the re-renders the tree asks for while it
 mounts (state set from its own hooks, say) wait for that render to be
 done, like every re-render asked for during it.  Right after this
-returns, the tree may not show those changes yet."
+returns, the tree may not show those changes yet.
+
+Called from a hook of a tree in BUFFER-NAME while that tree unmounts
+\(its `:on-unmount', say), the mount waits until the trees of the buffer
+are gone, and this returns nil.  The mount is dropped when the buffer
+is killed, or when another mount takes the buffer first.  Such a mount
+does not show the buffer."
   (let* ((buf (get-buffer-create (or buffer-name "*vui*")))
          (instance (vui--mount-root component-vnode buf
                                     vui-rerender-on-resize-default)))
-    ;; A hook of the tree can kill BUF
-    (when (buffer-live-p buf)
+    ;; A hook of the tree can kill BUF.  Do not show BUF when the mount
+    ;; waits for its trees to go: the buffer can be on its way out.
+    (when (and instance (buffer-live-p buf))
       (switch-to-buffer buf))
     instance))
+
+(defvar-local vui--mounts-after-teardown nil
+  "Mounts that wait for the trees of this buffer to unmount.
+Functions, the oldest first.  A hook of a tree that unmounts mounts a
+new tree in the buffer: it goes in once the old trees are gone (see
+`vui-unmount'), and not at all when the buffer goes, or when another
+mount takes the buffer.")
+
+(defvar-local vui--tearing-down nil
+  "Non-nil while the trees of this buffer unmount.
+The root and the inline regions, in `vui-unmount', in a kill of the
+buffer, or in a mount that takes the buffer.  A mount in the buffer
+waits then (see `vui--mounts-after-teardown').")
+
+(defun vui--run-mounts-after-teardown (instance)
+  "Mount the trees that waited for the trees of this buffer to go.
+INSTANCE is the root that went.  An error of one of them is one of a
+hook of INSTANCE (see `vui-lifecycle-error-handler'), and the others
+still mount."
+  (let ((mounts vui--mounts-after-teardown))
+    (setq vui--mounts-after-teardown nil)
+    (dolist (mount mounts)
+      (condition-case err
+          (funcall mount)
+        (error
+         (vui--handle-error 'lifecycle "on-unmount" err instance))))))
 
 (defun vui--mount-root (component-vnode buf resize)
   "Mount COMPONENT-VNODE as the root of BUF, render it, and return it.
@@ -11062,7 +11096,24 @@ The work of `vui-mount' and `vui-render', which shows BUF only for the
 first.  RESIZE non-nil installs `vui-rerender-on-resize' in BUF.  The
 tree is its own, also when this runs from a hook or an effect of a
 tree being rendered: its components do not reconcile against that tree,
-and do not see its context values."
+and do not see its context values.
+
+While the tree of BUF unmounts, the mount waits until it is gone (see
+`vui--mounts-after-teardown'), and this returns nil."
+  (if (with-current-buffer buf
+        (or vui--tearing-down
+            (and vui--mounted-root (memq vui--mounted-root vui--unmounting))))
+      (with-current-buffer buf
+        (setq vui--mounts-after-teardown
+              (append vui--mounts-after-teardown
+                      (list (lambda ()
+                              (vui--mount-root component-vnode buf resize)))))
+        nil)
+    (vui--mount-root-1 component-vnode buf resize)))
+
+(defun vui--mount-root-1 (component-vnode buf resize)
+  "Mount COMPONENT-VNODE as the root of BUF, render it, and return it.
+RESIZE is as in `vui--mount-root', which calls this when BUF is free."
   (let* ((instance (vui--create-instance component-vnode nil))
          ;; Mounted for real also from a render that a layout measures:
          ;; its hooks run, and a later mount there unmounts it
@@ -11105,14 +11156,21 @@ and do not see its context values."
         ;; cleanups run and its stale async callbacks detach.  Without
         ;; this, the old tree stays live and a timer created by it can
         ;; re-render the old UI over the new mount.
-        (when vui--mounted-root
-          (vui--unmount-root vui--mounted-root))
-        ;; A full mount owns the whole buffer: tear down inline
-        ;; instances too, since erasing destroys their regions
-        (when vui--inline-instances
-          (dolist (inline-instance vui--inline-instances)
-            (vui--unmount-root inline-instance))
-          (kill-local-variable 'vui--inline-instances))
+        (setq vui--tearing-down t)
+        (unwind-protect
+            (progn
+              (when vui--mounted-root
+                (vui--unmount-root vui--mounted-root))
+              ;; A full mount owns the whole buffer: tear down inline
+              ;; instances too, since erasing destroys their regions
+              (when vui--inline-instances
+                (dolist (inline-instance vui--inline-instances)
+                  (vui--unmount-root inline-instance))
+                (kill-local-variable 'vui--inline-instances)))
+          (setq vui--tearing-down nil)
+          ;; This mount takes the buffer: the mounts the hooks of the
+          ;; trees asked for do not happen
+          (setq vui--mounts-after-teardown nil))
         ;; Enable vui-mode (this also sets up the keymap hierarchy)
         (unless (derived-mode-p 'vui-mode)
           (vui-mode))
@@ -11146,22 +11204,22 @@ and do not see its context values."
           ;; nil delay) until commit and effects are done
           (setq vui--rendering-p t)
           (vui--draining-queue-on-error (not outer-rendering)
-            (unwind-protect
-                ;; Nothing is left to do when a hook unmounted the tree
-                (when (vui--rendering-root instance
-                        (vui--render-instance instance))
-                  ;; widget-setup installs before-change-functions that
-                  ;; prevent editing outside of editable fields - no need
-                  ;; for buffer-read-only
-                  (widget-setup)
-                  (vui--setup-field-placeholders)
-                  ;; Run effects after initial render
-                  (vui--run-pending-effects))
-              (setq vui--rendering-p outer-rendering))
-            ;; Run any re-renders requested during render/effects.  The
-            ;; render in progress, if any, runs them when it is done.
-            (unless outer-rendering
-              (vui--flush-queued-rerenders))))
+                                        (unwind-protect
+                                            ;; Nothing is left to do when a hook unmounted the tree
+                                            (when (vui--rendering-root instance
+                                                                       (vui--render-instance instance))
+                                              ;; widget-setup installs before-change-functions that
+                                              ;; prevent editing outside of editable fields - no need
+                                              ;; for buffer-read-only
+                                              (widget-setup)
+                                              (vui--setup-field-placeholders)
+                                              ;; Run effects after initial render
+                                              (vui--run-pending-effects))
+                                          (setq vui--rendering-p outer-rendering))
+                                        ;; Run any re-renders requested during render/effects.  The
+                                        ;; render in progress, if any, runs them when it is done.
+                                        (unless outer-rendering
+                                          (vui--flush-queued-rerenders))))
         ;; A hook can kill BUF: another buffer is current then
         (when (buffer-live-p buf)
           (goto-char (point-min))))
@@ -11297,6 +11355,8 @@ Installed buffer-locally on `kill-buffer-hook' by `vui-mount',
 `vui-render' and `vui-mount-inline' so components release their
 resources (timers, processes, subscriptions) when the buffer is
 killed."
+  ;; A mount from a hook of the trees does not happen: the buffer goes
+  (setq vui--tearing-down t)
   ;; The handles of the streams can outlive the buffer, but not the
   ;; providers of the tree they were in
   (dolist (handle vui--streams)
@@ -11400,23 +11460,34 @@ Returns the unmounted instance, or nil if nothing was mounted."
         (vui-unmount buffer))))
    (t
     (when-let* ((instance (vui-get-instance buffer-or-instance)))
-      (let ((buf (vui-instance-buffer instance)))
-        (vui--unmount-root instance)
-        (when (buffer-live-p buf)
+      ;; A hook of the tree unmounts it again: the unmount that runs it
+      ;; does the rest
+      (unless (memq instance vui--unmounting)
+        (let ((buf (vui-instance-buffer instance)))
           (with-current-buffer buf
-            (kill-local-variable 'vui--mounted-root)
-            ;; Inhibit modification hooks while erasing: a `vui-field' in
-            ;; the buffer installs an after-change hook that runs
-            ;; `widget-after-change' against the now half-removed field and
-            ;; signals (number-or-marker-p nil).  The render path inhibits
-            ;; these hooks for the same reason; teardown must too.
-            (let ((inhibit-read-only t)
-                  (inhibit-modification-hooks t))
-              (remove-overlays)
-              (vui--park-streams)
-              (erase-buffer))
-            ;; Put back the header line a sticky table header replaced
-            (vui--table-restore-header-line))))
+            (setq vui--tearing-down t))
+          (unwind-protect
+              (vui--unmount-root instance)
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (setq vui--tearing-down nil))))
+          (when (buffer-live-p buf)
+            (with-current-buffer buf
+              (kill-local-variable 'vui--mounted-root)
+              ;; Inhibit modification hooks while erasing: a `vui-field' in
+              ;; the buffer installs an after-change hook that runs
+              ;; `widget-after-change' against the now half-removed field and
+              ;; signals (number-or-marker-p nil).  The render path inhibits
+              ;; these hooks for the same reason; teardown must too.
+              (let ((inhibit-read-only t)
+                    (inhibit-modification-hooks t))
+                (remove-overlays)
+                (vui--park-streams)
+                (erase-buffer))
+              ;; Put back the header line a sticky table header replaced
+              (vui--table-restore-header-line)
+              ;; The trees its hooks mounted in the buffer go in now
+              (vui--run-mounts-after-teardown instance)))))
       instance))))
 
 (provide 'vui)

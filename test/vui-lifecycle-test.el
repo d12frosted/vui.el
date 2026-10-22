@@ -1211,6 +1211,151 @@ an effect after it that notes the buffer it runs in."
                       (vui-component 'vui-lifecycle-test-stopper)
                       (vui-component 'vui-lifecycle-test-stop-part :name "after")))
 
+(defvar vui-lifecycle-test--remount-calls 0
+  "How many times `vui-lifecycle-test-remounting' unmounted.")
+
+(defvar vui-lifecycle-test--remount-effects nil
+  "(SETUPS . CLEANUPS) of the effect of `vui-lifecycle-test-new-tree'.")
+
+(vui-defcomponent vui-lifecycle-test-new-tree ()
+  "Counts the runs and cleanups of its effect."
+  :render (progn
+            (vui-use-effect ()
+              (cl-incf (car vui-lifecycle-test--remount-effects))
+              (lambda () (cl-incf (cdr vui-lifecycle-test--remount-effects))))
+            (vui-text "NEW")))
+
+(defvar vui-lifecycle-test--remount-component 'vui-lifecycle-test-new-tree
+  "The component `vui-lifecycle-test-remounting' mounts when it unmounts.")
+
+(defvar vui-lifecycle-test--remount-buffer nil
+  "The buffer it mounts it in, or nil for its own.")
+
+(defvar vui-lifecycle-test--remount-also-unmount nil
+  "Non-nil makes it unmount its own buffer after the mount.")
+
+(vui-defcomponent vui-lifecycle-test-failing-tree ()
+  :render (error "Boom"))
+
+(vui-defcomponent vui-lifecycle-test-remounting ()
+  "Mounts `vui-lifecycle-test--remount-component' when it unmounts."
+  :on-unmount (let ((buffer (buffer-name)))
+                (cl-incf vui-lifecycle-test--remount-calls)
+                (vui-mount (vui-component vui-lifecycle-test--remount-component)
+                           (or vui-lifecycle-test--remount-buffer buffer))
+                (when vui-lifecycle-test--remount-also-unmount
+                  (vui-unmount buffer)))
+  :render (vui-text "OLD"))
+
+(describe "a hook that mounts a tree in the buffer its tree unmounts from"
+  ;; The new tree mounts once the old one is gone, and not when the
+  ;; buffer goes or another mount takes it
+  (before-each
+    (setq vui-lifecycle-test--remount-calls 0
+          vui-lifecycle-test--remount-effects (cons 0 0)))
+
+  (it "shows the new tree after vui-unmount"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*"))
+      (unwind-protect
+          (with-current-buffer "*test-remount*"
+            (save-window-excursion (vui-unmount "*test-remount*"))
+            (expect vui-lifecycle-test--remount-calls :to-equal 1)
+            (expect (buffer-string) :to-equal "NEW")
+            (expect (vui-component-def-name (vui-instance-def (vui-get-instance)))
+                    :to-equal 'vui-lifecycle-test-new-tree)
+            (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 0)))
+        (kill-buffer "*test-remount*"))
+      (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 1))))
+
+  (it "mounts nothing when the buffer is killed"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*"))
+      (kill-buffer "*test-remount*")
+      (expect vui-lifecycle-test--remount-calls :to-equal 1)
+      (expect vui-lifecycle-test--remount-effects :to-equal '(0 . 0))))
+
+  (it "leaves the buffer to a mount that takes it"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*")
+        (vui-mount (vui-component 'vui-lifecycle-test-new-tree) "*test-remount*"))
+      (unwind-protect
+          (with-current-buffer "*test-remount*"
+            (expect vui-lifecycle-test--remount-calls :to-equal 1)
+            (expect (buffer-string) :to-equal "NEW")
+            (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 0)))
+        (kill-buffer "*test-remount*"))
+      (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 1))))
+
+  (it "mounts the new tree when its hook also unmounts the buffer"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--remount-also-unmount t))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*"))
+      (unwind-protect
+          (with-current-buffer "*test-remount*"
+            (save-window-excursion (vui-unmount "*test-remount*"))
+            (expect (buffer-string) :to-equal "NEW")
+            (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 0)))
+        (kill-buffer "*test-remount*"))
+      (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 1))))
+
+  (it "mounts nothing when the buffer of an inline region is killed"
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*test-remount*")
+        (insert "host\n")
+        (vui-mount-inline (vui-component 'vui-lifecycle-test-remounting)))
+      (kill-buffer "*test-remount*")
+      (expect vui-lifecycle-test--remount-calls :to-equal 1)
+      (expect vui-lifecycle-test--remount-effects :to-equal '(0 . 0))))
+
+  (it "leaves the buffer of an inline region to a mount that takes it"
+    (let ((vui-render-delay nil))
+      (with-current-buffer (get-buffer-create "*test-remount*")
+        (insert "host\n")
+        (vui-mount-inline (vui-component 'vui-lifecycle-test-remounting)))
+      (unwind-protect
+          (progn
+            (save-window-excursion
+              (vui-mount (vui-component 'vui-lifecycle-test-new-tree)
+                         "*test-remount*"))
+            (expect vui-lifecycle-test--remount-calls :to-equal 1)
+            (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 0)))
+        (kill-buffer "*test-remount*"))
+      (expect vui-lifecycle-test--remount-effects :to-equal '(1 . 1))))
+
+  (it "shows an error of the new tree as one of the hook"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'ignore)
+          (vui-lifecycle-test--remount-component
+           'vui-lifecycle-test-failing-tree))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*"))
+      (unwind-protect
+          (expect (vui-component-def-name
+                   (vui-instance-def
+                    (save-window-excursion (vui-unmount "*test-remount*"))))
+                  :to-equal 'vui-lifecycle-test-remounting)
+        (kill-buffer "*test-remount*"))))
+
+  (it "mounts a tree in another buffer at once"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--remount-buffer "*test-remount-other*"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-remounting) "*test-remount*"))
+      (unwind-protect
+          (progn
+            (save-window-excursion (vui-unmount "*test-remount*"))
+            (expect (vui-get-instance "*test-remount-other*") :to-be-truthy)
+            (expect (with-current-buffer "*test-remount-other*" (buffer-string))
+                    :to-equal "NEW"))
+        (kill-buffer "*test-remount*")
+        (when (get-buffer "*test-remount-other*")
+          (kill-buffer "*test-remount-other*"))))))
+
 (vui-defcomponent vui-lifecycle-test-render-stopper ()
   "Calls `vui-lifecycle-test--stop-action' from its render, once."
   :render (progn

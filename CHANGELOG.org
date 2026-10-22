@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A tree that a hook of an unmounting tree (its =:on-unmount=, or an
+  effect cleanup) mounts in the same buffer now waits until the old
+  trees are gone: =vui-unmount= shows it once the buffer is empty, and a
+  kill of the buffer or another mount there drops it. Before, the new
+  tree was erased or replaced with its effects still set up.
+  =vui-mount= and =vui-render= return nil for such a mount.
+
 - A =vui-stream= row that unmounts itself from a hook while a render
   writes the stream again (the root shows the stream after another
   tree, say) leaves no text behind. Its text and the separator before
