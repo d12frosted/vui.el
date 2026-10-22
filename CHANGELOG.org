@@ -90,6 +90,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- With =vui-incremental-render= set, a component in a flat list of
+  components a root renders, whose =:should-update= says no, renders
+  again when a component below it changed its state. Before, it skipped
+  its render and that component never showed its new state.
+
 - A component row appended to a =vui-stream= while a render runs (from
   a hook) leaves no text behind when its first render, which waits for
   that render, signals. Its separator and the text written before the

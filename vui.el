@@ -2144,6 +2144,12 @@ as a literal value, not an updater."
               (or (eq (cdr arity) 'many)
                   (>= (cdr arity) 1))))))
 
+(defvar vui--changed-below (make-hash-table :test #'eq :weakness 'key)
+  "The components with a component below them whose state changed.
+The change came after their last render.  Such a component renders
+again even when it could skip its render (see
+`vui--instance-may-bail-p'), so the one below shows its new state.")
+
 (defvar vui--roots-with-changed-state nil
   "The roots with a component whose state changed since they rendered.
 Not the root's own state: its render shows that in the tree it gives.
@@ -2197,6 +2203,16 @@ sort.  In-place mutation is invisible to change detection
                     key new-value)
     (setf (vui-instance-state target)
           (plist-put current-state key new-value))
+    ;; The components above the target render it again (see
+    ;; `vui--changed-below').  All of them up to the root: a render that
+    ;; signals clears the marks of the ones it started, not of the ones
+    ;; below them, so a marked component can have one above it that is
+    ;; not marked.
+    (unless (eq new-value current-value)
+      (let ((above (vui-instance-parent target)))
+        (while above
+          (puthash above t vui--changed-below)
+          (setq above (vui-instance-parent above)))))
     ;; The root renders the target again with its tree, and the tree it
     ;; gives can be the one it gave last time: it has to be written all
     ;; the same (see `vui--commit-root')
@@ -5582,6 +5598,7 @@ it was and rendered nothing, so INSTANCE keeps its children and the
 record of the contexts its subtree read.
 IN-LAYOUT, when non-nil, is the indent of the vstack INSTANCE is in:
 its tree renders with it.  See `vui--render-component'."
+  (remhash instance vui--changed-below)
   (let* ((vui--current-instance instance)
          (vui--child-index 0)
          (vui--new-children nil)
@@ -7536,15 +7553,18 @@ position, skipping children that bail out of re-rendering."
 (defun vui--instance-may-bail-p (instance)
   "Non-nil if INSTANCE can skip re-rendering entirely.
 True only for a mounted instance that opted in with `:should-update',
-whose should-update reports no change for the current props/state, and
-none of whose consumed context values changed.  This is the structural
-bailout: skipping it leaves the instance's buffer region (text and
-widgets) untouched."
+whose should-update reports no change for the current props/state,
+none of whose consumed context values changed, and with no component
+below it whose state changed (see `vui--changed-below').  This is the
+structural bailout: skipping it leaves the instance's buffer region
+\(text and widgets) untouched."
   (let* ((def (vui-instance-def instance))
          (su (vui-component-def-should-update def)))
     (and (vui-instance-mounted-p instance)
          su
          (vui-instance-r-len instance)
+         ;; Not when a component below it changed its state
+         (not (gethash instance vui--changed-below))
          (not (funcall su
                        (vui-instance-props instance)
                        (vui-instance-state instance)

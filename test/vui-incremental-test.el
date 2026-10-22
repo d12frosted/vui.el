@@ -340,6 +340,129 @@
                     (expect (marker-position mark) :to-equal 4)))
               (kill-buffer "*eqskip-state*"))))))))
 
+(defvar eqskip-grand--instance nil
+  "The instance of the last `eqskip-grand' rendered.")
+
+(defvar eqskip-grand--bump nil
+  "Non-nil when `eqskip-grand' sets its state to 99 in its update hook.")
+
+(vui-defcomponent eqskip-grand ()
+  :state ((k 0))
+  :on-update (when (and eqskip-grand--bump (= k 1))
+               (vui-set-state :k 99))
+  :render (progn (setq eqskip-grand--instance vui--current-instance)
+                 (vui-text (format "g%d" k))))
+
+(vui-defcomponent eqskip-quiet-middle ()
+  "Never renders again for its own props or state."
+  :should-update nil
+  :render (vui-component 'eqskip-grand))
+
+(vui-defcomponent eqskip-other ()
+  :render (vui-text "c"))
+
+(vui-defcomponent eqskip-list-root ()
+  :state ((m 0))
+  :render (vui-vstack (vui-component 'eqskip-quiet-middle)
+                      (vui-component 'eqskip-other)))
+
+(describe "a component that skips its render above a child whose state changed"
+  ;; The child renders again with the render of its root, through the
+  ;; component that skips: it renders again too
+  (dolist (flag '(nil t))
+    (it (format "shows the new state of the child (flag %s)"
+                (if flag "on" "off"))
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil))
+        (let ((inst (vui-mount (vui-component 'eqskip-list-root)
+                               "*eqskip-grand*")))
+          (unwind-protect
+              (with-current-buffer "*eqskip-grand*"
+                (let ((vui--current-instance inst))
+                  (vui-set-state :m 1))
+                (let ((vui--current-instance eqskip-grand--instance))
+                  (vui-set-state :k 3))
+                (expect (buffer-string) :to-equal "g3\nc")
+                ;; The root's own state still skips the quiet component:
+                ;; its text stays, with what is put on it
+                (let ((inhibit-read-only t)
+                      (inhibit-modification-hooks t))
+                  (put-text-property 1 3 'eqskip-mark t))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :m 2))
+                (expect (buffer-string) :to-equal "g3\nc")
+                (when flag
+                  (expect (get-text-property 1 'eqskip-mark) :to-be t)))
+            (kill-buffer "*eqskip-grand*"))))))
+
+  (dolist (flag '(nil t))
+    (it (format "shows a state the child sets in its own hook (flag %s)"
+                (if flag "on" "off"))
+      ;; The hook runs in the render that the first change made, and
+      ;; changes the state again: the second change renders it too
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil))
+        (let ((inst (vui-mount (vui-component 'eqskip-list-root)
+                               "*eqskip-grand*")))
+          (unwind-protect
+              (with-current-buffer "*eqskip-grand*"
+                (let ((vui--current-instance inst))
+                  (vui-set-state :m 1))
+                (setq eqskip-grand--bump t)
+                (let ((vui--current-instance eqskip-grand--instance))
+                  (vui-set-state :k 1))
+                (expect (buffer-string) :to-equal "g99\nc"))
+            (setq eqskip-grand--bump nil)
+            (kill-buffer "*eqskip-grand*")))))))
+
+(defvar eqskip-pair--instances nil
+  "Alist of the name of an `eqskip-pair-leaf' and its instance.")
+
+(vui-defcomponent eqskip-pair-leaf (name)
+  :state ((k 0))
+  :render (progn (setf (alist-get name eqskip-pair--instances nil nil #'equal)
+                       vui--current-instance)
+                 (vui-text (format "%s%d" name k))))
+
+(vui-defcomponent eqskip-pair-wrap (name)
+  :render (vui-component 'eqskip-pair-leaf :name name))
+
+(vui-defcomponent eqskip-pair-quiet ()
+  :should-update nil
+  :render (vui-hstack (vui-component 'eqskip-pair-wrap :name "a")
+                      (vui-component 'eqskip-pair-wrap :name "b")))
+
+(vui-defcomponent eqskip-pair-root ()
+  :should-update nil
+  :render (vui-vstack (vui-component 'eqskip-pair-quiet)
+                      (vui-component 'eqskip-other)))
+
+(describe "a quiet component above two children that change their state in a batch"
+  (dolist (flag '(nil t))
+    (it (format "shows the new state of both (flag %s)" (if flag "on" "off"))
+      (let ((vui-incremental-render flag)
+            (vui-render-delay nil)
+            (eqskip-pair--instances nil))
+        (let ((inst (vui-mount (vui-component 'eqskip-pair-root)
+                               "*eqskip-pair*")))
+          (unwind-protect
+              (with-current-buffer "*eqskip-pair*"
+                (vui-rerender inst)
+                (vui-batch
+                  (let ((vui--current-instance
+                         (cdr (assoc "a" eqskip-pair--instances))))
+                    (vui-set-state :k 1))
+                  (let ((vui--current-instance
+                         (cdr (assoc "b" eqskip-pair--instances))))
+                    (vui-set-state :k 2)))
+                (expect (buffer-string) :to-equal "a1 b2\nc")
+                ;; And a change after the batch, under the same component
+                (let ((vui--current-instance
+                       (cdr (assoc "b" eqskip-pair--instances))))
+                  (vui-set-state :k 3))
+                (expect (buffer-string) :to-equal "a1 b3\nc"))
+            (kill-buffer "*eqskip-pair*")))))))
+
 (describe "whole-tree eq-skip keeps the root's component children"
   ;; A root that gives the same tree object as last time (its
   ;; should-update says skip, or its render returns a memoized tree)
