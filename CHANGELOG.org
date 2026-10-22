@@ -90,6 +90,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A render stops when the =:render= body of a component unmounts its
+  tree, as it does when a hook does. The render went on and left the
+  text of that component in the emptied buffer, or in the host text of
+  an inline mount.
+
 - An error boundary that catches no longer drops an item that a hook of
   its children appended to a =vui-stream= ending right where the
   boundary starts (a fragment with the stream, then the boundary). The

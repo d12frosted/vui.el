@@ -1211,6 +1211,104 @@ an effect after it that notes the buffer it runs in."
                       (vui-component 'vui-lifecycle-test-stopper)
                       (vui-component 'vui-lifecycle-test-stop-part :name "after")))
 
+(vui-defcomponent vui-lifecycle-test-render-stopper ()
+  "Calls `vui-lifecycle-test--stop-action' from its render, once."
+  :render (progn
+            (vui-lifecycle-test--run-stop-action)
+            (vui-text "stopper")))
+
+(vui-defcomponent vui-lifecycle-test-render-stop-root ()
+  "A part, the render stopper, then another part."
+  :on-mount (push '(mount root) vui-lifecycle-test--stop-log)
+  :on-unmount (push '(unmount root) vui-lifecycle-test--stop-log)
+  :render (vui-vstack (vui-component 'vui-lifecycle-test-stop-part :name "before")
+                      (vui-component 'vui-lifecycle-test-render-stopper)
+                      (vui-component 'vui-lifecycle-test-stop-part :name "after")))
+
+(defvar vui-lifecycle-test--owned-stream nil
+  "The stream of `vui-lifecycle-test-stream-owner'.")
+
+(describe "a tree that a render body unmounts"
+  ;; The render stops there, as it does after a hook that unmounts it
+  (before-each (setq vui-lifecycle-test--stop-log nil
+                     vui-lifecycle-test--stop-action nil))
+
+  (it "stops a re-render of a buffer there"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-render-stop-root)
+                   "*test-stop*"))
+      (unwind-protect
+          (with-current-buffer "*test-stop*"
+            (setq vui-lifecycle-test--stop-log nil
+                  vui-lifecycle-test--stop-action
+                  (lambda () (vui-unmount "*test-stop*")))
+            (vui-rerender (vui-get-instance))
+            (expect (buffer-string) :to-equal "")
+            (expect (vui-get-instance) :to-be nil)
+            (expect (reverse vui-lifecycle-test--stop-log)
+                    :to-have-same-items-as
+                    '((update "before") (unmount "before") (unmount "after")
+                      (unmount root))))
+        (kill-buffer "*test-stop*"))))
+
+  (it "stops the first render of a buffer there"
+    (let ((vui-render-delay nil))
+      (setq vui-lifecycle-test--stop-action
+            (lambda () (vui-unmount "*test-stop*")))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-render-stop-root)
+                   "*test-stop*"))
+      (unwind-protect
+          (with-current-buffer "*test-stop*"
+            (expect (buffer-string) :to-equal "")
+            (expect (vui-get-instance) :to-be nil)
+            (expect (reverse vui-lifecycle-test--stop-log)
+                    :to-have-same-items-as
+                    '((mount "before") (unmount "before") (unmount root))))
+        (kill-buffer "*test-stop*"))))
+
+  (dolist (first '(nil t))
+    (it (format "stops %s of an inline region there, and keeps the host's text"
+                (if first "the first render" "a re-render"))
+      (let ((vui-render-delay nil)
+            (instance nil))
+        (with-temp-buffer
+          (insert "host\ntail")
+          (unless first
+            (setq instance (vui-mount-inline
+                            (vui-component 'vui-lifecycle-test-render-stop-root)
+                            6)))
+          (setq vui-lifecycle-test--stop-action
+                (lambda () (vui-unmount (or instance vui--root-instance))))
+          (if first
+              (vui-mount-inline
+               (vui-component 'vui-lifecycle-test-render-stop-root) 6)
+            (vui-rerender instance))
+          (expect (buffer-string) :to-equal "host\ntail")
+          (expect vui--inline-instances :to-be nil)))))
+
+  (it "stops the first render of a stream row that unmounts the tree"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent vui-lifecycle-test-stream-owner ()
+        :render (let ((stream (vui-use-stream)))
+                  (setq vui-lifecycle-test--owned-stream stream)
+                  (vui-vstack (vui-text "top") (vui-stream stream)
+                              (vui-text "footer"))))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-stream-owner)
+                   "*test-stop*"))
+      (unwind-protect
+          (with-current-buffer "*test-stop*"
+            (setq vui-lifecycle-test--stop-action
+                  (lambda () (vui-unmount "*test-stop*")))
+            (vui-stream-append vui-lifecycle-test--owned-stream
+                               (vui-component
+                                'vui-lifecycle-test-render-stop-root))
+            (expect (buffer-string) :to-equal "")
+            (expect vui--inline-instances :to-be nil))
+        (kill-buffer "*test-stop*")))))
+
 (describe "a tree that a hook unmounts in its own render"
   (before-each (setq vui-lifecycle-test--stop-log nil
                      vui-lifecycle-test--stop-action nil))

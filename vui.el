@@ -1066,8 +1066,8 @@ and recorded by the streams rendered in it (see
 `vui-stream-handle-enclosing').  Nil in the render of a buffer root.")
 
 (defvar vui--stoppable-root nil
-  "The root whose render stops when a hook unmounts it, or nil.
-See `vui--rendering-root'.")
+  "The root whose render stops when a hook or a render function unmounts it.
+Nil when there is none.  See `vui--rendering-root'.")
 
 (defvar vui--enclosing-stoppable nil
   "The roots around `vui--stoppable-root' whose render it is a part of.
@@ -5574,6 +5574,8 @@ its tree renders with it.  See `vui--render-component'."
                   (vui--debug-log 'render "<%s> skipped (should-update=nil)"
                                   component-name)
                   (vui-instance-cached-vtree instance))))
+    ;; The render function can unmount the tree, as a hook can
+    (vui--stop-if-unmounted)
     ;; A commit function owns what its last commit wrote, so it gets a
     ;; nil VTREE as well, to remove that text
     (when (or vtree commit-fn)
