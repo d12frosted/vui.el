@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- When a =vui-stream= is written again (its owner hides and shows it,
+  say) or for the first time, a hook of one of its rows that unmounts a
+  row written before it takes that row out of the stream, also in a
+  =vui-mount-inline= region. Before, an empty line stayed where the row
+  was, and the row stayed one of the stream's items.
+
 - With =vui-incremental-render= set, a component in a flat list of
   components a root renders, whose =:should-update= says no, renders
   again when a component below it changed its state. Before, it skipped

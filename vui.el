@@ -8290,10 +8290,27 @@ A row unmounted on its own (with `vui-unmount') has no text any more."
        (vui-instance-region-start row)
        t))
 
+(defvar vui--streams-in-render nil
+  "The streams a render writes from their items now, an alist.
+Each entry is (HANDLE . MISSED): MISSED is non-nil when an append or an
+update of the last item of HANDLE came while it was being written,
+from a hook of one of its rows.  The render writes the item as it was, and
+asks for another render when it is done (see `vui--stream-render').")
+
 (defun vui--stream-of-row (row)
-  "Return the stream of the current buffer that ROW is a row of, or nil."
-  (cl-find-if (lambda (handle) (memq row (vui-stream-handle-rows handle)))
-              vui--streams))
+  "Return the stream of the current buffer that ROW is a row of, or nil.
+That is also a stream being written now (see `vui--streams-in-render'):
+it is one of the buffer's streams again only when its render is done,
+and a hook of one of its rows can unmount another one before that.  In
+the first render of its tree it has no buffer yet."
+  (let ((has-row (lambda (handle)
+                   (memq row (vui-stream-handle-rows handle)))))
+    (or (cl-find-if has-row vui--streams)
+        (cl-find-if (lambda (handle)
+                      (and (memq (vui-stream-handle-buffer handle)
+                                 (list nil (current-buffer)))
+                           (funcall has-row handle)))
+                    (mapcar #'car vui--streams-in-render)))))
 
 (defun vui--stream-reseat-row (row path &optional created)
   "Render stream ROW at point, in a region of its own, under PATH.
@@ -8365,13 +8382,6 @@ waits, and is made when the stream is written (see
 return nil then.  An edit of a node above is made at once.  An error
 of an edit that waited is one of the hook that made it (see
 `vui-lifecycle-error-handler').")
-
-(defvar vui--streams-in-render nil
-  "The streams a render writes from their items now, an alist.
-Each entry is (HANDLE . MISSED): MISSED is non-nil when an append or an
-update of the last item of HANDLE came while it was being written,
-from a hook of one of its rows.  The render writes the item as it was, and
-asks for another render when it is done (see `vui--stream-render').")
 
 (defun vui--stream-note-missed (handle)
   "Note that the stream HANDLE got an item its render does not write.
@@ -11729,7 +11739,11 @@ Returns INSTANCE, or nil if it was already unmounted."
           (vui--stream-drop-item stream cell))
         (setf (vui-stream-handle-rows stream)
               (delq instance (vui-stream-handle-rows stream)))
-        (vui--stream-request-rebuild stream))
+        ;; A stream being written asks for that itself when it is done:
+        ;; it has no root and no place to write to before
+        (if (assq stream vui--streams-in-render)
+            (vui--stream-note-missed stream)
+          (vui--stream-request-rebuild stream)))
       instance)))
 
 (defun vui-unmount (&optional buffer-or-instance)

@@ -2678,6 +2678,107 @@ flag is set."
         (kill-buffer "*vui-sr-reseat-self*")))))
 
 
+(defvar vui-sr-sibling--rows nil
+  "Alist of the label of a `vui-sr-sibling-row' and its instance.")
+
+(defvar vui-sr-sibling--kill nil
+  "(LABEL . VICTIM): the row LABEL unmounts the row VICTIM on update, once.")
+
+(defun vui-sr-sibling--maybe-kill (label)
+  "Unmount the victim of `vui-sr-sibling--kill' when LABEL is its killer."
+  (when (equal (car vui-sr-sibling--kill) label)
+    (let ((victim (cdr vui-sr-sibling--kill)))
+      (setq vui-sr-sibling--kill nil)
+      (vui-unmount (cdr (assoc victim vui-sr-sibling--rows))))))
+
+(vui-defcomponent vui-sr-sibling-row (label)
+  :on-mount (progn
+              (push (cons label vui--current-instance) vui-sr-sibling--rows)
+              (vui-sr-sibling--maybe-kill label))
+  :on-update (vui-sr-sibling--maybe-kill label)
+  :render (vui-text (format "[%s]" label)))
+
+(describe "vui-stream rows: a hook unmounts a row written before it"
+  (dolist (victim '("W" "Y"))
+    (it (format "takes the other row away (%s)" victim)
+      (let ((vui-render-delay nil)
+            (vui-sr-sibling--rows nil)
+            (log (vui-make-stream)))
+        (vui-stream-append log (vui-text "a"))
+        (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                   "*vui-sr-sibling*")
+        (unwind-protect
+            (with-current-buffer "*vui-sr-sibling*"
+              (dolist (label '("W" "X" "Y"))
+                (vui-stream-append log (vui-component 'vui-sr-sibling-row
+                                                      :label label)))
+              (vui-stream-append log (vui-text "c"))
+              (vui-update (vui-get-instance) (list :log log :show nil))
+              (setq vui-sr-sibling--kill (cons "X" victim))
+              (vui-update (vui-get-instance) (list :log log :show t))
+              (let ((want (if (equal victim "W")
+                              "top\na\n[X]\n[Y]\nc\nfooter"
+                            "top\na\n[W]\n[X]\nc\nfooter")))
+                (expect (buffer-string) :to-equal want)
+                (expect (length (vui-stream-handle-rows log)) :to-equal 2)
+                (expect (length (vui-stream-handle-items-rev log)) :to-equal 4)
+                (let ((root (vui-get-instance)))
+                  (setf (vui-instance-render-record root) nil)
+                  (vui-rerender root))
+                (expect (buffer-string) :to-equal want)))
+          (setq vui-sr-sibling--kill nil)
+          (kill-buffer "*vui-sr-sibling*")))))
+
+  (it "takes the other row away in the first render of the tree"
+    (let ((vui-render-delay nil)
+          (vui-sr-sibling--rows nil)
+          (vui-sr-sibling--kill (cons "X" "W"))
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "a"))
+      (dolist (label '("W" "X"))
+        (vui-stream-append log (vui-component 'vui-sr-sibling-row
+                                              :label label)))
+      (vui-stream-append log (vui-text "c"))
+      (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                 "*vui-sr-sibling*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-sibling*"
+            (expect (buffer-string) :to-equal "top\na\n[X]\nc\nfooter")
+            (expect (length (vui-stream-handle-items-rev log)) :to-equal 3)
+            (vui-stream-append log (vui-text "d"))
+            (expect (buffer-string) :to-equal "top\na\n[X]\nc\nd\nfooter"))
+        (kill-buffer "*vui-sr-sibling*"))))
+
+  (it "takes the other row away in an inline region"
+    (let ((vui-render-delay nil)
+          (vui-sr-sibling--rows nil)
+          (log (vui-make-stream))
+          (inst nil))
+      (vui-stream-append log (vui-text "a"))
+      (with-current-buffer (get-buffer-create "*vui-sr-sibling*")
+        (unwind-protect
+            (progn
+              (insert "HEAD\n")
+              (setq inst (vui-mount-inline
+                          (vui-component 'vui-sr-toggle-root :log log :show t)))
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert "\nTAIL"))
+              (dolist (label '("W" "X" "Y"))
+                (vui-stream-append log (vui-component 'vui-sr-sibling-row
+                                                      :label label)))
+              (vui-stream-append log (vui-text "c"))
+              (vui-update inst (list :log log :show nil))
+              (setq vui-sr-sibling--kill (cons "X" "W"))
+              (vui-update inst (list :log log :show t))
+              (expect (buffer-string)
+                      :to-equal "HEAD\ntop\na\n[X]\n[Y]\nc\nfooter\nTAIL")
+              (vui-stream-append log (vui-text "d"))
+              (expect (buffer-string)
+                      :to-equal "HEAD\ntop\na\n[X]\n[Y]\nc\nd\nfooter\nTAIL"))
+          (setq vui-sr-sibling--kill nil)
+          (kill-buffer "*vui-sr-sibling*"))))))
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here
