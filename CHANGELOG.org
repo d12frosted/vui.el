@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= row that unmounts itself from a hook while a render
+  writes the stream again (the root shows the stream after another
+  tree, say) leaves no text behind. Its text and the separator before
+  it stayed in the buffer, and the stream kept it as one of its rows. A
+  field in such a row, also one that unmounts itself in its first
+  render, goes with it: its overlay covered the text after it.
+
 - A render stops when the =:render= body of a component unmounts its
   tree, as it does when a hook does. The render went on and left the
   text of that component in the emptied buffer, or in the host text of

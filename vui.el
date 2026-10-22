@@ -8386,7 +8386,8 @@ silently dropping every subsequent streamed append."
                             (vui--stream-mount-row handle cell vui--render-path))
                 ;; It unmounted itself, and is no item any more: its
                 ;; separator goes too
-                (delete-region (vui--shifted sep-start shift) (point))
+                (vui--stream-drop-row-text handle
+                                           (vui--shifted sep-start shift))
                 (pcase-setq `(,first ,last-start ,last-shift ,last-row) before))))
            ;; Content, the common case first
            ((not (vui-instance-p item))
@@ -8419,16 +8420,33 @@ silently dropping every subsequent streamed append."
             (when (eq (vui-instance-region-end item) old-end)
               (setq shared t)))
            (t
-            (unless first (insert sep))
-            (setq first nil
-                  last-start (point)
-                  last-shift vui--hook-shift
-                  last-row item)
-            (if vui--measuring-p
-                (vui--stream-measure-row item)
-              (when (eq (vui-instance-region-end item) old-end)
-                (setq shared t))
-              (vui--stream-reseat-row item vui--render-path)))))))
+            (let ((sep-start (point))
+                  (shift vui--hook-shift)
+                  (before (list first last-start last-shift last-row)))
+              (unless first (insert sep))
+              (setq first nil
+                    last-start (point)
+                    last-shift vui--hook-shift
+                    last-row item)
+              (if vui--measuring-p
+                  (vui--stream-measure-row item)
+                (when (eq (vui-instance-region-end item) old-end)
+                  (setq shared t))
+                (vui--stream-reseat-row item vui--render-path)
+                ;; A hook of the row unmounted it in this render, before
+                ;; it had a region around its text: the text goes, with
+                ;; its separator, and the row is no item any more
+                (unless (vui--stream-row-p item)
+                  (vui--stream-drop-row-text handle
+                                             (vui--shifted sep-start shift)
+                                             item)
+                  (pcase-setq `(,first ,last-start ,last-shift ,last-row)
+                              before)
+                  (when-let* ((cell (memq item (vui-stream-handle-items-rev
+                                                handle))))
+                    (vui--stream-drop-item handle cell))
+                  (setf (vui-stream-handle-rows handle)
+                        (delq item (vui-stream-handle-rows handle)))))))))))
     (unless vui--measuring-p
       ;; Edits to the live stream render their item under the same path
       (setf (vui-stream-handle-path handle) path)
@@ -8502,6 +8520,21 @@ the boundary's text."
           (setq to (max (or to 0) e)))))
     (when to
       (set-marker start to))))
+
+(defun vui--stream-drop-row-text (handle from &optional row)
+  "Delete the text of a row of HANDLE that unmounted itself, FROM point.
+The render of the stream wrote it, with the separator before it, before
+the row had a region around it: the unmount of the row took none of it
+away.  Its fields and the streams in it go with it, as in
+`vui--unmount-inline'.  ROW is the row, when it was one before.  In a
+layout that measures the stream, the stream is written again: the
+layout counted the row's text."
+  (vui--remove-widget-overlays from (point) t)
+  (vui--forget-region-fields from (point) t)
+  (vui--park-streams from (point) row)
+  (delete-region from (point))
+  (when (and vui--in-measured-layout (not vui--measuring-p))
+    (vui--stream-note-missed handle)))
 
 (defun vui--stream-park (handle)
   "Leave the markers of HANDLE pointing nowhere: its text is gone.

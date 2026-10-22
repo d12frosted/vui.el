@@ -2357,6 +2357,144 @@ the root, SEPARATOR is the separator of the stream."
         ;; The footer after the stream is written
         (expect (vui-sr-hook--text) :to-match "|footer\\'")))))
 
+(defvar vui-sr-reseat-self--kill nil
+  "Non-nil makes `vui-sr-reseat-self-row' unmount itself on update, once.")
+
+(vui-defcomponent vui-sr-reseat-self-row ()
+  "Unmounts itself when it renders again and the flag is set."
+  :on-update (when vui-sr-reseat-self--kill
+               (setq vui-sr-reseat-self--kill nil)
+               (vui-unmount vui--current-instance))
+  :render (vui-text "[row]"))
+
+(vui-defcomponent vui-sr-reseat-self-field-row ()
+  "A field; unmounts itself when it renders again and the flag is set."
+  :on-update (when vui-sr-reseat-self--kill
+               (setq vui-sr-reseat-self--kill nil)
+               (vui-unmount vui--current-instance))
+  :render (vui-hstack (vui-text "F:") (vui-field :value "val" :size 5)))
+
+(defvar vui-sr-reseat-self--above nil
+  "A stream above the one of `vui-sr-reseat-self-two-root'.")
+
+(vui-defcomponent vui-sr-reseat-self-above-row ()
+  "Appends above, then unmounts itself, when it renders again and the
+flag is set."
+  :on-update (when vui-sr-reseat-self--kill
+               (setq vui-sr-reseat-self--kill nil)
+               (vui-stream-append vui-sr-reseat-self--above (vui-text "above"))
+               (vui-unmount vui--current-instance))
+  :render (vui-text "[row]"))
+
+(vui-defcomponent vui-sr-reseat-self-two-root (above log show)
+  :render (vui-vstack (vui-text "top")
+                      (vui-stream above)
+                      (if show (vui-stream log) (vui-text "other"))
+                      (vui-text "footer")))
+
+(describe "vui-stream rows: a row that unmounts itself when it is written again"
+  ;; The stream comes back after the root showed another tree, and the
+  ;; row renders again in it: its hook unmounts it there
+  (dolist (place '(middle last))
+    (it (format "takes its text and its separator away (%s)" place)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream)))
+        (vui-stream-append log (vui-text "first"))
+        (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                   "*vui-sr-reseat-self*")
+        (unwind-protect
+            (with-current-buffer "*vui-sr-reseat-self*"
+              (vui-stream-append log (vui-component 'vui-sr-reseat-self-row))
+              (when (eq place 'middle)
+                (vui-stream-append log (vui-text "after")))
+              (vui-update (vui-get-instance) (list :log log :show nil))
+              (setq vui-sr-reseat-self--kill t)
+              (vui-update (vui-get-instance) (list :log log :show t))
+              (let ((want (if (eq place 'middle)
+                              "top\nfirst\nafter\nfooter"
+                            "top\nfirst\nfooter")))
+                (expect (buffer-string) :to-equal want)
+                (expect (vui-stream-handle-rows log) :to-be nil)
+                (vui-stream-append log (vui-text "more"))
+                (setq want (replace-regexp-in-string "\nfooter" "\nmore\nfooter"
+                                                     want))
+                (expect (buffer-string) :to-equal want)
+                (let ((root (vui-get-instance)))
+                  (setf (vui-instance-render-record root) nil)
+                  (vui-rerender root))
+                (expect (buffer-string) :to-equal want)))
+          (setq vui-sr-reseat-self--kill nil)
+          (kill-buffer "*vui-sr-reseat-self*")))))
+
+  (dolist (place '(first only))
+    (it (format "takes its text and its separator away (%s)" place)
+      (let ((vui-render-delay nil)
+            (log (vui-make-stream)))
+        (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                   "*vui-sr-reseat-self*")
+        (unwind-protect
+            (with-current-buffer "*vui-sr-reseat-self*"
+              (vui-stream-append log (vui-component 'vui-sr-reseat-self-row))
+              (when (eq place 'first)
+                (vui-stream-append log (vui-text "after")))
+              (vui-update (vui-get-instance) (list :log log :show nil))
+              (setq vui-sr-reseat-self--kill t)
+              (vui-update (vui-get-instance) (list :log log :show t))
+              (expect (buffer-string)
+                      :to-equal (if (eq place 'first)
+                                    "top\nafter\nfooter"
+                                  "top\nfooter"))
+              (expect (length (vui-stream-handle-items-rev log))
+                      :to-equal (if (eq place 'first) 1 0)))
+          (setq vui-sr-reseat-self--kill nil)
+          (kill-buffer "*vui-sr-reseat-self*")))))
+
+  (it "takes its fields away"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "first"))
+      (vui-mount (vui-component 'vui-sr-toggle-root :log log :show t)
+                 "*vui-sr-reseat-self*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-reseat-self*"
+            (vui-stream-append log (vui-component 'vui-sr-reseat-self-field-row))
+            (vui-stream-append log (vui-component 'vui-sr-reseat-self-row))
+            (vui-update (vui-get-instance) (list :log log :show nil))
+            (setq vui-sr-reseat-self--kill t)
+            (vui-update (vui-get-instance) (list :log log :show t))
+            (expect (buffer-string) :to-equal "top\nfirst\n[row]\nfooter")
+            (expect widget-field-list :to-be nil)
+            (goto-char (point-min))
+            (search-forward "[row]")
+            (expect (widget-field-at (match-beginning 0)) :to-be nil))
+        (setq vui-sr-reseat-self--kill nil)
+        (kill-buffer "*vui-sr-reseat-self*"))))
+
+  (it "takes its text away when its hook wrote above it"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (setq vui-sr-reseat-self--above (vui-make-stream))
+      (vui-stream-append vui-sr-reseat-self--above (vui-text "a1"))
+      (vui-stream-append log (vui-text "first"))
+      (vui-mount (vui-component 'vui-sr-reseat-self-two-root
+                                :above vui-sr-reseat-self--above
+                                :log log :show t)
+                 "*vui-sr-reseat-self*")
+      (unwind-protect
+          (with-current-buffer "*vui-sr-reseat-self*"
+            (vui-stream-append log (vui-component 'vui-sr-reseat-self-above-row))
+            (vui-stream-append log (vui-text "after"))
+            (vui-update (vui-get-instance)
+                        (list :above vui-sr-reseat-self--above :log log :show nil))
+            (setq vui-sr-reseat-self--kill t)
+            (vui-update (vui-get-instance)
+                        (list :above vui-sr-reseat-self--above :log log :show t))
+            (expect (buffer-string)
+                    :to-equal "top\na1\nabove\nfirst\nafter\nfooter"))
+        (setq vui-sr-reseat-self--kill nil)
+        (kill-buffer "*vui-sr-reseat-self*")))))
+
+
 (provide 'vui-stream-rows-test)
 
 ;;; vui-stream-rows-test.el ends here
