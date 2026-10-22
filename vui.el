@@ -4253,17 +4253,38 @@ the in-progress render commits, instead of erasing the buffer
 mid-render.
 
 Nothing happens while INSTANCE is being unmounted, as when a hook of
-its tree sets state (see `vui--unmounting')."
+its tree sets state (see `vui--unmounting').
+
+A render of INSTANCE asked for earlier that still waits (for
+`vui-render-delay', the end of a `vui-batch', or in the queue) is
+dropped: this render shows what it would.  When this render does not
+finish, a render that waited for the delay or the batch is asked for
+again; one that waited in the queue is not (the error drain does not
+run a tree that failed)."
   (cond
    ((memq instance vui--unmounting)
     nil)
    (vui--rendering-p
     (cl-pushnew instance vui--queued-rerenders :test #'eq))
-   ((vui--inline-p instance)
-    (vui--rerender-inline instance))
    (t
-    (vui--widening (vui-instance-buffer instance)
-                   (lambda () (vui--rerender-buffer instance))))))
+    (let ((timer (vui-instance-render-timer instance))
+          (batched (memq instance vui--batch-roots))
+          (done nil))
+      (vui--cancel-render-timer instance)
+      (setq vui--batch-roots (delq instance vui--batch-roots)
+            vui--queued-rerenders (delq instance vui--queued-rerenders))
+      (unwind-protect
+          (progn
+            (if (vui--inline-p instance)
+                (vui--rerender-inline instance)
+              (vui--widening (vui-instance-buffer instance)
+                             (lambda () (vui--rerender-buffer instance))))
+            (setq done t))
+        (when (and (not done) (vui-instance-buffer instance))
+          (when (and timer (not (vui-instance-render-timer instance)))
+            (vui--schedule-deferred-render-for instance))
+          (when (and batched (> vui--batch-depth 0))
+            (cl-pushnew instance vui--batch-roots :test #'eq))))))))
 
 (defvar vui--stream-mounting-rows)
 

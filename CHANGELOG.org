@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A tree that renders now, while a render of it waits for
+  =vui-render-delay= or for the end of a =vui-batch=, renders once. The
+  render that waited still ran after it, for example when a
+  =vui-stream= gets its first item after a state change. Now it does
+  not run: the render made now shows what it would. When the render
+  made now signals, the one that waited still runs.
+
 - A hook that edits a live node of a =vui-stream=
   (=vui-stream-append-to=, =vui-stream-update= and the like) while the
   render that runs it writes that stream later (a hook of a row of

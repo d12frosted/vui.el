@@ -431,6 +431,99 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
                       :to-equal "3"))
           (kill-buffer "*rr-co*"))))))
 
+(defvar vui-rr-waiting--renders 0
+  "How many times `vui-rr-waiting' rendered.")
+
+(defvar vui-rr-waiting-stream nil
+  "The stream `vui-rr-waiting' shows.")
+
+(defvar vui-rr-waiting--boom nil
+  "Non-nil when the next render of `vui-rr-waiting' signals.")
+
+(vui-defcomponent vui-rr-waiting ()
+  :state ((n 0))
+  :render (progn (when vui-rr-waiting--boom
+                   (setq vui-rr-waiting--boom nil)
+                   (error "Boom"))
+                 (setq vui-rr-waiting--renders (1+ vui-rr-waiting--renders))
+                 (vui-vstack (vui-text (format "%d" n))
+                             (vui-stream vui-rr-waiting-stream)
+                             (vui-text "end"))))
+
+(describe "a render of a tree whose render waits"
+  ;; The render made now shows the state the waiting one would: that
+  ;; one does not run again
+  (it "takes the place of the render that waits for the delay"
+    (let ((vui-render-delay 0.02)
+          (vui-rr-waiting--renders 0)
+          (vui-rr-waiting-stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-waiting) "*rr-wait*")))
+        (unwind-protect
+            (with-current-buffer "*rr-wait*"
+              (setq vui-rr-waiting--renders 0)
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (vui-rerender inst)
+              (vui-test--wait-for-timers 0.1)
+              (expect vui-rr-waiting--renders :to-equal 1)
+              (expect (buffer-string) :to-equal "1\nend"))
+          (kill-buffer "*rr-wait*")))))
+
+  (it "takes the place of the render that waits, for a stream's first item"
+    (let ((vui-render-delay 0.02)
+          (vui-rr-waiting--renders 0)
+          (vui-rr-waiting-stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-waiting) "*rr-wait*")))
+        (unwind-protect
+            (with-current-buffer "*rr-wait*"
+              (setq vui-rr-waiting--renders 0)
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              ;; The tree renders now to lay the stream out
+              (vui-stream-append vui-rr-waiting-stream (vui-text "a"))
+              (vui-test--wait-for-timers 0.1)
+              (expect vui-rr-waiting--renders :to-equal 1)
+              (expect (buffer-string) :to-equal "1\na\nend"))
+          (kill-buffer "*rr-wait*")))))
+
+  (it "leaves the render that waits when the render now signals"
+    (let ((vui-render-delay 0.02)
+          (vui-rr-waiting--renders 0)
+          (vui-rr-waiting--boom nil)
+          (vui-rr-waiting-stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-waiting) "*rr-wait*")))
+        (unwind-protect
+            (with-current-buffer "*rr-wait*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1))
+              (setq vui-rr-waiting--boom t)
+              (expect (vui-rerender inst) :to-throw 'error)
+              (vui-test--wait-for-timers 0.1)
+              (expect (buffer-string) :to-equal "1\nend"))
+          (kill-buffer "*rr-wait*")))))
+
+  (it "takes the place of the render a batch holds"
+    (let ((vui-render-delay nil)
+          (vui-rr-waiting--renders 0)
+          (vui-rr-waiting-stream (vui-make-stream)))
+      (let ((inst (vui-mount (vui-component 'vui-rr-waiting) "*rr-wait*")))
+        (unwind-protect
+            (with-current-buffer "*rr-wait*"
+              (setq vui-rr-waiting--renders 0)
+              (vui-batch
+                (let ((vui--current-instance inst))
+                  (vui-set-state :n 1))
+                (vui-stream-append vui-rr-waiting-stream (vui-text "a")))
+              (expect vui-rr-waiting--renders :to-equal 1)
+              (expect (buffer-string) :to-equal "1\na\nend")
+              ;; A change after the render in the batch renders again
+              (vui-batch
+                (vui-stream-append vui-rr-waiting-stream (vui-text "b"))
+                (let ((vui--current-instance inst))
+                  (vui-set-state :n 2)))
+              (expect (buffer-string) :to-equal "2\na\nb\nend"))
+          (kill-buffer "*rr-wait*"))))))
+
 ;;; No-op render
 
 (describe "no-op re-render"
