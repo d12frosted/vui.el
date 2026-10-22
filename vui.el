@@ -4179,6 +4179,15 @@ are put back after BODY, also when it signals."
          (dolist (end ,sym)
            (set-marker-insertion-type (car end) (cdr end)))))))
 
+(defvar vui--held-hook-errors nil
+  "A list cell for the errors of hooks that wait to be signalled, or nil.
+Bound by `vui--drop-created' while it drops components: an
+`:on-unmount' that signals under the `signal' handler must not stop the
+drop of the others, nor take the place of the error that made the
+drop.  `vui--handle-error' pushes the error to the cell then.  A tree
+that a hook of the drop renders or unmounts has hooks of its own, and
+binds this to nil (see `vui--rendering-root' and `vui-unmount').")
+
 (defmacro vui--rendering-root (root &rest body)
   "Run BODY, a render of ROOT; return nil when a hook unmounted ROOT.
 A hook in the render (`:on-mount', `:on-update', or the `:on-unmount'
@@ -4197,6 +4206,8 @@ the error goes on.  Return non-nil when BODY ran to its end."
             ;; Another tree: what stops the render around it does not
             ;; stop this one
             (vui--enclosing-stoppable nil)
+            ;; Its hooks are not hooks of a drop around it
+            (vui--held-hook-errors nil)
             (vui--created-instances (list nil)))
        (let ((done nil))
          (unwind-protect
@@ -4212,7 +4223,7 @@ the error goes on.  Return non-nil when BODY ran to its end."
              (vui--drop-created
               (cl-remove-if (lambda (i) (vui--linked-p i ,r))
                             (car vui--created-instances))
-              nil)))))))
+              nil t)))))))
 
 (defun vui--linked-p (instance root)
   "Non-nil when INSTANCE is in the tree of ROOT.
@@ -5541,7 +5552,9 @@ INSTANCE is the component instance where the error occurred."
     (pcase handler
       ('warn (display-warning 'vui msg :warning))
       ('message (message "%s" msg))
-      ('signal (signal (car err) (cdr err)))
+      ('signal (if vui--held-hook-errors
+                   (push err (car vui--held-hook-errors))
+                 (signal (car err) (cdr err))))
       ('ignore nil)
       ((pred functionp) (funcall handler hook-name err instance)))))
 
@@ -5958,19 +5971,30 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
      :buffer (when parent (vui-instance-buffer parent))
      :mounted-p nil)))
 
-(defun vui--drop-created (created upto)
+(defun vui--drop-created (created upto &optional failing)
   "Drop the instances of CREATED before its tail UPTO, newest first.
 CREATED is a list from `vui--created-instances'.  One that mounted is
 unmounted, with its children.  One that never mounted (its render, or
 the render of a component in it, failed) has no hooks to run, but the
 async work its render started is cancelled.  Newest first, so the
-components in a component go before it."
-  (while (not (eq created upto))
-    (let ((instance (pop created)))
-      (pcase (vui-instance-mounted-p instance)
-        ('t (vui--call-unmount-recursive instance))
-        ('nil (vui--cleanup-instance-asyncs instance)
-              (setf (vui-instance-mounted-p instance) 'unmounted))))))
+components in a component go before it.
+
+A hook that signals under the `signal' handler does not stop the drop
+(see `vui--held-hook-errors'): the first such error is signalled when
+all are dropped.  With FAILING non-nil an error makes the drop, and
+goes on after it: the error of the hook is only shown as a message."
+  (let ((held (list nil)))
+    (let ((vui--held-hook-errors held))
+      (while (not (eq created upto))
+        (let ((instance (pop created)))
+          (pcase (vui-instance-mounted-p instance)
+            ('t (vui--call-unmount-recursive instance))
+            ('nil (vui--cleanup-instance-asyncs instance)
+                  (setf (vui-instance-mounted-p instance) 'unmounted))))))
+    (when-let* ((err (car (last (car held)))))
+      (if failing
+          (message "VUI: %s" (error-message-string err))
+        (signal (car err) (cdr err))))))
 
 (defun vui--reconcile-component (vnode parent)
   "Reconcile VNODE with existing child of PARENT, or create new instance."
@@ -9233,7 +9257,7 @@ tree does."
                (set-marker marker nil)))
            (setf (vui-instance-region-start row) nil
                  (vui-instance-region-end row) nil)
-           (vui--drop-created (list row) nil)
+           (vui--drop-created (list row) nil t)
            (let ((inhibit-read-only t)
                  (to (marker-position end)))
              (vui--forget-fields-in from to)
@@ -9760,6 +9784,10 @@ the stream shows its fallback with no row left behind."
          (pos (point))
          (created (list nil))
          (done nil)
+         ;; The roots a hook of the row can stop by unmounting them
+         (outer (if vui--stoppable-root
+                    (cons vui--stoppable-root vui--enclosing-stoppable)
+                  vui--enclosing-stoppable))
          (stopped nil))
     (setf (vui-instance-buffer row) (current-buffer)
           (vui-instance-region-start row) (copy-marker pos)
@@ -9806,8 +9834,15 @@ the stream shows its fallback with no row left behind."
             (set-marker marker nil)))
         (setf (vui-instance-region-start row) nil
               (vui-instance-region-end row) nil)
-        (vui--drop-created (car created) nil)
-        (vui--drop-created (list row) nil)))
+        ;; In one drop: a hook that signals does not keep the row
+        (vui--drop-created (append (car created) (list row)) nil
+                           ;; Its render signalled: not a throw that stops
+                           ;; a root a hook unmounted
+                           (and (not done)
+                                (not (cl-some (lambda (root)
+                                                (eq (vui-instance-mounted-p root)
+                                                    'unmounted))
+                                              outer))))))
     (and (vui--stream-row-p row) row)))
 
 (defun vui--stream-queued-row (instance)
@@ -9881,7 +9916,8 @@ one of its hooks signals, as a tree does."
               (set-marker marker nil)))
           (setf (vui-instance-region-start row) nil
                 (vui-instance-region-end row) nil)
-          (vui--drop-created (list row) nil)))))
+          ;; Its first render signalled, and that error goes on
+          (vui--drop-created (list row) nil t)))))
     (set-marker from nil)
     (set-marker to nil)))
 
@@ -11609,7 +11645,8 @@ RESIZE is as in `vui--mount-root', which calls this when BUF is free."
         ;; re-render the old UI over the new mount.
         (setq vui--tearing-down t)
         (unwind-protect
-            (progn
+            ;; Not hooks of a drop around it (see `vui--held-hook-errors')
+            (let ((vui--held-hook-errors nil))
               (when vui--mounted-root
                 (vui--unmount-root vui--mounted-root))
               ;; A full mount owns the whole buffer: tear down inline
@@ -11815,11 +11852,14 @@ killed."
           (vui-stream-handle-parent handle) nil
           (vui-stream-handle-root handle) nil))
   (when vui--mounted-root
-    (vui--unmount-root vui--mounted-root)
+    ;; Not hooks of a drop around it (see `vui--held-hook-errors')
+    (let ((vui--held-hook-errors nil))
+      (vui--unmount-root vui--mounted-root))
     (kill-local-variable 'vui--mounted-root))
   (when vui--inline-instances
-    (dolist (instance vui--inline-instances)
-      (vui--unmount-root instance))
+    (let ((vui--held-hook-errors nil))
+      (dolist (instance vui--inline-instances)
+        (vui--unmount-root instance)))
     (kill-local-variable 'vui--inline-instances)))
 
 (defun vui--unmount-inline (instance)
@@ -11907,43 +11947,46 @@ After unmounting, async callbacks created via
 tree become no-ops.
 
 Returns the unmounted instance, or nil if nothing was mounted."
-  (cond
-   ((vui-instance-p buffer-or-instance)
-    (if (vui--inline-p buffer-or-instance)
-        (vui--unmount-inline buffer-or-instance)
-      (when-let* ((buffer (vui-instance-buffer buffer-or-instance)))
-        (vui-unmount buffer))))
-   (t
-    (when-let* ((instance (vui-get-instance buffer-or-instance)))
-      ;; A hook of the tree unmounts it again: the unmount that runs it
-      ;; does the rest
-      (unless (memq instance vui--unmounting)
-        (let ((buf (vui-instance-buffer instance)))
-          (with-current-buffer buf
-            (setq vui--tearing-down t))
-          (unwind-protect
-              (vui--unmount-root instance)
+  ;; Its hooks are not hooks of a drop around it (see
+  ;; `vui--held-hook-errors')
+  (let ((vui--held-hook-errors nil))
+    (cond
+     ((vui-instance-p buffer-or-instance)
+      (if (vui--inline-p buffer-or-instance)
+          (vui--unmount-inline buffer-or-instance)
+        (when-let* ((buffer (vui-instance-buffer buffer-or-instance)))
+          (vui-unmount buffer))))
+     (t
+      (when-let* ((instance (vui-get-instance buffer-or-instance)))
+        ;; A hook of the tree unmounts it again: the unmount that runs it
+        ;; does the rest
+        (unless (memq instance vui--unmounting)
+          (let ((buf (vui-instance-buffer instance)))
+            (with-current-buffer buf
+              (setq vui--tearing-down t))
+            (unwind-protect
+                (vui--unmount-root instance)
+              (when (buffer-live-p buf)
+                (with-current-buffer buf
+                  (setq vui--tearing-down nil))))
             (when (buffer-live-p buf)
               (with-current-buffer buf
-                (setq vui--tearing-down nil))))
-          (when (buffer-live-p buf)
-            (with-current-buffer buf
-              (kill-local-variable 'vui--mounted-root)
-              ;; Inhibit modification hooks while erasing: a `vui-field' in
-              ;; the buffer installs an after-change hook that runs
-              ;; `widget-after-change' against the now half-removed field and
-              ;; signals (number-or-marker-p nil).  The render path inhibits
-              ;; these hooks for the same reason; teardown must too.
-              (let ((inhibit-read-only t)
-                    (inhibit-modification-hooks t))
-                (remove-overlays)
-                (vui--park-streams)
-                (erase-buffer))
-              ;; Put back the header line a sticky table header replaced
-              (vui--table-restore-header-line)
-              ;; The trees its hooks mounted in the buffer go in now
-              (vui--run-mounts-after-teardown instance)))))
-      instance))))
+                (kill-local-variable 'vui--mounted-root)
+                ;; Inhibit modification hooks while erasing: a `vui-field' in
+                ;; the buffer installs an after-change hook that runs
+                ;; `widget-after-change' against the now half-removed field and
+                ;; signals (number-or-marker-p nil).  The render path inhibits
+                ;; these hooks for the same reason; teardown must too.
+                (let ((inhibit-read-only t)
+                      (inhibit-modification-hooks t))
+                  (remove-overlays)
+                  (vui--park-streams)
+                  (erase-buffer))
+                ;; Put back the header line a sticky table header replaced
+                (vui--table-restore-header-line)
+                ;; The trees its hooks mounted in the buffer go in now
+                (vui--run-mounts-after-teardown instance)))))
+        instance)))))
 
 (provide 'vui)
 ;;; vui.el ends here

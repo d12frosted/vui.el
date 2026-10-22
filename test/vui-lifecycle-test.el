@@ -1745,5 +1745,210 @@ an effect after it that notes the buffer it runs in."
                     :to-be 'vui-lifecycle-test-stop-part))
         (kill-buffer "*test-stop*")))))
 
+(defvar vui-lc-drop--log nil
+  "What the hooks of the `vui-lc-drop-*' components did, newest first.")
+
+(defvar vui-lc-drop--d nil
+  "The last `vui-lc-drop-d' rendered.")
+
+(vui-defcomponent vui-lc-drop-b ()
+  :on-unmount (error "Unmount boom")
+  :render (vui-text "b"))
+
+(vui-defcomponent vui-lc-drop-d ()
+  :on-unmount (push 'd vui-lc-drop--log)
+  :render (progn (setq vui-lc-drop--d vui--current-instance)
+                 (vui-text "d")))
+
+(vui-defcomponent vui-lc-drop-e ()
+  :render (error "Render boom"))
+
+(vui-defcomponent vui-lc-drop-c (show)
+  :render (vui-vstack (vui-text "c")
+                      (when show (vui-component 'vui-lc-drop-d))
+                      (when show (vui-component 'vui-lc-drop-b))
+                      (when show (vui-component 'vui-lc-drop-e))))
+
+(vui-defcomponent vui-lc-drop-root ()
+  :state ((show nil))
+  :render (vui-component 'vui-lc-drop-c :show show))
+
+(vui-defcomponent vui-lc-drop-bounded ()
+  :state ((show nil))
+  :render (vui-error-boundary
+           :fallback (lambda (_) (vui-text "fallback"))
+           :children (list (vui-component 'vui-lc-drop-c :show show))))
+
+(describe "a render that signals and drops what it created"
+  ;; The components a render created and that are not in the tree go
+  ;; when the render signals.  The :on-unmount of one of them signals
+  ;; too: the others still go, and the error of the render is the one
+  ;; that goes on.
+  (it "drops them all, and keeps the error of the render"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lc-drop--log nil)
+          (vui-lc-drop--d nil))
+      (let ((inst (vui-mount (vui-component 'vui-lc-drop-root) "*vui-lc-drop*")))
+        (unwind-protect
+            (with-current-buffer "*vui-lc-drop*"
+              (expect (let ((vui--current-instance inst))
+                        (vui-set-state :show t))
+                      :to-throw 'error '("Render boom"))
+              (expect vui-lc-drop--log :to-equal '(d))
+              (expect (vui-instance-mounted-p vui-lc-drop--d)
+                      :to-be 'unmounted))
+          (kill-buffer "*vui-lc-drop*")))))
+
+  ;; An error boundary that catches drops them too: no error goes on
+  ;; from the render, so the one of the hook does, after the drop
+  (it "drops them all in a boundary, then signals the error of the hook"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lc-drop--log nil)
+          (vui-lc-drop--d nil))
+      (let ((inst (vui-mount (vui-component 'vui-lc-drop-bounded)
+                             "*vui-lc-drop*")))
+        (unwind-protect
+            (with-current-buffer "*vui-lc-drop*"
+              (expect (let ((vui--current-instance inst))
+                        (vui-set-state :show t))
+                      :to-throw 'error '("Unmount boom"))
+              (expect vui-lc-drop--log :to-equal '(d))
+              (expect (vui-instance-mounted-p vui-lc-drop--d)
+                      :to-be 'unmounted))
+          (kill-buffer "*vui-lc-drop*"))))))
+
+(defvar vui-lc-drop--other nil
+  "The text of the tree the `:on-unmount' of `vui-lc-drop-mounter' mounts.")
+
+(vui-defcomponent vui-lc-drop-other-child ()
+  :on-mount (error "Other boom")
+  :render (vui-text "child"))
+
+(vui-defcomponent vui-lc-drop-other ()
+  :render (vui-error-boundary
+           :fallback (lambda (_) (vui-text "fallback"))
+           :children (list (vui-component 'vui-lc-drop-other-child))))
+
+(vui-defcomponent vui-lc-drop-mounter ()
+  :on-unmount (progn
+                (vui-mount (vui-component 'vui-lc-drop-other)
+                           "*vui-lc-drop-other*")
+                (setq vui-lc-drop--other
+                      (with-current-buffer "*vui-lc-drop-other*"
+                        (buffer-string))))
+  :render (vui-text "m"))
+
+(vui-defcomponent vui-lc-drop-mounting-c (show)
+  :render (vui-vstack (vui-text "c")
+                      (when show (vui-component 'vui-lc-drop-mounter))
+                      (when show (vui-component 'vui-lc-drop-e))))
+
+(vui-defcomponent vui-lc-drop-mounting-root ()
+  :state ((show nil))
+  :render (vui-component 'vui-lc-drop-mounting-c :show show))
+
+(vui-defcomponent vui-lc-drop-unmounter ()
+  :on-mount (vui-unmount (current-buffer))
+  :render (vui-text "u"))
+
+(vui-defcomponent vui-lc-drop-direct-app (log)
+  :render (progn
+            (ignore log)
+            (vui-vstack (vui-fragment (vui-component 'vui-lc-drop-b)
+                                      (vui-component 'vui-lc-drop-unmounter))
+                        (vui-text "end"))))
+
+(vui-defcomponent vui-lc-drop-stream-app (log)
+  :render (vui-vstack (vui-stream log) (vui-text "end")))
+
+(defvar vui-lc-drop--caught nil
+  "What the `:on-unmount' of `vui-lc-drop-closer' caught.")
+
+(vui-defcomponent vui-lc-drop-other-closing ()
+  :on-unmount (error "Other unmount boom")
+  :render (vui-text "other"))
+
+(vui-defcomponent vui-lc-drop-closer ()
+  :on-unmount (setq vui-lc-drop--caught
+                    (condition-case err
+                        (progn (vui-unmount "*vui-lc-drop-other*") nil)
+                      (error err)))
+  :render (vui-text "closer"))
+
+(vui-defcomponent vui-lc-drop-closing-c (show)
+  :render (vui-vstack (vui-text "c")
+                      (when show (vui-component 'vui-lc-drop-closer))
+                      (when show (vui-component 'vui-lc-drop-e))))
+
+(vui-defcomponent vui-lc-drop-closing-root ()
+  :state ((show nil))
+  :render (vui-component 'vui-lc-drop-closing-c :show show))
+
+(describe "a drop of what a render created, more cases"
+  ;; Nor does a tree that a hook of the drop unmounts: the hook gets its
+  ;; errors
+  (it "leaves the errors of a tree a hook of the drop unmounts to the hook"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lc-drop--caught nil))
+      (vui-mount (vui-component 'vui-lc-drop-other-closing)
+                 "*vui-lc-drop-other*")
+      (let ((inst (vui-mount (vui-component 'vui-lc-drop-closing-root)
+                             "*vui-lc-drop*")))
+        (unwind-protect
+            (with-current-buffer "*vui-lc-drop*"
+              (expect (let ((vui--current-instance inst))
+                        (vui-set-state :show t))
+                      :to-throw 'error '("Render boom"))
+              (expect vui-lc-drop--caught
+                      :to-equal '(error "Other unmount boom")))
+          (kill-buffer "*vui-lc-drop*")
+          (when (get-buffer "*vui-lc-drop-other*")
+            (let ((vui-lifecycle-error-handler 'ignore))
+              (kill-buffer "*vui-lc-drop-other*")))))))
+
+  ;; A tree that a hook of the drop mounts has hooks of its own: an error
+  ;; of one of them is the tree's, and its error boundary catches it
+  (it "leaves the errors of a tree a hook of the drop mounts to that tree"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-error-handler 'signal)
+          (vui-lc-drop--other nil))
+      (let ((inst (vui-mount (vui-component 'vui-lc-drop-mounting-root)
+                             "*vui-lc-drop*")))
+        (unwind-protect
+            (with-current-buffer "*vui-lc-drop*"
+              (expect (let ((vui--current-instance inst))
+                        (vui-set-state :show t))
+                      :to-throw 'error '("Render boom"))
+              (expect vui-lc-drop--other :to-equal "fallback"))
+          (kill-buffer "*vui-lc-drop*")
+          (when (get-buffer "*vui-lc-drop-other*")
+            (kill-buffer "*vui-lc-drop-other*"))))))
+
+  ;; A hook of a stream row unmounts the tree: no error goes on, so the
+  ;; error of a hook in the drop does, as for the same components in the
+  ;; tree itself
+  (dolist (where '(row tree))
+    (it (format "signals the error of a hook when a hook unmounts the tree (%s)"
+                where)
+      (let ((vui-render-delay nil)
+            (vui-lifecycle-error-handler 'signal)
+            (log (vui-make-stream)))
+        (when (eq where 'row)
+          (vui-stream-append log (vui-fragment
+                                  (vui-component 'vui-lc-drop-b)
+                                  (vui-component 'vui-lc-drop-unmounter))))
+        (unwind-protect
+            (expect (vui-mount (vui-component (if (eq where 'row)
+                                                  'vui-lc-drop-stream-app
+                                                'vui-lc-drop-direct-app)
+                                              :log log)
+                               "*vui-lc-drop*")
+                    :to-throw 'error '("Unmount boom"))
+          (when (get-buffer "*vui-lc-drop*")
+            (kill-buffer "*vui-lc-drop*")))))))
+
 (provide 'vui-lifecycle-test)
 ;;; vui-lifecycle-test.el ends here

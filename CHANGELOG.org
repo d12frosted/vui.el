@@ -90,6 +90,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- With =vui-lifecycle-error-handler= set to =signal=, an =:on-unmount=
+  (or the cleanup an =:on-mount= returned) that signals while a render
+  drops the components it created (the render signalled, an error
+  boundary caught its error, or a hook unmounted the tree) no longer
+  stops the drop: the others still unmount, and the error of the render
+  is the one that goes on. The error of the hook shows as a message
+  then, or is signalled after the drop when the render did not signal.
+
 - When a hook mounts a tree in another buffer and a hook of that tree
   appends to (or edits the end of) a =vui-stream= that ends where the
   first render writes, the item now goes at the end of the stream.
