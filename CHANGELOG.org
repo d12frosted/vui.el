@@ -90,6 +90,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An edit of a =vui-stream= written in place (an append, an open, an
+  update of the last item or of a node, =vui-stream-append-to=,
+  =vui-stream-before=, =vui-stream-after=) whose item signals while it
+  renders leaves the stream as it was. Before, the text written so far
+  stayed in the buffer, with a field that was never set up, and the
+  stream kept the item that failed: later appends went above that
+  text, and the next render of the stream wrote the failing item again.
+
 - A tree that a hook of an unmounting tree (its =:on-unmount=, or an
   effect cleanup) mounts in the same buffer now waits until the old
   trees are gone: =vui-unmount= shows it once the buffer is empty, and a

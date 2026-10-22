@@ -4035,7 +4035,9 @@ that stay.  Returns the value of BODY."
   (declare (indent 1) (debug t))
   (let ((fields (make-symbol "fields")))
     `(let ((,fields (vui--fields-touching ,pos)))
-       (prog1 (progn ,@body)
+       ;; Also when BODY signals: what it wrote can be taken back (see
+       ;; `vui--stream-writing'), and the fields stay as they were
+       (unwind-protect (progn ,@body)
          (vui--restore-fields ,fields)))))
 
 (defun vui--flush-queued-rerenders ()
@@ -7995,12 +7997,15 @@ markers of the regions that end with the stream advance with that text
            ;; fields it writes
            (save-restriction
              (widen)
-             (prog1 (save-excursion ,@body)
+             ;; Also when BODY signals: an item put back after a write
+             ;; that failed has fields, and is in the stream (see
+             ;; `vui--stream-writing')
+             (unwind-protect (save-excursion ,@body)
                (vui--setup-fields-written ,pending)
                (when ,at-hook
-                 (vui--advance-hook-point
-                  (marker-position
-                   (vui-stream-handle-region-end ,handle)))))))))))
+                 (let ((end (vui-stream-handle-region-end ,handle)))
+                   (when (and end (marker-position end))
+                     (vui--advance-hook-point (marker-position end))))))))))))
 
 (defun vui--stream-ends-at-hook-point (handle)
   "Non-nil when HANDLE's stream ends at `vui--hook-point', after text.
@@ -8861,6 +8866,57 @@ place as content, they would have no parent to keep them."
   "Non-nil when stream ROW renders content (see `vui--stream-content-row')."
   (eq (vui-component-def-name (vui-instance-def row)) 'vui--rendered))
 
+(defmacro vui--stream-writing (undo restore &rest body)
+  "Run BODY, which writes an item of a stream from point on.
+BODY leaves point after what it wrote.  When it signals an error (or
+the user quits), the write is taken back: the text it wrote goes, with
+its fields, UNDO (a function of no arguments) takes the edit out of the
+stream's items, and the error goes on.  RESTORE, when non-nil, is a
+function of no arguments that writes the old text of an item BODY
+replaced back at point (see `vui--stream-restore-item').  Returns what
+BODY returns."
+  (declare (indent 2) (debug t))
+  (let ((from (make-symbol "from"))
+        (err (make-symbol "err")))
+    `(let ((,from (point-marker)))
+       (condition-case ,err
+           (prog1 (progn ,@body)
+             (set-marker ,from nil))
+         ((error quit)
+          (let ((inhibit-read-only t))
+            (vui--forget-fields-in ,from (point))
+            (delete-region ,from (point)))
+          (set-marker ,from nil)
+          (funcall ,undo)
+          (when ,restore
+            (funcall ,restore))
+          (signal (car ,err) (cdr ,err)))))))
+
+(defun vui--stream-restore-item (handle vnode end)
+  "Return a function that writes VNODE, an item of HANDLE, back at point.
+For `vui--stream-writing', when a write that replaced the text of the
+item fails.  END, the marker of the item's end, and the stream's end
+when the item is the last, go after it.  When that write fails too, the
+stream is written again from its items."
+  (lambda ()
+    (condition-case nil
+        (let ((inhibit-read-only t))
+          (vui--render-vnode vnode)
+          (set-marker end (point))
+          (vui--stream-sync-end handle (point)))
+      (error
+       (vui--stream-request-rebuild handle)))))
+
+(defun vui--stream-drop-new-item (handle cell)
+  "Take the item of CELL, and its node, if any, out of HANDLE's stream.
+CELL is the cons of an item an edit added to the items of HANDLE, which
+the edit did not write after all (see `vui--stream-writing').  Nothing
+is written."
+  (vui--stream-drop-item handle cell)
+  (setf (vui-stream-handle-nodes handle)
+        (cl-remove cell (vui-stream-handle-nodes handle)
+                   :key #'vui--stream-node-cell)))
+
 (defun vui--stream-append-content (handle vnode &optional pushed)
   "Append content VNODE (text/fragment) to HANDLE's stream.
 PUSHED, when non-nil, is called with no arguments once VNODE is the
@@ -8908,9 +8964,20 @@ last item of the stream, before anything is written."
               ;; The item before this one may end with a field, and the
               ;; content after the stream may start with one
               (vui--keeping-fields (point)
-                (insert (vui-stream-handle-separator handle))
-                (vui--stream-set-last-start handle (point) buf)
-                (vui--render-vnode vnode))
+                (let* ((cell (vui-stream-handle-items-rev handle))
+                       (ls (vui-stream-handle-last-start handle))
+                       (ls-pos (and ls (marker-position ls))))
+                  (vui--stream-writing
+                      (lambda ()
+                        (vui--stream-drop-new-item handle cell)
+                        ;; The last item is the one before again
+                        (if ls-pos
+                            (vui--stream-set-last-start handle ls-pos buf)
+                          (when ls (set-marker ls nil))))
+                      nil
+                    (insert (vui-stream-handle-separator handle))
+                    (vui--stream-set-last-start handle (point) buf)
+                    (vui--render-vnode vnode))))
               ;; If the previous last item was a component row, END is that
               ;; row's own marker - do NOT move it (that would corrupt the
               ;; row's region); install a fresh marker.  Otherwise reuse the
@@ -9147,10 +9214,14 @@ row, or what the hook appended after it."
                          :properties (vui-vnode-text-properties vnode)))
                 (vui-stream-update node vnode))
             ;; Legacy path: rewrite [last-start, region-end] directly.
-            (let ((buf (vui-stream-handle-buffer handle))
-                  (ls (vui-stream-handle-last-start handle))
-                  (end (vui-stream-handle-region-end handle)))
-              (setcar (vui-stream-handle-items-rev handle) vnode)
+            (let* ((buf (vui-stream-handle-buffer handle))
+                   (ls (vui-stream-handle-last-start handle))
+                   (end (vui-stream-handle-region-end handle))
+                   (cell (vui-stream-handle-items-rev handle))
+                   ;; Puts the item back, when the write signals (see
+                   ;; `vui--stream-writing')
+                   (put-back (lambda () (setcar cell old))))
+              (setcar cell vnode)
               (cond
                ;; Not in the buffer: the new last item shows when the stream
                ;; is rendered.  A render in progress can be writing it now,
@@ -9201,16 +9272,20 @@ row, or what the hook appended after it."
                                 (progn
                                   (goto-char (marker-position end))
                                   (vui--keeping-fields (point)
-                                    (vui--render-vnode
-                                     (vui-vnode-text--create
-                                      :content suffix
-                                      :face (vui-vnode-text-face vnode)
-                                      :properties (vui-vnode-text-properties vnode))))
+                                    (vui--stream-writing put-back nil
+                                      (vui--render-vnode
+                                       (vui-vnode-text--create
+                                        :content suffix
+                                        :face (vui-vnode-text-face vnode)
+                                        :properties
+                                        (vui-vnode-text-properties vnode)))))
                                   (set-marker end (point)))
                               (vui--forget-text ls end)
                               (goto-char (marker-position ls))
                               (vui--keeping-fields (point)
-                                (vui--render-vnode vnode))
+                                (vui--stream-writing put-back
+                                    (vui--stream-restore-item handle old end)
+                                  (vui--render-vnode vnode)))
                               (set-marker end (point))))))
                       ;; The old item may have had the last sticky table:
                       ;; no render of the root follows to put back the
@@ -9607,7 +9682,9 @@ written again, and the item becomes such a row (see `vui-stream-open')."
            (cell (vui--stream-node-cell node))
            (buf (vui-stream-handle-buffer handle))
            (end (vui--stream-node-end node))
-           (row (vui--stream-node-instance node)))
+           (row (vui--stream-node-instance node))
+           ;; The item as it was, to put back when the write signals
+           (old nil))
       ;; A row that renders content (see `vui--stream-content-row')
       (when (and row (vui--stream-content-row-p row))
         (vui-update row (list :vnode (vui--stream-vnode-combine
@@ -9621,6 +9698,7 @@ written again, and the item becomes such a row (see `vui-stream-open')."
         ;; Keep the model in sync so a wholesale re-render re-emits the whole
         ;; accumulated node, not just the latest delta.
         (when cell
+          (setq old (car cell))
           (setcar cell (vui--stream-vnode-combine (car cell) vnode)))
         (if (or (vui--holds-component-p vnode) (vui-stream-handle-measured handle)
                 ;; Nothing marks the separators around a stream with no
@@ -9643,7 +9721,10 @@ written again, and the item becomes such a row (see `vui-stream-open')."
                     (goto-char (marker-position end))
                     ;; The node may end with a field so far
                     (vui--keeping-fields (point)
-                      (vui--render-vnode vnode))
+                      (vui--stream-writing
+                          (lambda () (when cell (setcar cell old)))
+                          nil
+                        (vui--render-vnode vnode)))
                     (set-marker end (point))
                     (vui--stream-sync-end handle (point))))))
             (vui--stream-relay-empty-transition handle was-empty node))))
@@ -9690,10 +9771,13 @@ content takes any VNODE (see `vui-stream-open')."
                (buf (vui-stream-handle-buffer handle))
                (start (vui--stream-node-start node))
                (end (vui--stream-node-end node))
-               (vnode (vui--stream-node-vnode vnode)))
+               (vnode (vui--stream-node-vnode vnode))
+               ;; The item as it was, to put back when the write signals
+               (old nil))
           (when (and buf (buffer-live-p buf)
                      start (marker-position start) end (marker-position end))
             (let ((same (and cell (vui--vnode-equal (car cell) vnode))))
+              (setq old (car-safe cell))
               (when cell (setcar cell vnode))
               (setq vnode (and (not same) vnode)))
             (if (or (null vnode)
@@ -9724,7 +9808,11 @@ content takes any VNODE (see `vui-stream-open')."
                           (vui--forget-text start end)
                           (goto-char (marker-position start))
                           (vui--keeping-fields (point)
-                            (vui--render-vnode vnode))
+                            (vui--stream-writing
+                                (lambda () (when cell (setcar cell old)))
+                                (and old
+                                     (vui--stream-restore-item handle old end))
+                              (vui--render-vnode vnode)))
                           (set-marker end (point))
                           (vui--stream-sync-end handle (point)))))
                     ;; As in `vui-stream-update-last'
@@ -9817,7 +9905,12 @@ screen.  A no-op returning nil if NODE is not live."
                     (let ((x-start (point)))
                       ;; NODE may start with a field
                       (vui--keeping-fields x-start
-                        (vui--render-vnode vnode)
+                        (vui--stream-writing
+                            (lambda ()
+                              (vui--stream-drop-new-item
+                               handle (vui--stream-node-cell new)))
+                            nil
+                          (vui--render-vnode vnode))
                         (let ((x-end (point)))
                           (insert sep)
                           ;; NODE's content now begins after the inserted
@@ -9903,9 +9996,15 @@ if NODE is not live."
                     (goto-char (marker-position end))
                     ;; NODE may end with a field
                     (vui--keeping-fields (point)
-                      (insert sep)
-                      (let ((x-start (point)))
-                        (vui--render-vnode vnode)
+                      (let ((x-start nil))
+                        (vui--stream-writing
+                            (lambda ()
+                              (vui--stream-drop-new-item
+                               handle (vui--stream-node-cell new)))
+                            nil
+                          (insert sep)
+                          (setq x-start (point))
+                          (vui--render-vnode vnode))
                         (let ((x-end (point)))
                           (vui--stream-node-bind new x-start x-end buf)
                           (vui--stream-sync-end handle x-end)

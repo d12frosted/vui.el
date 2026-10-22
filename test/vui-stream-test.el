@@ -1192,5 +1192,166 @@ when mounted (see `vui-st-silent-appender'), and B."
           (vui-unmount instance)
           (kill-buffer "*vui-st-boundary-field*"))))))
 
+(defun vui-st--boom-on (vnode)
+  "Signal when VNODE is the text \"BOOM\"."
+  (when (and (vui-vnode-text-p vnode)
+             (equal (vui-vnode-text-content vnode) "BOOM"))
+    (error "Boom")))
+
+(vui-defcomponent vui-st-failing-write-root (stream)
+  :render (vui-vstack (vui-text "top") (vui-stream stream) (vui-text "bottom")))
+
+(describe "a write of a stream in place that signals"
+  ;; The write does not happen: what it wrote goes, and so does the edit
+  ;; of the stream's items, and the error goes on
+  (dolist (write '(append open update-last update append-to before after))
+    (it (format "leaves the stream as it was (%s)" write)
+      (let ((vui-render-delay nil)
+            (stream (vui-make-stream))
+            (node nil))
+        (vui-stream-append stream (vui-text "first"))
+        (setq node (vui-stream-open stream (vui-text "node")))
+        (let ((instance (vui-mount (vui-component 'vui-st-failing-write-root
+                                                  :stream stream)
+                                   "*vui-st-failing*"))
+              (vnode (vui-fragment (vui-text "x")
+                                   (vui-field :value "f" :size 5)
+                                   (vui-text "BOOM"))))
+          (unwind-protect
+              (with-current-buffer "*vui-st-failing*"
+                (advice-add 'vui--render-vnode :before #'vui-st--boom-on)
+                (unwind-protect
+                    (expect (pcase write
+                              ('append (vui-stream-append stream vnode))
+                              ('open (vui-stream-open stream vnode))
+                              ('update-last (vui-stream-update-last stream vnode))
+                              ('update (vui-stream-update node vnode))
+                              ('append-to (vui-stream-append-to node vnode))
+                              ('before (vui-stream-before node vnode))
+                              ('after (vui-stream-after node vnode)))
+                            :to-throw 'error)
+                  (advice-remove 'vui--render-vnode #'vui-st--boom-on))
+                (expect (buffer-string) :to-equal "top\nfirst\nnode\nbottom")
+                (expect widget-field-list :to-be nil)
+                (expect widget-field-new :to-be nil)
+                (expect (length (vui-stream-handle-items-rev stream))
+                        :to-equal 2)
+                (vui-stream-append stream (vui-text "later"))
+                (expect (buffer-string)
+                        :to-equal "top\nfirst\nnode\nlater\nbottom")
+                (let ((root (vui-get-instance)))
+                  (setf (vui-instance-render-record root) nil)
+                  (vui-rerender root))
+                (expect (buffer-string)
+                        :to-equal "top\nfirst\nnode\nlater\nbottom"))
+            (vui-unmount instance)
+            (kill-buffer "*vui-st-failing*")))))))
+
+(defvar vui-st--failing-hook-runs 0
+  "How many times `vui-st-failing-hook' updated.")
+
+(defvar vui-st--failing-hook-stream nil
+  "The stream `vui-st-failing-hook' writes.")
+
+(vui-defcomponent vui-st-failing-hook ()
+  "Writes the last item of a stream on each update, with a write that fails."
+  :on-update (progn
+               (cl-incf vui-st--failing-hook-runs)
+               (ignore-errors
+                 (vui-stream-update-last vui-st--failing-hook-stream
+                                         (vui-text "BOOM"))))
+  :render (vui-text "hk"))
+
+(vui-defcomponent vui-st-failing-hook-root (stream)
+  :render (vui-vstack (vui-stream stream) (vui-component 'vui-st-failing-hook)))
+
+(describe "a write of a stream in place that signals, more cases"
+  (it "puts a static last item back (update-last, rewrite and extend)"
+    (dolist (new '("BOOM" "lastBOOM"))
+      (let ((vui-render-delay nil)
+            (stream (vui-make-stream)))
+        (vui-stream-append stream (vui-text "first"))
+        (vui-stream-append stream (vui-text "last"))
+        (let ((instance (vui-mount (vui-component 'vui-st-failing-write-root
+                                                  :stream stream)
+                                   "*vui-st-failing*")))
+          (unwind-protect
+              (with-current-buffer "*vui-st-failing*"
+                (advice-add 'vui--render-vnode :before #'vui-st--boom-on)
+                (unwind-protect
+                    (expect (vui-stream-update-last stream (vui-text new))
+                            :to-throw 'error)
+                  (advice-remove 'vui--render-vnode #'vui-st--boom-on))
+                (expect (buffer-string) :to-equal "top\nfirst\nlast\nbottom")
+                (vui-stream-update-last stream (vui-text "UPD"))
+                (expect (buffer-string) :to-equal "top\nfirst\nUPD\nbottom"))
+            (vui-unmount instance)
+            (kill-buffer "*vui-st-failing*"))))))
+
+  (it "leaves point where it was"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "a"))
+      (let ((instance (vui-mount (vui-component 'vui-st-failing-write-root
+                                                :stream stream)
+                                 "*vui-st-failing*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-failing*"
+              (goto-char (point-max))
+              (let ((before (point)))
+                (advice-add 'vui--render-vnode :before #'vui-st--boom-on)
+                (unwind-protect
+                    (ignore-errors (vui-stream-append stream (vui-text "BOOM")))
+                  (advice-remove 'vui--render-vnode #'vui-st--boom-on))
+                (expect (point) :to-equal before)))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-failing*")))))
+
+  (it "keeps the field of an item it puts back"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream))
+          (node nil))
+      (setq node (vui-stream-open stream (vui-fragment
+                                          (vui-text "q:")
+                                          (vui-field :value "ab" :size 4))))
+      (let ((instance (vui-mount (vui-component 'vui-st-failing-write-root
+                                                :stream stream)
+                                 "*vui-st-failing*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-failing*"
+              (advice-add 'vui--render-vnode :before #'vui-st--boom-on)
+              (unwind-protect
+                  (ignore-errors (vui-stream-update node (vui-text "BOOM")))
+                (advice-remove 'vui--render-vnode #'vui-st--boom-on))
+              (expect (buffer-string) :to-equal "top\nq:ab  \nbottom")
+              (goto-char (point-min))
+              (search-forward "ab")
+              (insert "Z")
+              (expect (widget-value (widget-field-at (1- (point))))
+                      :to-equal "abZ"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-failing*")))))
+
+  (it "runs a hook that writes on each render once"
+    ;; The write that fails does not ask for another render
+    (let ((vui-render-delay nil)
+          (vui-st--failing-hook-runs 0))
+      (setq vui-st--failing-hook-stream (vui-make-stream))
+      (vui-stream-append vui-st--failing-hook-stream (vui-text "a"))
+      (vui-stream-append vui-st--failing-hook-stream (vui-text "b"))
+      (let ((instance (vui-mount (vui-component 'vui-st-failing-hook-root
+                                                :stream vui-st--failing-hook-stream)
+                                 "*vui-st-failing*")))
+        (unwind-protect
+            (with-current-buffer "*vui-st-failing*"
+              (advice-add 'vui--render-vnode :before #'vui-st--boom-on)
+              (unwind-protect
+                  (vui-rerender (vui-get-instance))
+                (advice-remove 'vui--render-vnode #'vui-st--boom-on))
+              (expect vui-st--failing-hook-runs :to-equal 1)
+              (expect (buffer-string) :to-equal "a\nb\nhk"))
+          (vui-unmount instance)
+          (kill-buffer "*vui-st-failing*"))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
