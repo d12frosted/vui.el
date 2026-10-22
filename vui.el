@@ -8164,6 +8164,15 @@ This is also true for an item written in place by code under other
 providers (or under none), and for a component row that renders again
 on its own.
 
+A stream shows in one place at a time.  A render of it in a buffer
+while its text is in another live buffer signals an error; once that
+tree no longer shows it, the stream can show somewhere else.  A hook of
+that tree while the tree unmounts can show it somewhere else, and so
+can a command that first changes the tree to hide the stream, while
+the render of that tree waits (for `vui-render-delay', or the end of a
+`vui-batch').  If that render shows the stream all the same, the
+error comes from that render.
+
 A stream anywhere inside a layout that measures its children (a
 `vui-box', a `vui-table', a `vui-flex' or a `vui-grid') is not edited in
 place: its text changes that layout, so each edit, and each render of
@@ -8389,6 +8398,29 @@ See `vui--streams-in-render'."
   (when-let* ((entry (assq handle vui--streams-in-render)))
     (setcdr entry t)))
 
+(defun vui--stream-leaving-p (handle buffer)
+  "Non-nil when the tree that shows HANDLE in BUFFER may not show it any more.
+The tree is being unmounted, so a hook of it can show the stream
+somewhere else, or a render of it is pending, which can drop the
+stream: hiding the stream in one tree and then showing it in another in
+one command is fine.  When that render shows the stream all the same,
+it signals then.  The tree is the one the stream renders in, and the
+trees around it: for a stream in a component row of another stream,
+the render that drops it can be the one of the tree that shows the row."
+  (or (buffer-local-value 'vui--tearing-down buffer)
+      (let ((root (vui--stream-root handle))
+            (seen nil)
+            (leaving nil))
+        (while (and root (not leaving) (not (memq root seen)))
+          (push root seen)
+          (setq leaving (or (memq root vui--unmounting)
+                            (vui-instance-render-timer root)
+                            (memq root vui--batch-roots))
+                root (when-let* ((outer (with-current-buffer buffer
+                                          (vui--stream-of-row root))))
+                       (vui--stream-root outer))))
+        leaving)))
+
 (defun vui--stream-render (handle)
   "Render HANDLE's items at point and bind its region around them.
 Used by the `vui-vnode-stream' branch of `vui--render-vnode'.
@@ -8402,7 +8434,20 @@ During a measure pass the items render for their width only: the
 handle keeps its real buffer and markers, and a row is not touched.  A
 measure renders into a throwaway temp buffer, and binding the live
 region there would leave the handle pointing at a killed buffer,
-silently dropping every subsequent streamed append."
+silently dropping every subsequent streamed append.
+
+A stream shows in one place at a time: rendering it in a buffer while
+its text is in another live buffer signals an error (not in a measure
+pass), unless the tree there may not show it any more (see
+`vui--stream-leaving-p')."
+  (let ((other (vui-stream-handle-buffer handle)))
+    (when (and (not vui--measuring-p)
+               other (not (eq other (current-buffer)))
+               (vui--stream-written-p handle)
+               (not (vui--stream-leaving-p handle other)))
+      (error (concat "vui-stream: the stream shows in %s already; a stream"
+                     " shows in one place at a time")
+             (buffer-name other))))
   (let* ((sep (vui-stream-handle-separator handle))
          ;; A marker: the hooks of the rows can write or delete text
          ;; above the stream, or in the items written before them (see

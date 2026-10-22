@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= rendered in a second buffer while it shows in another
+  one signals an error. Both buffers wrote into the one place the
+  stream keeps, and the first one showed items in the wrong places. The
+  stream can still move: a hook of the first tree while the tree
+  unmounts can show it somewhere else, and so can a command that first
+  hides it in the first tree, while the render of that tree waits.
+
 - When a =vui-stream= is written again (its owner hides and shows it,
   say) or for the first time, a hook of one of its rows that unmounts a
   row written before it takes that row out of the stream, also in a

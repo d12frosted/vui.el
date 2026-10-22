@@ -1484,5 +1484,130 @@ when mounted (see `vui-st-silent-appender'), and B."
           (vui-unmount instance)
           (kill-buffer "*vui-st-faced*"))))))
 
+(vui-defcomponent vui-st-shows-stream (stream)
+  :render (vui-vstack (vui-text "top") (vui-stream stream)))
+
+(vui-defcomponent vui-st-hands-stream (stream)
+  "Shows STREAM, and shows it in *vui-st-b* when it is unmounted."
+  :on-unmount (let ((vui-render-delay nil))
+                (vui-mount (vui-component 'vui-st-shows-stream :stream stream)
+                           "*vui-st-b*"))
+  :render (vui-vstack (vui-text "top") (vui-stream stream)))
+
+(vui-defcomponent vui-st-hides-stream (stream)
+  :state ((on t))
+  :render (vui-vstack (vui-text "top")
+                      (if on (vui-stream stream) (vui-text "off"))))
+
+(describe "a stream rendered in two buffers"
+  ;; A stream has one place: a render in another buffer while it shows
+  ;; in the first one signals, and leaves the first one as it is
+  (it "signals, and keeps the first place"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "s0"))
+      (let ((first (vui-mount (vui-component 'vui-st-shows-stream
+                                             :stream stream)
+                              "*vui-st-a*")))
+        (unwind-protect
+            (progn
+              (expect (vui-mount (vui-component 'vui-st-shows-stream
+                                                :stream stream)
+                                 "*vui-st-b*")
+                      :to-throw 'error)
+              (vui-stream-append stream (vui-text "s1"))
+              (expect (with-current-buffer "*vui-st-a*" (buffer-string))
+                      :to-equal "top\ns0\ns1")
+              ;; Once the first place is gone, the stream can show
+              ;; somewhere else
+              (vui-unmount first)
+              (with-current-buffer "*vui-st-b*"
+                (vui-rerender (vui-get-instance))
+                (expect (buffer-string) :to-equal "top\ns0\ns1")))
+          (kill-buffer "*vui-st-a*")
+          (when (get-buffer "*vui-st-b*")
+            (kill-buffer "*vui-st-b*"))))))
+
+  ;; The tree that shows it goes away, and a hook of it shows the
+  ;; stream somewhere else
+  (dolist (how '(unmount kill))
+    (it (format "shows somewhere else from a hook of a tree that goes (%s)" how)
+      (let ((vui-render-delay nil)
+            (stream (vui-make-stream)))
+        (vui-stream-append stream (vui-text "s0"))
+        (vui-mount (vui-component 'vui-st-hands-stream :stream stream)
+                   "*vui-st-a*")
+        (unwind-protect
+            (progn
+              (if (eq how 'kill)
+                  (kill-buffer "*vui-st-a*")
+                (vui-unmount (get-buffer "*vui-st-a*")))
+              (vui-stream-append stream (vui-text "s1"))
+              (expect (with-current-buffer "*vui-st-b*" (buffer-string))
+                      :to-equal "top\ns0\ns1"))
+          (when (get-buffer "*vui-st-a*")
+            (kill-buffer "*vui-st-a*"))
+          (when (get-buffer "*vui-st-b*")
+            (kill-buffer "*vui-st-b*"))))))
+
+  ;; One command hides it in the first tree, with a render that waits
+  ;; for `vui-render-delay', and shows it in another
+  (it "shows somewhere else while the render that hides it waits"
+    (let ((vui-render-delay 0.01)
+          (stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "s0"))
+      (let ((first (let ((vui-render-delay nil))
+                     (vui-mount (vui-component 'vui-st-hides-stream
+                                               :stream stream)
+                                "*vui-st-a*"))))
+        (unwind-protect
+            (progn
+              (let ((vui--current-instance first))
+                (vui-set-state :on nil))
+              (vui-mount (vui-component 'vui-st-shows-stream :stream stream)
+                         "*vui-st-b*")
+              (with-current-buffer "*vui-st-a*"
+                (vui-flush-sync))
+              (vui-stream-append stream (vui-text "s1"))
+              (expect (with-current-buffer "*vui-st-a*" (buffer-string))
+                      :to-equal "top\noff")
+              (expect (with-current-buffer "*vui-st-b*" (buffer-string))
+                      :to-equal "top\ns0\ns1"))
+          (kill-buffer "*vui-st-a*")
+          (when (get-buffer "*vui-st-b*")
+            (kill-buffer "*vui-st-b*"))))))
+
+  ;; The same for a stream in a row of a stream the first tree hides:
+  ;; the render that waits is the one of the tree around the row
+  (it "shows somewhere else while the render that hides the row waits"
+    (let ((vui-render-delay 0.01)
+          (outer (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append inner (vui-text "i0"))
+      (vui-stream-append outer (vui-component 'vui-st-shows-stream
+                                              :stream inner))
+      (let ((first (let ((vui-render-delay nil))
+                     (vui-mount (vui-component 'vui-st-hides-stream
+                                               :stream outer)
+                                "*vui-st-a*"))))
+        (unwind-protect
+            (progn
+              (expect (with-current-buffer "*vui-st-a*" (buffer-string))
+                      :to-equal "top\ntop\ni0")
+              (let ((vui--current-instance first))
+                (vui-set-state :on nil))
+              (vui-mount (vui-component 'vui-st-shows-stream :stream inner)
+                         "*vui-st-b*")
+              (with-current-buffer "*vui-st-a*"
+                (vui-flush-sync))
+              (vui-stream-append inner (vui-text "i1"))
+              (expect (with-current-buffer "*vui-st-a*" (buffer-string))
+                      :to-equal "top\noff")
+              (expect (with-current-buffer "*vui-st-b*" (buffer-string))
+                      :to-equal "top\ni0\ni1"))
+          (kill-buffer "*vui-st-a*")
+          (when (get-buffer "*vui-st-b*")
+            (kill-buffer "*vui-st-b*")))))))
+
 (provide 'vui-stream-test)
 ;;; vui-stream-test.el ends here
