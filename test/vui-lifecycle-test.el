@@ -1373,6 +1373,62 @@ an effect after it that notes the buffer it runs in."
 (defvar vui-lifecycle-test--owned-stream nil
   "The stream of `vui-lifecycle-test-stream-owner'.")
 
+(defvar vui-lifecycle-test--grand-show nil
+  "Non-nil makes `vui-lifecycle-test-grand-parent' render its child.")
+
+(defvar vui-lifecycle-test--grand-boom nil
+  "Non-nil makes `vui-lifecycle-test-grand-later' signal in its render.")
+
+(defvar vui-lifecycle-test--grand-log nil
+  "What `vui-lifecycle-test-grand-child' did, newest first.")
+
+(vui-defcomponent vui-lifecycle-test-grand-child ()
+  :on-mount (push 'mount vui-lifecycle-test--grand-log)
+  :on-unmount (push 'unmount vui-lifecycle-test--grand-log)
+  :render (progn
+            (vui-use-effect ()
+              (push 'effect vui-lifecycle-test--grand-log)
+              nil)
+            (vui-text "B")))
+
+(vui-defcomponent vui-lifecycle-test-grand-parent ()
+  :render (vui-vstack (vui-text "A")
+                      (when vui-lifecycle-test--grand-show
+                        (vui-component 'vui-lifecycle-test-grand-child))))
+
+(vui-defcomponent vui-lifecycle-test-grand-later ()
+  :render (if vui-lifecycle-test--grand-boom
+              (error "Boom")
+            (vui-text "C")))
+
+(vui-defcomponent vui-lifecycle-test-grand-root ()
+  :render (vui-vstack (vui-component 'vui-lifecycle-test-grand-parent)
+                      (vui-component 'vui-lifecycle-test-grand-later)))
+
+(describe "a render that signals after a new component mounted"
+  ;; The component is in the tree: it stays mounted, as the render
+  ;; after the error shows it
+  (it "keeps a new component that is in the tree"
+    (let ((vui-render-delay nil)
+          (vui-lifecycle-test--grand-show nil)
+          (vui-lifecycle-test--grand-boom nil)
+          (vui-lifecycle-test--grand-log nil))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-lifecycle-test-grand-root) "*test-grand*"))
+      (unwind-protect
+          (with-current-buffer "*test-grand*"
+            (setq vui-lifecycle-test--grand-show t
+                  vui-lifecycle-test--grand-boom t)
+            (expect (vui-rerender (vui-get-instance)) :to-throw 'error)
+            (setq vui-lifecycle-test--grand-boom nil)
+            (vui-rerender (vui-get-instance))
+            (let* ((parent (car (vui-instance-children (vui-get-instance))))
+                   (child (car (vui-instance-children parent))))
+              (expect (vui-instance-mounted-p child) :to-be t))
+            (expect (memq 'unmount vui-lifecycle-test--grand-log) :to-be nil))
+        (kill-buffer "*test-grand*"))
+      (expect (car vui-lifecycle-test--grand-log) :to-be 'unmount))))
+
 (describe "a tree that a render body unmounts"
   ;; The render stops there, as it does after a hook that unmounts it
   (before-each (setq vui-lifecycle-test--stop-log nil

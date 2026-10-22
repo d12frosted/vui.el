@@ -1055,8 +1055,9 @@ its own (see `vui--rendering-root'), and so a tree mounted from a hook
 logs to its own; an error boundary rendered outside of one binds it
 while it renders its children.  A stream row renders without it: the
 row and what it holds belong to its stream.  A render that stops
-because a hook unmounted its tree drops them all, and an error
-boundary that catches drops the ones its children created (see
+because a hook unmounted its tree drops them all, a render that
+signals drops those that are not in its tree, and an error boundary
+that catches drops the ones its children created (see
 `vui--drop-created').  Nil when no render logs.")
 
 (defvar vui--enclosing-regions nil
@@ -4147,8 +4148,9 @@ parent) can unmount the tree it renders, or mount another tree in its
 place.  The render stops there instead of writing the rest of the
 tree: what it wrote went with the unmount.  The components it created
 that are not in the tree yet, and so were not unmounted with it, are
-dropped then (see `vui--drop-created').  Return non-nil when BODY ran
-to its end."
+dropped then (see `vui--drop-created').  When BODY signals, the
+components it created that are not in the tree are dropped too, and
+the error goes on.  Return non-nil when BODY ran to its end."
   (declare (indent 1) (debug t))
   (let ((r (make-symbol "root")))
     `(let* ((,r ,root)
@@ -4157,10 +4159,32 @@ to its end."
             ;; stop this one
             (vui--enclosing-stoppable nil)
             (vui--created-instances (list nil)))
-       (or (catch ,r ,@body t)
-           (progn
-             (vui--drop-created (car vui--created-instances) nil)
-             nil)))))
+       (let ((done nil))
+         (unwind-protect
+             (prog1 (or (catch ,r ,@body t)
+                        (progn
+                          (vui--drop-created (car vui--created-instances) nil)
+                          nil))
+               (setq done t))
+           ;; The render signalled, or stopped for a quit or a throw to a
+           ;; root around it: what it created and is not in the tree
+           ;; would stay mounted
+           (unless done
+             (vui--drop-created
+              (cl-remove-if (lambda (i) (vui--linked-p i ,r))
+                            (car vui--created-instances))
+              nil)))))))
+
+(defun vui--linked-p (instance root)
+  "Non-nil when INSTANCE is in the tree of ROOT.
+Each component from INSTANCE up to ROOT is one of the children of the
+one above it."
+  (let ((ok t))
+    (while (and ok (not (eq instance root)))
+      (let ((parent (vui-instance-parent instance)))
+        (setq ok (and parent (memq instance (vui-instance-children parent)))
+              instance parent)))
+    ok))
 
 (defun vui--stop-if-unmounted ()
   "Stop the render of a root that a hook just unmounted, if any.
@@ -8987,6 +9011,44 @@ last item of the stream, before anything is written."
                         (copy-marker (point) nil))
                 (set-marker end (point)))))))))))
 
+(defun vui--stream-mount-inline-row (vnode from path)
+  "Mount VNODE as a row at point, with PATH, and return the row.
+The work of `vui--stream-append-row': FROM is where the separator
+before the row starts.  When the render of the row signals, the row
+never mounts: the text from FROM to the end of what the row wrote goes,
+the row goes (see `vui--drop-created'), and the error goes on.  What
+its render created goes with that render (see `vui--rendering-root').
+A row whose render is done stays when one of its hooks signals, as a
+tree does."
+  (let ((before vui--inline-instances)
+        (from (copy-marker from))
+        ;; After what the row writes, before what is written below it
+        (end (copy-marker (point) t)))
+    (condition-case err
+        (prog1 (vui--mount-inline vnode (point) path t)
+          (set-marker from nil)
+          (set-marker end nil))
+      (error
+       (dolist (row vui--inline-instances)
+         (unless (or (memq row before) (vui-instance-mounted-p row)
+                     (not (eq (vui-instance-base-path row) path)))
+           (setq vui--inline-instances (delq row vui--inline-instances))
+           (dolist (marker (list (vui-instance-region-start row)
+                                 (vui-instance-region-end row)))
+             (when (markerp marker)
+               (set-marker marker nil)))
+           (setf (vui-instance-region-start row) nil
+                 (vui-instance-region-end row) nil)
+           (vui--drop-created (list row) nil)
+           (let ((inhibit-read-only t)
+                 (to (marker-position end)))
+             (vui--forget-fields-in from to)
+             (vui--park-streams from to)
+             (delete-region from to))))
+       (set-marker from nil)
+       (set-marker end nil)
+       (signal (car err) (cdr err))))))
+
 (defun vui--stream-append-row (handle vnode)
   "Append component VNODE as a stateful inline row at HANDLE's tail."
   (let ((buf (vui-stream-handle-buffer handle))
@@ -9058,9 +9120,9 @@ last item of the stream, before anything is written."
                                            ;; the end of the stream, before
                                            ;; the separator
                                            (setq sep-end (point-marker))
-                                           (vui--mount-inline
-                                            vnode (point)
-                                            (vui--stream-item-path handle id) t)))))
+                                           (vui--stream-mount-inline-row
+                                            vnode (- (point) (length sep))
+                                            (vui--stream-item-path handle id))))))
                              ;; The regions it renders in on its own: its first
                              ;; render can wait for the render in progress
                              (setf (vui-instance-regions row)

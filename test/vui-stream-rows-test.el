@@ -1337,6 +1337,96 @@ PANEL (default a newline).  BODY refers to the streams as `log' and
             (expect vui--queued-rerenders :to-be nil))
         (kill-buffer "*test-failing-row*")))))
 
+(defvar vui-stream-rows-test--render-log nil
+  "What the parts of `vui-stream-rows-test-render-failing' did, newest first.")
+
+(vui-defcomponent vui-stream-rows-test-render-boom ()
+  :render (error "Boom"))
+
+(vui-defcomponent vui-stream-rows-test-mounted-part ()
+  "Mounts, with an effect, before its sibling fails."
+  :on-mount (push 'mount vui-stream-rows-test--render-log)
+  :on-unmount (push 'unmount vui-stream-rows-test--render-log)
+  :render (progn
+            (vui-use-effect ()
+              (push 'effect vui-stream-rows-test--render-log)
+              (lambda () (push 'cleanup vui-stream-rows-test--render-log)))
+            (vui-text "[k]")))
+
+(vui-defcomponent vui-stream-rows-test-render-failing ()
+  "A part that mounts, then one whose render signals."
+  :render (vui-vstack (vui-component 'vui-stream-rows-test-mounted-part)
+                      (vui-component 'vui-stream-rows-test-render-boom)))
+
+(defvar vui-stream-rows-test--below nil
+  "The stream `vui-stream-rows-test-appending-part' appends to.")
+
+(vui-defcomponent vui-stream-rows-test-appending-part ()
+  "Appends to `vui-stream-rows-test--below' when it mounts."
+  :on-mount (vui-stream-append vui-stream-rows-test--below (vui-text "X"))
+  :render (vui-text "[k]"))
+
+(vui-defcomponent vui-stream-rows-test-appending-failing ()
+  "A part that appends below, then one whose render signals."
+  :render (vui-vstack (vui-component 'vui-stream-rows-test-appending-part)
+                      (vui-component 'vui-stream-rows-test-render-boom)))
+
+(vui-defcomponent vui-stream-rows-test-two-streams (log below)
+  :render (vui-vstack (vui-text "top") (vui-stream log) (vui-stream below)
+                      (vui-text "panel")))
+
+(describe "a stream row whose first render signals in its render"
+  ;; The row never mounts: it leaves no text and no separator, and
+  ;; what its render mounted goes
+  (dolist (separator '("\n" ""))
+    (it (format "leaves the stream as it was (separator %S)" separator)
+      (let ((vui-render-delay nil)
+            (vui-stream-rows-test--render-log nil)
+            (log (vui-make-stream separator)))
+        (vui-stream-append log (vui-text "l0"))
+        (save-window-excursion
+          (vui-mount (vui-component 'vui-sr-hook-panel :stream log)
+                     "*test-failing-row*"))
+        (unwind-protect
+            (with-current-buffer "*test-failing-row*"
+              (expect (vui-stream-append
+                       log (vui-component 'vui-stream-rows-test-render-failing))
+                      :to-throw 'error)
+              (expect (buffer-string) :to-equal "panel\nl0")
+              (expect vui--inline-instances :to-be nil)
+              (expect (vui-stream-handle-rows log) :to-be nil)
+              (expect (length (vui-stream-handle-items-rev log)) :to-equal 1)
+              (expect (sort (mapcar #'symbol-name
+                                    vui-stream-rows-test--render-log)
+                            #'string<)
+                      ;; Its effect never ran: the render did not end
+                      :to-equal '("mount" "unmount"))
+              (vui-stream-append log (vui-text "l1"))
+              (expect (buffer-string)
+                      :to-equal (concat "panel\nl0" separator "l1")))
+          (kill-buffer "*test-failing-row*")))))
+
+  (it "keeps what a hook of its render wrote below it"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream))
+          (below (vui-make-stream)))
+      (setq vui-stream-rows-test--below below)
+      (vui-stream-append log (vui-text "a0"))
+      (vui-stream-append below (vui-text "b0"))
+      (save-window-excursion
+        (vui-mount (vui-component 'vui-stream-rows-test-two-streams
+                                  :log log :below below)
+                   "*test-failing-row*"))
+      (unwind-protect
+          (with-current-buffer "*test-failing-row*"
+            (expect (vui-stream-append
+                     log (vui-component 'vui-stream-rows-test-appending-failing))
+                    :to-throw 'error)
+            (expect (buffer-string) :to-equal "top\na0\nb0\nX\npanel")
+            (vui-stream-append below (vui-text "b1"))
+            (expect (buffer-string) :to-equal "top\na0\nb0\nX\nb1\npanel"))
+        (kill-buffer "*test-failing-row*")))))
+
 (defvar vui-stream-rows-test--rebuild-hooks nil
   "Alist of a place and the function its `:on-update' calls once.
 The places are the label of a `vui-stream-rows-test-hooked-row', `kid'

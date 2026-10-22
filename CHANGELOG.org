@@ -90,6 +90,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component row appended to a =vui-stream= whose first render
+  signals (its own render, or that of a component in it) leaves no
+  text behind. Its separator and the text written before the error
+  stayed in the buffer, and it stayed an inline instance of the buffer.
+  The components it mounted before the error are unmounted, as are
+  those that a render of any tree mounted before it signalled and that
+  are not in the tree.
+
 - An edit of a =vui-stream= written in place (an append, an open, an
   update of the last item or of a node, =vui-stream-append-to=,
   =vui-stream-before=, =vui-stream-after=) whose item signals while it
