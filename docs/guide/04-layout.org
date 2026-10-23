@@ -297,14 +297,30 @@ Output:
 
 ** Column Properties
 
-| Property     | Description                                 |
-|--------------+---------------------------------------------|
-| =:header=    | Column header text                          |
-| =:width=     | Target width for cell content               |
-| =:min-width= | Minimum width, expands as needed            |
-| =:grow=      | If t, pad short content and expand for long |
-| =:truncate=  | If t, truncate long content with "..."      |
-| =:align=     | =:left=, =:center=, or =:right=             |
+| Property       | Description                                        |
+|----------------+----------------------------------------------------|
+| =:header=      | Column header text                                 |
+| =:header-span= | The header goes over this and the next N-1 columns |
+| =:width=       | Target width for cell content                      |
+| =:min-width=   | Minimum width, expands as needed                   |
+| =:grow=        | If t, pad short content and expand for long        |
+| =:truncate=    | If t, truncate long content with "..."             |
+| =:align=       | =:left=, =:center=, or =:right=                    |
+
+A header can go over several columns: =:header-span N= on a column
+puts its header over it and the N-1 columns after it, which have no
+=:header= of their own. Each column keeps its own cells, width and
+alignment, and a header wider than its columns widens the first of
+them.
+
+#+begin_src elisp
+(vui-table
+ :columns '((:header "ID")
+            (:header "SEVERITY" :header-span 2)
+            (:align :right)
+            (:header "TITLE"))
+ :rows '(("12" "high" "9.8" "Heap overflow")))
+#+end_src
 
 *** Width Behavior
 

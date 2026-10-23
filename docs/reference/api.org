@@ -847,14 +847,40 @@ side for readability (e.g., =| value |= instead of =|value|=).
 
 *** Column Spec Properties
 
-| Property     | Type    | Description                             |
-|--------------+---------+-----------------------------------------|
-| =:header=    | string  | Header text                             |
-| =:width=     | integer | Target width for cell content           |
-| =:min-width= | integer | Minimum width, expand as needed         |
-| =:grow=      | boolean | Pad short content, expand for long      |
-| =:truncate=  | boolean | Truncate long content with "..."        |
-| =:align=     | keyword | :left (default), :center, :right        |
+| Property       | Type    | Description                               |
+|----------------+---------+-------------------------------------------|
+| =:header=      | string  | Header text                               |
+| =:header-span= | integer | Header over this and the next N-1 columns |
+| =:width=       | integer | Target width for cell content             |
+| =:min-width=   | integer | Minimum width, expand as needed           |
+| =:grow=        | boolean | Pad short content, expand for long        |
+| =:truncate=    | boolean | Truncate long content with "..."          |
+| =:align=       | keyword | :left (default), :center, :right          |
+
+*** Headers Over Several Columns
+
+A column with =:header-span N= puts its header over itself and the N-1
+columns after it. The cells don't change: each column keeps its own
+cells, width and alignment. A column under such a header can't have a
+=:header= of its own (that signals an error).
+
+#+begin_src elisp
+(vui-table
+ :columns '((:header "ID")
+            (:header "SEVERITY" :header-span 2)
+            (:align :right)
+            (:header "TITLE"))
+ :rows '(("12" "high" "9.8" "Heap overflow")))
+;; ID SEVERITY TITLE
+;; 12 high 9.8 Heap overflow
+#+end_src
+
+Columns are sized from their cells as usual. When the header is wider
+than its columns and the gaps between them, the first of them widens.
+With =:border= the header cell covers the whole group: the top border
+has no junction inside it, and the line below the header has =┬= where
+the columns split (=:ascii= keeps =+=). =:sticky-header= pins the header
+row as it is.
 
 *** Width Behavior Table
 

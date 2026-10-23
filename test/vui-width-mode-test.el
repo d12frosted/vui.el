@@ -372,6 +372,26 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
         (expect (length widths) :to-equal 8) ; top, header, sep, 4 rows, bottom
         (expect (length (seq-uniq widths)) :to-equal 1))))
 
+  (it "aligns every row of a bordered table with a header over columns"
+    (dolist (header '("G" "A WIDE GROUP HEADER"))
+      (vui-test--with-pixel-font
+        (let* ((s (vui-test--render-string
+                   (vui-table :border :unicode
+                              :columns `((:header "ID" :align :right)
+                                         (:header ,header :header-span 2)
+                                         (:align :right))
+                              :rows vui-test--mixed-rows)))
+               (widths (vui-test--line-px s)))
+          (expect (length widths) :to-equal 8)
+          (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "renders a header over columns the same in char and pixel mode"
+    (vui-test--parity
+     (lambda () (vui-table :border :ascii
+                           :columns '((:header "SEVERITY" :header-span 2) ()
+                                      (:header "Z"))
+                           :rows '(("a" "b" "c"))))))
+
   (it "aligns column separators, not just the right border"
     (vui-test--with-pixel-font
       (let* ((s (vui-test--render-string
@@ -712,6 +732,46 @@ bites; the tests just have to respect it."
               (expect (length b) :to-equal (length (car data-xs)))
               (cl-mapc (lambda (bx dx) (expect (abs (- bx dx)) :to-be-less-than 2))
                        b (car data-xs))))))))
+
+  (it "lines a header over columns up with the columns in a variable-pitch buffer"
+    ;; The line below the header has a junction at every boundary, the
+    ;; one inside the span too (a stroke that goes down only), centred on
+    ;; the data rows' separators.  The top line has none inside the span,
+    ;; and its rule goes on with no gap there.
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "ID") (:header "G" :header-span 2)
+                                          () (:header "Z"))
+                               :rows '(("1" "plain" "a" "x") ("2" "你好" "bb" "y"))))
+        (cl-flet ((stroke-xs (line chars)
+                    (let (xs)
+                      (dotimes (i (length line))
+                        (when (memq (aref line i) chars)
+                          (push (+ (* 2 (vui-test--px (substring line 0 i) (current-buffer)))
+                                   (vui-test--px (substring line i (1+ i)) (current-buffer)))
+                                xs)))
+                      (nreverse xs))))
+          (let* ((lines (split-string (buffer-string) "\n"))
+                 (top (nth 0 lines))
+                 (under (nth 2 lines))
+                 (data-xs (stroke-xs (nth 3 lines) '(?│)))
+                 (under-xs (stroke-xs under '(?├ ?┬ ?┼ ?┤)))
+                 (top-xs (stroke-xs top '(?┌ ?┬ ?┐))))
+            (expect (length (seq-uniq (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                                              lines)))
+                    :to-equal 1)
+            (expect (length under-xs) :to-equal (length data-xs))
+            (cl-mapc (lambda (ux dx) (expect (abs (- ux dx)) :to-be-less-than 2))
+                     under-xs data-xs)
+            (expect (length top-xs) :to-equal (1- (length data-xs)))
+            ;; Between the junctions around the span, the rule has spacers
+            ;; at its ends only
+            (let* ((from (1+ (string-match "┬" top)))
+                   (to (string-match "┬" top from)))
+              (expect (string-trim (substring top from to)) :not :to-match " ")))))))
 
   (it "centres ascii border junctions on the data rows' separators in a variable-pitch buffer"
     ;; ASCII borders are proportional too: + is 9px, - is 4px, | is 5px.

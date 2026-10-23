@@ -1580,6 +1580,10 @@ ARGS should contain :columns and :rows.
 
 Column spec properties (each column is a plist):
   :header STRING  - Header text (optional)
+  :header-span N  - The header goes over this column and the N-1
+                    columns after it, which have no :header of their
+                    own.  The header widens the first of them when it
+                    is wider than they are with the gaps between them.
   :width N        - Fixed width in characters
   :min-width N    - Minimum width, expand for content (default 1)
   :align ALIGN    - :left (default), :center, :right
@@ -6524,7 +6528,70 @@ sized in more than one pass) is not measured again."
       (cdr (or (aref vec i)
                (aset vec i (vui--cell-measure (nth i row))))))))
 
-(defun vui--calculate-table-widths (columns rows border &optional header-face measures)
+(defun vui--table-header-groups (columns)
+  "Return the cells of the header row of a table with COLUMNS.
+Each is (START COUNT HEADER): the header of column START, over it and
+the COUNT-1 columns after it (see `:header-span' in `vui-table').  The
+cells cover the columns in order, a column with no header having a cell
+of its own with a nil HEADER.  Signal an error for a span that is not a
+positive integer, that goes past the last column, or that covers a
+column with a header of its own."
+  (let ((count (length columns))
+        (i 0)
+        (groups nil))
+    (while (< i count)
+      (let* ((col (nth i columns))
+             (span (or (plist-get col :header-span) 1)))
+        (unless (and (integerp span) (> span 0))
+          (error "vui-table: :header-span of column %d is %S, not a positive integer"
+                 i span))
+        (when (> (+ i span) count)
+          (error "vui-table: :header-span %d of column %d goes past the last column"
+                 span i))
+        (cl-loop for j from (1+ i) below (+ i span)
+                 for col = (nth j columns)
+                 when (or (plist-get col :header)
+                          (not (memq (plist-get col :header-span) '(nil 1))))
+                 do (error "vui-table: column %d has a header of its own, but the header of column %d spans it"
+                           j i))
+        (push (list i span (plist-get col :header)) groups)
+        (setq i (+ i span))))
+    (nreverse groups)))
+
+(defun vui--table-cut-columns (columns widths widened)
+  "Return COLUMNS, those of WIDENED cutting their cells at their width.
+WIDTHS are the widths of the columns, and WIDENED the indices of those
+a header over several columns widened (see
+`vui--calculate-table-widths').  Such a column with a :width holds
+more than it: its cells are cut, or overflow, at the width it has
+\(see `vui--render-table-row')."
+  (if (null widened)
+      columns
+    (cl-loop for col in columns
+             for i from 0
+             collect (if (and (memq i widened) (plist-get col :width))
+                         (plist-put (copy-sequence col)
+                                    :vui--cut-width (elt widths i))
+                       col))))
+
+(defun vui--table-gap (border border-face)
+  "Return the width between two columns of a table with BORDER.
+That is the separator drawn in BORDER-FACE, and with a border the cell
+padding on both sides of it (see `vui--render-table-row')."
+  (+ (vui--text-width (car (vui--table-separators
+                            border (or border-face 'vui-table-border))))
+     (if border (* 2 (vui--text-width " ")) 0)))
+
+(defun vui--table-group-width (group widths gap)
+  "Return the width of the header cell GROUP over the columns of WIDTHS.
+GROUP is from `vui--table-header-groups', WIDTHS the widths of the
+columns, and GAP the width between two of them (see `vui--table-gap')."
+  (pcase-let ((`(,start ,count ,_) group))
+    (+ (cl-loop for j from start below (+ start count)
+                sum (elt widths j))
+       (* (1- count) gap))))
+
+(defun vui--calculate-table-widths (columns rows border &optional header-face measures border-face widened)
   "Calculate column widths from COLUMNS specs and ROWS data.
 Uses two-pass rendering: cells are rendered to measure their visual width.
 When MEASURES is a hash table it is filled with what the pass measured,
@@ -6532,7 +6599,12 @@ one vector of (STRING . WIDTH) per row (see `vui--cell-measure'), keyed
 by the row object, so the row pass can reuse it (`vui--render-table-row').
 Headers are measured wearing HEADER-FACE (default `vui-table-header'),
 the face they render with: in a proportional font bold is wider than
-regular, so measuring the plain text would size the column short.
+regular, so measuring the plain text would size the column short.  A
+header over several columns (see `vui--table-header-groups') does not
+size one column: when it is wider than its columns and the gaps between
+them (in BORDER-FACE, see `vui--table-gap'), the first of them widens.
+When WIDENED is a list cell, the index of each column widened so is
+pushed to its car.
 
 Column options:
   :width W    - Target width for the VALUE portion of cell
@@ -6551,7 +6623,10 @@ Width calculation:
              do (let ((declared-width (vui--width (plist-get col :width)))
                       (grow (plist-get col :grow))
                       (truncate-p (plist-get col :truncate))
-                      (header (plist-get col :header)))
+                      ;; A header over more columns than this one sizes
+                      ;; them all, below
+                      (header (and (memq (plist-get col :header-span) '(nil 1))
+                                   (plist-get col :header))))
                   (if (null declared-width)
                       ;; No :width - auto-size to max content
                       (let ((max-w 1))
@@ -6591,6 +6666,17 @@ Width calculation:
                         (aset widths i (if has-overflow
                                            declared-width
                                          max-w)))))))
+    ;; A header over several columns that is wider than they are
+    (let ((gap (vui--table-gap border border-face)))
+      (dolist (group (vui--table-header-groups columns))
+        (pcase-let ((`(,start ,count ,header) group))
+          (when (and header (> count 1))
+            (let ((need (- (vui--text-width (vui--faced header header-face))
+                           (vui--table-group-width group widths gap))))
+              (when (> need 0)
+                (aset widths start (+ (aref widths start) need))
+                (when widened
+                  (push start (car widened)))))))))
     ;; A bordered column's border segment spans the content width plus
     ;; the cell padding on both sides, and it is drawn with whole fill
     ;; glyphs, so it is that PADDED width that has to be a multiple of
@@ -6717,13 +6803,19 @@ working."
     (kill-local-variable 'vui--table-saved-header-line)
     (kill-local-variable 'vui--table-sticky-registry)))
 
-(defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face)
+(defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face spanned)
   "Render a table border line.
 COL-WIDTHS is list of column widths.
 BORDER-STYLE is :ascii or :unicode.
 POSITION is \\='top, \\='bottom, or \\='separator.
 CELL-PADDING is the padding added to each side of cell content.
-BORDER-FACE overrides `vui-table-border' for the border characters."
+BORDER-FACE overrides `vui-table-border' for the border characters.
+SPANNED lists the boundaries, by the index of the column before each,
+that a header cell spans (see `vui--table-header-groups'): the line is
+above or right below the header row there, and the column stroke does
+not go up through it.  The top line goes on with its rule there, and
+the line below the header has the junction of a stroke that goes down
+only."
   (let* ((chars (pcase border-style
                   (:ascii
                    (pcase position
@@ -6751,6 +6843,10 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
          (left-w (vui--text-width (vui--faced left face)))
          (mid-w (vui--text-width (vui--faced mid face)))
          (right-w (vui--text-width (vui--faced right face)))
+         ;; The junction at a boundary a header spans, on the line below
+         ;; the header.  The top line has none there: its rule goes on.
+         (spanned-junction (if (eq border-style :unicode) "┬" mid))
+         (spanned-w (vui--text-width (vui--faced spanned-junction face)))
          (last (1- (length col-widths)))
          (start (point)))
     ;; The vertical strokes have to line up: each junction on this row
@@ -6773,16 +6869,24 @@ BORDER-FACE overrides `vui-table-border' for the border characters."
         (setq x (+ at left-w)))
       (cl-loop for width in col-widths
                for i from 0
-               do (let* ((junction (if (< i last) mid right))
-                         (junction-w (if (< i last) mid-w right-w))
+               do (let* ((inside (and (< i last) (memq i spanned)))
+                         (junction (cond (inside spanned-junction)
+                                         ((< i last) mid)
+                                         (t right)))
+                         (junction-w (cond (inside spanned-w)
+                                           ((< i last) mid-w)
+                                           (t right-w)))
                          (span (+ width (vui--width (* 2 padding)))))
                     ;; centre of the next separator, and where a junction
                     ;; of this width must start to be centred on it
                     (setq centre (+ centre (* 2 (+ sep-w span))))
-                    (let ((at (max x (/ (- centre junction-w) 2))))
-                      (insert (vui--border-segment (- at x) fill fill-w))
-                      (insert junction)
-                      (setq x (+ at junction-w)))))
+                    ;; Inside a span, the top line has no junction: the
+                    ;; next segment goes on to the one after it
+                    (unless (and inside (eq position 'top))
+                      (let ((at (max x (/ (- centre junction-w) 2))))
+                        (insert (vui--border-segment (- at x) fill fill-w))
+                        (insert junction)
+                        (setq x (+ at junction-w))))))
       ;; A right corner narrower than the separator ends the row short
       ;; of the data rows; pad the difference so the rows measure the same
       (let ((data-end (/ (+ centre sep-w) 2)))
@@ -6866,7 +6970,13 @@ Handles :truncate and overflow:
              do (let* ((align (if header-p :left (or (plist-get col :align) :left)))
                        (truncate-p (plist-get col :truncate))
                        (grow (plist-get col :grow))
-                       (declared-width (vui--width (plist-get col :width)))
+                       ;; A column a header over several columns widened
+                       ;; holds more than its :width: cut at what it holds
+                       ;; A column that a header over several columns
+                       ;; widened holds more than its :width: it cuts at
+                       ;; what it holds (see `vui--table-cut-columns')
+                       (declared-width (or (plist-get col :vui--cut-width)
+                                           (vui--width (plist-get col :width))))
                        (face (when header-p (or header-face 'vui-table-header)))
                        ;; Get content as string (works for both vnodes and strings).
                        ;; A header wears its face from here on, so it is
@@ -11294,8 +11404,20 @@ is written."
            ;; The sizing pass renders and measures every cell; keep that
            ;; per row so the row pass does not do it a second time
            (measures (make-hash-table :test #'eq))
+           ;; The columns a header over several columns widened
+           (widened (list nil))
            (col-widths (vui--calculate-table-widths columns rows border
-                                                    header-face measures)))
+                                                    header-face measures
+                                                    border-face widened))
+           ;; The columns the data rows render with
+           (row-columns (vui--table-cut-columns columns col-widths
+                                                (car widened)))
+           ;; The cells of the header row: a header can span columns
+           (groups (and has-header (vui--table-header-groups columns)))
+           ;; The column boundaries inside those cells, where a border
+           ;; above or right below the header row has no stroke going up
+           (spanned (cl-loop for (start count _) in groups
+                             nconc (number-sequence start (+ start count -2)))))
       ;; The pinned copy of a sticky header is display-only text in the
       ;; header line, out of reach of vui navigation and buttons -
       ;; require plain string headers so nothing looks interactive
@@ -11314,21 +11436,31 @@ is written."
         (when has-header
           (when border
             (vui--render-table-border col-widths border 'top cell-padding
-                                      border-face))
+                                      border-face spanned))
           ;; A marker for a sticky header: the hooks of the components in
           ;; the rows can write or delete text above the table, or in the
           ;; rows written before them (a stream in a cell)
           (when (and sticky (not vui--measuring-p))
             (setq header-row-start (point-marker)))
-          (vui--render-table-row
-           (mapcar (lambda (c) (or (plist-get c :header) "")) columns)
-           col-widths columns border 'header nil header-face border-face)
+          ;; One cell per header, as wide as the columns it spans and
+          ;; the gaps between them.  A header over several columns has
+          ;; them all to itself: no width of one of them truncates it.
+          (let ((gap (vui--table-gap border border-face)))
+            (vui--render-table-row
+             (mapcar (lambda (group) (or (nth 2 group) "")) groups)
+             (mapcar (lambda (group)
+                       (vui--table-group-width group col-widths gap))
+                     groups)
+             (mapcar (lambda (group)
+                       (and (= (nth 1 group) 1) (nth (nth 0 group) columns)))
+                     groups)
+             border 'header nil header-face border-face))
           ;; From here on, text written right at its start is above it
           (when header-row-start
             (set-marker-insertion-type header-row-start t))
           (when border
             (vui--render-table-border col-widths border 'separator cell-padding
-                                      border-face)))
+                                      border-face spanned)))
         ;; Render data rows
         (let ((first-row (not has-header)))
           (when (and border first-row)
@@ -11341,7 +11473,7 @@ is written."
                   (vui--render-table-border col-widths border 'separator
                                             cell-padding border-face))
               ;; Render data row with row index for path tracking
-              (vui--render-table-row row col-widths columns border nil row-idx
+              (vui--render-table-row row col-widths row-columns border nil row-idx
                                      nil border-face (gethash row measures))
               (cl-incf row-idx)))
           (when border

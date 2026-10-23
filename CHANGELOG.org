@@ -1130,6 +1130,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-table= columns take =:header-span N= (#249): the header goes
+  over it and the N-1 columns after it, while each column keeps its own
+  cells, width and alignment. A header wider than its columns widens the
+  first of them. With =:border=, the borders follow the header cell, and
+  =:sticky-header= pins it as it is. A column under such a header can't
+  have a =:header= of its own.
+
 - =vui-grid=: a responsive grid of equal-width tracks (#134). Cells
   fill rows in source order; the column count starts from =:columns=
   and falls while tracks of at least =:min-column-width= stop fitting

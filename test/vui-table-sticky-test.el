@@ -34,6 +34,16 @@
     (line-beginning-position)))
 
 (describe "vui-table :sticky-header"
+  (it "pins a header row with a header over several columns"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :sticky-header t
+                   :columns '((:header "G" :header-span 2) () (:header "Z"))
+                   :rows '(("a" "b" "c") ("d" "e" "f"))
+                   :border :unicode))
+      (expect (vui-sticky--at (1+ (vui-sticky--pos-of "│ d")))
+              :to-equal "│ G     │ Z │")))
+
   (it "stores :sticky-header in the vnode"
     (let ((node (vui-table
                  :sticky-header t
