@@ -1460,6 +1460,8 @@ Examples:
 (defun vui-field-value (key)
   "Get the current value of a field identified by KEY.
 Returns the field's current text, or nil if no field with KEY exists.
+KEY is compared with `equal', as keys are in reconciliation, so it can
+be a symbol, a string or a list.
 Use this to read field values in button callbacks without triggering re-renders.
 
 Example:
@@ -1471,7 +1473,7 @@ Example:
   (catch 'found
     (dolist (w widget-field-list)
       (when (and (eq (car w) 'editable-field)
-                 (eq (widget-get w :vui-key) key))
+                 (equal (widget-get w :vui-key) key))
         (throw 'found (widget-value w))))))
 
 (defun vui-checkbox (&rest props)

@@ -411,6 +411,20 @@
             (expect (vui-field-value 'my-input) :to-equal "hello world"))
         (kill-buffer "*test-fv*"))))
 
+  (it "retrieves field value by a string or list key"
+    ;; Keys are compared with `equal', as in reconciliation
+    (vui-defcomponent field-value-string-test ()
+      :render
+      (vui-vstack
+       (vui-field :key "search-input" :value "query")
+       (vui-field :key '(row 1) :value "cell")))
+    (vui-mount (vui-component 'field-value-string-test) "*test-fv-string*")
+    (unwind-protect
+        (with-current-buffer "*test-fv-string*"
+          (expect (vui-field-value (concat "search" "-input")) :to-equal "query")
+          (expect (vui-field-value (list 'row 1)) :to-equal "cell"))
+      (kill-buffer "*test-fv-string*")))
+
   (it "returns nil for non-existent key"
     (vui-defcomponent field-value-nil-test ()
       :render

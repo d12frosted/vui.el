@@ -90,6 +90,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-field-value= finds a field with a string or list key. It
+  compared keys with =eq=, so =(vui-field-value "search-input")=, as
+  the primitives guide writes it, returned nil. Keys are now compared
+  with =equal=, as in reconciliation.
+
 - After =vui-unmount= of a =vui-mount= buffer, Lisp code can edit the
   buffer again. Before, the fields of the tree stayed in
   =widget-field-list=, and the next insert signalled

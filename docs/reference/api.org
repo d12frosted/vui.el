@@ -512,6 +512,7 @@ fields with parsing and validation, use =vui-typed-field= from =vui-components.e
 #+end_src
 
 Get current value of field with KEY, without triggering re-render.
+KEY is compared with =equal=: a symbol, a string or a list.
 
 #+begin_src elisp
 (vui-field :key 'my-input :size 20)
