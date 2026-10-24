@@ -1020,6 +1020,60 @@
       (vui-mount-inline (vui-component 'layout-empty-table) 6)
       (expect (buffer-string) :to-equal "HEAD\nTAIL"))))
 
+(describe "vui-table column :min-width"
+  (it "pads a column to its minimum width"
+    ;; The basic table of the layout guide
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:min-width 8) (:min-width 10) (:min-width 8))
+                   :rows '(("Alice" "Developer" "NYC")
+                           ("Bob" "Designer" "LA"))))
+      (expect (buffer-string)
+              :to-equal (concat "Alice    Developer  NYC     \n"
+                                "Bob      Designer   LA      "))))
+
+  (it "widens a column past its minimum for its content"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:min-width 3) (:min-width 2))
+                             :rows '(("Alice" "x"))))
+      (expect (buffer-string) :to-equal "Alice x ")))
+
+  (it "pads a header and its cells to the minimum width"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "Name" :min-width 6))
+                             :rows '(("Al"))
+                             :border :ascii))
+      (expect (buffer-string)
+              :to-equal (concat "+--------+\n| Name   |\n+--------+\n"
+                                "| Al     |\n+--------+"))))
+
+  (it "widens a column past its minimum for its header"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "Name" :min-width 2)
+                                        (:header "X"))
+                             :rows '(("A" "b"))))
+      (expect (buffer-string) :to-equal "Name X\nA    b")))
+
+  (it "is a floor for a column with a :width"
+    ;; :width alone shrinks to the content (see the width table of the guide)
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:width 10 :min-width 6))
+                             :rows '(("ab"))))
+      (expect (buffer-string) :to-equal "ab    ")))
+
+  (it "raises a smaller :width, also where cells are cut"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:width 3 :min-width 6 :truncate t))
+                             :rows '(("abcdefgh"))))
+      (expect (buffer-string) :to-equal "abc...")))
+
+  (it "raises a smaller :width where cells overflow"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:width 3 :min-width 6) (:min-width 1))
+                             :rows '(("abcdefgh" "z"))))
+      ;; The overflow is cut at the column width, not at :width
+      (expect (buffer-string) :to-equal "abcdef z"))))
+
 (describe "vui-table"
   (it "creates a table vnode"
     (let ((node (vui-table
