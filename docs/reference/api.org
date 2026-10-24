@@ -423,7 +423,9 @@ Create WIDTH spaces (default 1).
 (vui-fragment &rest CHILDREN) -> vnode
 #+end_src
 
-Group multiple vnodes without adding structure.
+Group multiple vnodes without adding structure.  A child can be a list
+of vnodes (as =cl-loop= collects them): its vnodes render in its place,
+as a fragment of their own.
 
 #+begin_src elisp
 (vui-fragment
@@ -1328,7 +1330,8 @@ Define a context.
 
 Creates:
 - =NAME-context= - The context object
-- =NAME-provider= - Function to provide value
+- =NAME-provider= - Function to provide value; its children are taken
+  as by =vui-fragment=, lists included
 - =use-NAME= - Convenience hook to consume value
 
 #+begin_src elisp

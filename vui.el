@@ -1372,9 +1372,28 @@ and there is no bare-symbol shorthand: write (:inherit error ...), not
                         unless (memq k '(:face :key))
                         append (list k v))))
 
+(defun vui--wrap-list-children (children)
+  "Return CHILDREN with each list in it made a fragment of its own.
+A list of vnodes, as `cl-loop' collects it, stands for its vnodes.  As
+one fragment it stays one child, whatever its length: the children
+after it keep their places in the render path, and so does an error
+boundary with no id among them.  A component after it still needs a
+key to keep its state, as components are matched by their order in
+the whole render.  CHILDREN with no list in it is returned as it is."
+  (if (cl-some #'consp children)
+      (mapcar (lambda (child)
+                (if (consp child)
+                    (vui-vnode-fragment--create
+                     :children (vui--wrap-list-children child))
+                  child))
+              children)
+    children))
+
 (defun vui-fragment (&rest children)
-  "Create a fragment vnode containing CHILDREN."
-  (vui-vnode-fragment--create :children children))
+  "Create a fragment vnode containing CHILDREN.
+A child can be a list of vnodes, as `cl-loop' collects them: its vnodes
+render in its place, as a fragment of their own."
+  (vui-vnode-fragment--create :children (vui--wrap-list-children children)))
 
 (defun vui-newline (&optional key)
   "Create a newline vnode with optional KEY."
@@ -2679,12 +2698,13 @@ DOCSTRING is an optional documentation string for the context."
 
        ;; Provider function
        (defun ,provider-fn (value &rest children)
-        ,(format "Provide %s context with VALUE to CHILDREN." name)
+        ,(format "Provide %s context with VALUE to CHILDREN.
+A child can be a list of vnodes, as in `vui-fragment'." name)
         (declare (indent 1))
         (vui-vnode-provider--create
          :context ,context-var
          :value value
-         :children children))
+         :children (vui--wrap-list-children children)))
 
        ;; Consumer hook
        (defun ,consumer-fn ()

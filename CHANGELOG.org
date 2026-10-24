@@ -90,6 +90,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-fragment= and the providers =vui-defcontext= defines take a list
+  of vnodes as a child, as =cl-loop ... collect= builds it, or as a
+  component gets its =children=. The list renders in its place, as a
+  fragment of its own. Before, such a child signalled "Unknown vnode
+  type: cons", and so did examples in the components and context
+  guides. As one child, a list that changes length does not move the
+  children after it in the render path: an error boundary with no id
+  after it keeps its caught error.
+
 - =vui-error-boundary= takes a single vnode as =:children=, as the
   error handling guide writes it. Before, it took only a list: a single
   child made the boundary catch its own =wrong-type-argument= and show

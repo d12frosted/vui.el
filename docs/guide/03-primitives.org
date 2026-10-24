@@ -397,6 +397,21 @@ Fragments can be nested and will be flattened:
 ;; Renders: ABCD
 #+end_src
 
+*** Lists of Children
+
+A child can also be a list of vnodes, as =cl-loop= or =mapcar= builds it.
+Its vnodes take its place:
+
+#+begin_src elisp
+(vui-fragment
+ (vui-text "Items:")
+ (cl-loop for item in '("a" "b")
+          collect (vui-text (format " %s" item))))
+;; Renders: Items: a b
+#+end_src
+
+Context providers (see [[file:06-context.org][Context]]) take lists the same way.
+
 *** Nil Children Are Ignored
 
 #+begin_src elisp

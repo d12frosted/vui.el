@@ -19,6 +19,17 @@
     (expect (fboundp 'use-test-ctx) :to-be-truthy)
     (expect (vui-context-default-value test-ctx-context) :to-equal 'default-value))
 
+  (it "provides context to a list of children given as one argument"
+    (vui-defcontext list-ctx 'light)
+    (vui-defcomponent list-ctx-consumer (label)
+      :render (vui-text (format "%s:%s " label (use-list-ctx))))
+    (with-temp-buffer
+      (vui-render (list-ctx-provider 'dark
+                    (cl-loop for label in '("a" "b")
+                             collect (vui-component 'list-ctx-consumer
+                                                    :label label))))
+      (expect (buffer-string) :to-equal "a:dark b:dark ")))
+
   (it "consumes context via vui-use-context"
     (vui-defcontext uc-theme 'light)
     (let ((inside nil)

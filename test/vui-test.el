@@ -40,7 +40,99 @@
   (it "creates a fragment with children"
     (let ((node (vui-fragment (vui-text "a") (vui-text "b"))))
       (expect (vui-vnode-fragment-p node) :to-be-truthy)
-      (expect (length (vui-vnode-fragment-children node)) :to-equal 2))))
+      (expect (length (vui-vnode-fragment-children node)) :to-equal 2)))
+
+  (it "renders a list of children given as one argument"
+    ;; As `cl-loop' collects them
+    (with-temp-buffer
+      (vui-render (vui-fragment
+                   (cl-loop for item in '("One" "Two")
+                            collect (vui-fragment
+                                     (vui-text (format "- %s" item))
+                                     (vui-newline)))))
+      (expect (buffer-string) :to-equal "- One\n- Two\n")))
+
+  (it "renders the children of nested lists in place, nil included"
+    (with-temp-buffer
+      (vui-render (vui-fragment (vui-text "a")
+                                (list nil (list (vui-text "b")))
+                                nil (vui-text "c")))
+      (expect (buffer-string) :to-equal "abc")))
+
+  (it "keeps a boundary with no id after a list that grows in its place"
+    ;; The list is one child of the fragment, whatever its length
+    (let ((renders 0))
+      (vui-defcomponent fragment-list-flaky ()
+        :render (if (< (cl-incf renders) 2)
+                    (error "First render fails")
+                  (vui-text "ok")))
+      (vui-defcomponent fragment-list-boundary-app (labels)
+        :render
+        (vui-fragment
+         (cl-loop for label in labels collect (vui-text (concat label " ")))
+         (vui-error-boundary
+          :fallback (lambda (_) (vui-text "fallback"))
+          :children (vui-component 'fragment-list-flaky))))
+      (let ((instance (vui-mount (vui-component 'fragment-list-boundary-app
+                                                :labels '("a"))
+                                 "*test-fragment-list-boundary*")))
+        (unwind-protect
+            (with-current-buffer "*test-fragment-list-boundary*"
+              (expect (buffer-string) :to-equal "a fallback")
+              (vui-update instance '(:labels ("a" "b")))
+              (expect (buffer-string) :to-equal "a b fallback"))
+          (kill-buffer "*test-fragment-list-boundary*")))))
+
+  (it "keeps the state of a keyed component after a list that changes length"
+    (vui-defcomponent fragment-list-tail (label)
+      :state ((n 0))
+      :render (vui-button (format "%s=%d" label n)
+                :on-click (lambda () (vui-set-state :n (1+ n)))))
+    (vui-defcomponent fragment-list-tail-app (labels)
+      :render (vui-fragment
+               (cl-loop for label in labels
+                        collect (vui-component 'fragment-list-tail
+                                               :key label :label label))
+               (vui-component 'fragment-list-tail :key 'tail :label "t")))
+    (let ((vui-render-delay nil)
+          (instance (vui-mount (vui-component 'fragment-list-tail-app
+                                              :labels '("a"))
+                               "*test-fragment-list-tail*")))
+      (unwind-protect
+          (with-current-buffer "*test-fragment-list-tail*"
+            (goto-char (point-min))
+            (search-forward "[t=0]")
+            (button-activate (button-at (match-beginning 0)))
+            (expect (buffer-string) :to-equal "[a=0][t=1]")
+            (vui-update instance '(:labels ("a" "b" "c")))
+            (expect (buffer-string) :to-equal "[a=0][b=0][c=0][t=1]")
+            (vui-update instance '(:labels nil))
+            (expect (buffer-string) :to-equal "[t=1]"))
+        (kill-buffer "*test-fragment-list-tail*"))))
+
+  (it "keeps the state of keyed components given as a list"
+    (vui-defcomponent fragment-list-counter (label)
+      :state ((n 0))
+      :render (vui-button (format "%s=%d" label n)
+                :on-click (lambda () (vui-set-state :n (1+ n)))))
+    (vui-defcomponent fragment-list-app (labels)
+      :render (vui-fragment
+               (cl-loop for label in labels
+                        collect (vui-component 'fragment-list-counter
+                                               :key label :label label))))
+    (let ((vui-render-delay nil)
+          (instance (vui-mount (vui-component 'fragment-list-app
+                                              :labels '("a" "b"))
+                               "*test-fragment-list*")))
+      (unwind-protect
+          (with-current-buffer "*test-fragment-list*"
+            (goto-char (point-min))
+            (search-forward "[a=0]")
+            (button-activate (button-at (match-beginning 0)))
+            (expect (buffer-string) :to-equal "[a=1][b=0]")
+            (vui-update instance '(:labels ("b" "a")))
+            (expect (buffer-string) :to-equal "[b=0][a=1]"))
+        (kill-buffer "*test-fragment-list*")))))
 
 (describe "vui-newline"
   (it "creates a newline vnode"
