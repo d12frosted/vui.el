@@ -12384,7 +12384,8 @@ Returns INSTANCE, or nil if it was already unmounted."
 BUFFER-OR-INSTANCE selects what to unmount:
 - nil, a buffer, or a buffer name: the instance mounted in that
   buffer (default: current buffer) via `vui-mount'.  The buffer's
-  content is erased, but the buffer itself is not killed.
+  content is erased, but the buffer itself is not killed.  With no
+  field left in it, Lisp code can edit it again.
 - an instance returned by `vui-mount-inline': its managed region is
   removed from the host buffer; the rest of the buffer is untouched.
 - a component row of a `vui-stream': its region and the separator
@@ -12433,10 +12434,24 @@ Returns the unmounted instance, or nil if nothing was mounted."
                 ;; signals (number-or-marker-p nil).  The render path inhibits
                 ;; these hooks for the same reason; teardown must too.
                 (let ((inhibit-read-only t)
-                      (inhibit-modification-hooks t))
+                      (inhibit-modification-hooks t)
+                      ;; Not something to undo: the text of the tree
+                      ;; would come back, with buttons that still run its
+                      ;; handlers
+                      (buffer-undo-list t))
                   (remove-overlays)
                   (vui--park-streams)
                   (erase-buffer))
+                ;; What is in the undo list is about text that is gone
+                (when (listp buffer-undo-list)
+                  (setq buffer-undo-list nil))
+                ;; The fields of the tree went with its text.  Left in
+                ;; `widget-field-list', they make `widget-before-change'
+                ;; signal on the next edit; with no field left, the buffer
+                ;; needs no guard
+                (setq widget-field-list nil widget-field-new nil)
+                (dolist (hook vui--widget-change-hooks)
+                  (remove-hook (car hook) (cdr hook) t))
                 ;; Put back the header line a sticky table header replaced
                 (vui--table-restore-header-line)
                 ;; The trees its hooks mounted in the buffer go in now

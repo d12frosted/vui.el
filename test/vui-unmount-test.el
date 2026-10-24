@@ -35,6 +35,59 @@
             (with-current-buffer "*vui-um*"
               (let ((inhibit-modification-hooks t)) (kill-buffer "*vui-um*")))))))))
 
+(describe "a buffer after vui-unmount"
+  :var (inst)
+  (before-each
+    (vui-defcomponent vui-um-after-field ()
+      :state ((v ""))
+      :render (vui-field :value v :size 10
+                         :on-change (lambda (x) (vui-set-state :v x))))
+    (vui-defcomponent vui-um-after-label ()
+      :render (vui-text "Label"))
+    (vui-defcomponent vui-um-after-form ()
+      :render (vui-fragment (vui-text "Name: ") (vui-field :size 4)))
+    (setq inst (vui-mount (vui-component 'vui-um-after-field) "*vui-um-after*"))
+    (vui-unmount inst))
+  (after-each
+    (when (get-buffer "*vui-um-after*")
+      (let ((inhibit-modification-hooks t))
+        (kill-buffer "*vui-um-after*"))))
+
+  (it "keeps no field of the tree"
+    (with-current-buffer "*vui-um-after*"
+      (expect widget-field-list :to-be nil)
+      (expect widget-field-new :to-be nil)))
+
+  (it "takes plain edits, as it has no field"
+    (with-current-buffer "*vui-um-after*"
+      (insert "HEAD\nTAIL")
+      (delete-region 1 3)
+      (expect (buffer-string) :to-equal "AD\nTAIL")))
+
+  (it "hosts an inline mount, whose text stays guarded"
+    (with-current-buffer "*vui-um-after*"
+      (insert "HEAD\n")
+      (vui-mount-inline (vui-component 'vui-um-after-label) (point-max))
+      (goto-char (point-min))
+      (insert "> ")
+      (expect (buffer-substring-no-properties 1 9) :to-equal "> HEAD\nL")
+      (goto-char 10)
+      (expect (insert "x") :to-throw 'text-read-only)))
+
+  (it "brings nothing of the tree back on undo"
+    ;; The erase is not something to undo: the text of the tree would
+    ;; come back, with buttons that still run its handlers
+    (with-current-buffer "*vui-um-after*"
+      (ignore-errors (undo))
+      (expect (buffer-string) :to-equal "")))
+
+  (it "is a vui-mount buffer again after a mount"
+    (vui-mount (vui-component 'vui-um-after-form) "*vui-um-after*")
+    (with-current-buffer "*vui-um-after*"
+      (expect (length widget-field-list) :to-equal 1)
+      (goto-char (point-min))
+      (expect (insert "x") :to-throw 'text-read-only))))
+
 (describe "vui-mount over a previous mount"
   (it "remounts over a field-containing buffer without error"
     ;; Same failure mode as unmount: `vui-mount' erases the previous

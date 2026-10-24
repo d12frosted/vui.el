@@ -90,6 +90,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- After =vui-unmount= of a =vui-mount= buffer, Lisp code can edit the
+  buffer again. Before, the fields of the tree stayed in
+  =widget-field-list=, and the next insert signalled
+  (number-or-marker-p nil) from =widget-before-change=, so nothing could
+  write to the buffer again (the host text of an inline mount, say). Now
+  the fields go with the text, and so do the change hooks of widget.el,
+  as no field is left to guard. The erase is also kept out of undo:
+  undoing it brought the text of the tree back, with buttons that still
+  ran its handlers.
+
 - =vui-fragment= and the providers =vui-defcontext= defines take a list
   of vnodes as a child, as =cl-loop ... collect= builds it, or as a
   component gets its =children=. The list renders in its place, as a

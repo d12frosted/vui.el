@@ -174,7 +174,8 @@ Unmount a VUI instance, running its full teardown lifecycle.
 BUFFER-OR-INSTANCE selects what to unmount:
 - nil, a buffer, or a buffer name :: the instance mounted in that buffer
   (default: current buffer) via =vui-mount=. The buffer's content is
-  erased, but the buffer itself is not killed.
+  erased, but the buffer itself is not killed.  With no field left in
+  it, Lisp code can edit it again.
 - an instance returned by =vui-mount-inline= :: its managed region is
   removed from the host buffer; the rest of the buffer is untouched.
 - an instance returned by =vui-mount= :: same as passing its buffer.
