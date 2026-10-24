@@ -91,16 +91,15 @@ Each character is followed by the render INSTANCE schedules for it."
   (vui-mount-inline (vui-component 'inline-box :text text) position))
 
 (defun vui-inline-test--host-insert (position text)
-  "Insert TEXT at POSITION as a program that owns the host buffer does.
-The widgets of a mounted component make plain edits outside of their
-fields signal."
-  (let ((inhibit-read-only t))
-    (save-excursion
-      (goto-char position)
-      (insert text))))
+  "Insert TEXT at POSITION as a program that owns the host buffer does."
+  (save-excursion
+    (goto-char position)
+    (insert text)))
 
 (defun vui-inline-test--host-replace (start end text)
-  "Replace the text from START to END with TEXT, as the host does."
+  "Replace the text from START to END with TEXT, as the host does.
+The text can be that of a region, which is read-only outside of its
+fields."
   (let ((inhibit-read-only t))
     (delete-region start end))
   (vui-inline-test--host-insert start text))
@@ -1536,6 +1535,232 @@ and shows TEXT, or nothing when TEXT is nil."
         (expect (vui-inline-test--region-text instance) :to-equal "[a](c)")
         (vui-update instance (list :label "b" :hook tail))
         (expect (buffer-string) :to-equal "host\n[b](c) (tail)end")))))
+
+;; Issue #254: a mounted form must not make the host text read-only
+(vui-defcomponent inline-host-form ()
+  "A field and a button, as in a form that collects input."
+  :state ((name ""))
+  :render (vui-fragment
+           (vui-text "Name: ")
+           (vui-field :value name :size 4
+                      :on-change (lambda (value) (vui-set-state :name value)))
+           (vui-button "OK")
+           (vui-newline)))
+
+(defun vui-inline-test--host-hook (&rest _)
+  "A change hook of the host buffer.")
+
+(vui-defcomponent inline-host-log (log)
+  "The stream LOG."
+  :render (vui-stream log))
+
+(describe "host edits around inline regions"
+  (it "edits host text while a form is mounted"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-mount-inline (vui-component 'inline-host-form) 6)
+      (goto-char (point-min))
+      (insert "> ")
+      (goto-char (point-max))
+      (insert "!")
+      (delete-region (- (point-max) 2) (point-max))
+      (expect (buffer-substring (point-min) 8) :to-equal "> HEAD\n")
+      (expect (buffer-substring (- (point-max) 4) (point-max))
+              :to-equal "\nTAI")))
+
+  (it "types at the edges of a region, outside of it"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((instance (vui-mount-inline (vui-component 'inline-host-form) 6))
+             (form (vui-inline-test--region-text instance)))
+        (goto-char 6)
+        (insert "a")
+        (goto-char (cdr (vui-inline-test--bounds instance)))
+        (insert "b")
+        (expect (buffer-string) :to-equal (concat "HEAD\na" form "bTAIL"))
+        (expect (vui-inline-test--region-text instance) :to-equal form))))
+
+  (it "refuses edits of a region's text outside of its fields"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let* ((instance (vui-mount-inline (vui-component 'inline-host-form) 6))
+             (form (vui-inline-test--region-text instance)))
+        (goto-char 8)
+        (expect (insert "x") :to-throw 'text-read-only)
+        ;; The next command: the refusal emptied the change hooks
+        (run-hooks 'post-command-hook)
+        ;; Across the start of the region
+        (expect (delete-region 4 8) :to-throw 'text-read-only)
+        (expect (vui-inline-test--region-text instance) :to-equal form))))
+
+  (it "types in a field of a region"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-mount-inline (vui-component 'inline-host-form) 6)))
+        (goto-char (+ 6 (length "Name: ")))
+        (vui-inline-test--type instance "ab")
+        (expect (vui-inline-test--region-text instance)
+                :to-match "\\`Name: ab"))))
+
+  (it "puts back the change hooks after a refused edit"
+    ;; Emacs empties `before-change-functions' when one of them signals
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (add-hook 'before-change-functions #'vui-inline-test--host-hook nil t)
+      (vui-mount-inline (vui-component 'inline-host-form) 6)
+      (let ((hooks before-change-functions))
+        (goto-char 8)
+        (ignore-errors (insert "x"))
+        (run-hooks 'post-command-hook)
+        (expect before-change-functions :to-equal hooks)
+        (goto-char (point-min))
+        (insert "> ")
+        (expect (buffer-substring (point-min) 3) :to-equal "> "))))
+
+  (it "leaves the host buffer as it was after the last form unmounts"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (add-hook 'before-change-functions #'vui-inline-test--host-hook nil t)
+      (let ((before before-change-functions)
+            (after after-change-functions)
+            (a (vui-mount-inline (vui-component 'inline-host-form) 6))
+            (b (vui-mount-inline (vui-component 'inline-host-form) 1)))
+        (vui-unmount b)
+        (goto-char 8)
+        (expect (insert "x") :to-throw 'text-read-only)
+        (vui-unmount a)
+        (expect (buffer-string) :to-equal "HEAD\nTAIL")
+        (expect before-change-functions :to-equal before)
+        (expect after-change-functions :to-equal after)
+        (goto-char 7)
+        (insert "x")
+        (expect (buffer-string) :to-equal "HEAD\nTxAIL"))))
+
+  (it "leaves the host buffer as it was after a form with stream rows unmounts"
+    ;; The rows go with the form, and their regions are no longer in the
+    ;; buffer
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "a"))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL")
+        (let ((before before-change-functions)
+              (after after-change-functions)
+              (form (vui-mount-inline (vui-component 'inline-host-log :log log)
+                                      6)))
+          (vui-stream-append log (vui-component 'inline-box :text "[row]"))
+          (vui-unmount form)
+          (expect (buffer-string) :to-equal "HEAD\nTAIL")
+          (expect before-change-functions :to-equal before)
+          (expect after-change-functions :to-equal after)))))
+
+  (it "deletes host text around an empty region"
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "" 6)))
+        (delete-region 3 8)
+        (expect (buffer-string) :to-equal "HEIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(3 . 3)))))
+
+  (it "keeps text inserted before markers at the end of a region outside"
+    ;; As process output is inserted
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((instance (vui-inline-test--box "[box]" 6)))
+        (goto-char 11)
+        (insert-before-markers "OUT")
+        ;; Process output binds `inhibit-read-only' too
+        (let ((inhibit-read-only t))
+          (goto-char 11)
+          (insert-before-markers "!"))
+        (expect (vui-inline-test--region-text instance) :to-equal "[box]")
+        (vui-rerender instance)
+        (expect (buffer-string) :to-equal "HEAD\n[box]!OUTTAIL"))))
+
+  (it "puts back the change hooks of the buffer alone after a refused edit"
+    ;; Not those of a `let' around the edit, nor in the default value
+    ;; once a major mode killed the local one
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (let ((default (default-value 'before-change-functions)))
+        (vui-mount-inline (vui-component 'inline-host-form) 6)
+        (let ((hooks before-change-functions))
+          (let ((before-change-functions
+                 (cons #'vui-inline-test--host-hook before-change-functions)))
+            (goto-char 8)
+            (ignore-errors (insert "x")))
+          (run-hooks 'post-command-hook)
+          (expect before-change-functions :to-equal hooks))
+        (goto-char 8)
+        (ignore-errors (insert "x"))
+        (fundamental-mode)
+        (run-hooks 'post-command-hook)
+        (expect (default-value 'before-change-functions) :to-equal default))))
+
+  (it "keeps the guard of a host buffer that has fields of its own"
+    (with-temp-buffer
+      (widget-insert "HEAD\n")
+      (widget-create 'editable-field :size 4 "abc")
+      (widget-insert "\nTAIL")
+      (widget-setup)
+      (let ((form (vui-mount-inline (vui-component 'inline-host-form)
+                                    (point-max))))
+        (vui-rerender form)
+        (goto-char (point-min))
+        (expect (insert "x") :to-throw 'text-read-only)
+        (run-hooks 'post-command-hook)
+        (vui-unmount form)
+        (expect (memq #'widget-before-change before-change-functions)
+                :to-be-truthy)
+        (goto-char (point-min))
+        (expect (insert "x") :to-throw 'text-read-only))))
+
+  (it "keeps the guard of a host that makes fields of its own later"
+    (with-temp-buffer
+      (insert "HEAD\n")
+      (let ((form (vui-mount-inline (vui-component 'inline-host-form)
+                                    (point-max)))
+            (notified nil))
+        (goto-char (point-max))
+        (widget-insert "\n")
+        (widget-create 'editable-field :size 4
+                       :notify (lambda (&rest _) (setq notified t))
+                       "abc")
+        (widget-insert "\nTAIL")
+        (widget-setup)
+        (vui-rerender form)
+        (goto-char (point-min))
+        (expect (insert "x") :to-throw 'text-read-only)
+        (run-hooks 'post-command-hook)
+        (vui-unmount form)
+        (goto-char (point-min))
+        (expect (insert "x") :to-throw 'text-read-only)
+        (run-hooks 'post-command-hook)
+        (search-forward "abc")
+        (insert "d")
+        (expect notified :to-be-truthy))))
+
+  (it "edits host text after a stream writes a field in place"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-stream-append log (vui-text "a"))
+      (with-temp-buffer
+        (insert "HEAD\nTAIL")
+        (vui-mount-inline (vui-component 'inline-host-log :log log) 6)
+        (vui-stream-append log (vui-field :value "" :size 3))
+        (goto-char (point-min))
+        (insert "> ")
+        (expect (buffer-substring (point-min) 3) :to-equal "> "))))
+
+  (it "keeps the text of a vui-mount buffer outside of fields read-only"
+    (let ((buffer (vui-instance-buffer
+                   (vui-mount (vui-component 'inline-host-form)
+                              "*test-inline-host*"))))
+      (unwind-protect
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (expect (insert "x") :to-throw 'text-read-only))
+        (kill-buffer buffer)))))
 
 (provide 'vui-inline-test)
 ;;; vui-inline-test.el ends here

@@ -2761,9 +2761,8 @@ flag is set."
               (insert "HEAD\n")
               (setq inst (vui-mount-inline
                           (vui-component 'vui-sr-toggle-root :log log :show t)))
-              (let ((inhibit-read-only t))
-                (goto-char (point-max))
-                (insert "\nTAIL"))
+              (goto-char (point-max))
+              (insert "\nTAIL")
               (dolist (label '("W" "X" "Y"))
                 (vui-stream-append log (vui-component 'vui-sr-sibling-row
                                                       :label label)))

@@ -33,14 +33,11 @@
 (defun vui-undo--type-here (text)
   "Type TEXT at point, as a group of its own."
   (undo-boundary)
-  (let ((inhibit-read-only t))
-    (insert text))
+  (insert text)
   (undo-boundary))
 
 (defun vui-undo--type-at (string text)
-  "Type TEXT right after the first STRING, as a group of its own.
-Host text next to an inline region is read-only to widget.el, so the
-typing binds `inhibit-read-only'."
+  "Type TEXT right after the first STRING, as a group of its own."
   (goto-char (point-min))
   (search-forward string)
   (vui-undo--type-here text))
@@ -242,8 +239,7 @@ typing binds `inhibit-read-only'."
               ;; records point in the group of the B
               (push 7 buffer-undo-list)
               (goto-char (point-max))
-              (let ((inhibit-read-only t))
-                (insert "B"))
+              (insert "B")
               (undo-boundary)
               (vui-update instance '(:n 10))
               (vui-undo--undo-once)
@@ -574,7 +570,9 @@ bound to them, and STREAM to the stream.  The undo history is empty."
               (with-current-buffer "*vui-undo-b*"
                 (buffer-enable-undo)
                 (setq buffer-undo-list nil)
-                (vui-undo--type-at "B bottom" "Z"))
+                ;; Outside of a field: read-only in a buffer of `vui-mount'
+                (let ((inhibit-read-only t))
+                  (vui-undo--type-at "B bottom" "Z")))
               (vui-update top '(:show t))
               (dolist (buffer '("*vui-undo-a*" "*vui-undo-b*"))
                 (with-current-buffer buffer
@@ -718,8 +716,7 @@ WRITE is `append', `append-to', `after' or `update-last'."
                 (goto-char (point-min))
                 (search-forward "old")
                 (undo-boundary)
-                (let ((inhibit-read-only t))
-                  (delete-char 1))
+                (delete-char 1)
                 (undo-boundary)
                 (vui-undo--write-at-end write)
                 (let ((text (vui-undo--text)))

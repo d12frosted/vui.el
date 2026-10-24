@@ -90,6 +90,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A buffer that hosts =vui-mount-inline= regions stays editable around
+  them. Before, the first mount made all text outside of the fields of
+  the buffer read-only ("Attempt to change text outside editable
+  field"), and the buffer stayed that way after the last region was
+  unmounted. Now only the text of a region, outside of its fields, is
+  read-only, and once the last region is gone the buffer has the change
+  hooks it had before. A buffer with widget.el fields of its own (made
+  before the first region or after it) keeps the guard of widget.el. In
+  the other hosts, a refused edit no longer drops the other functions
+  on =before-change-functions= of the buffer: they are back at the end
+  of the command. Text inserted with =insert-before-markers= at the end
+  of a region (as process output is) stays outside of it (#254).
+
 - A =vui-stream= in an indented =vui-vstack= indents its items as the
   vstack indents the children of a fragment: each item that starts a
   line gets the indent, and so does each line of a layout or of a

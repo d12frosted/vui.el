@@ -2083,6 +2083,18 @@ The list is in buffer order, the lowest region first (see
 while the text around them changes.  It is what tells empty regions
 at one position apart: all their markers are at that position.")
 
+(defvar-local vui--host-widget-hooks nil
+  "The change hooks of widget.el this buffer had before its first region.
+Entries of `vui--widget-change-hooks'.  Set when the first inline
+region of a buffer that is not one of `vui-mount' is mounted, so that
+the last one to go leaves the buffer with these and no others (see
+`vui--inline-host-change-hooks').")
+
+(defvar vui--refused-change-hooks nil
+  "Buffers whose `before-change-functions' a refused change emptied.
+An alist of (BUFFER . HOOKS), with the hooks BUFFER had before.  See
+`vui--refuse-change'.")
+
 (defvar-local vui--streams nil
   "The `vui-stream-handle's bound to a region of this buffer.
 A render that deletes the region of one of them parks it (see
@@ -4483,6 +4495,7 @@ buffer."
                     (when (buffer-live-p buffer)
                       (vui--table-restore-header-line)
                       (widget-setup)
+                      (vui--inline-host-change-hooks)
                       (vui--setup-field-placeholders))))
                 (when done
                   (when saved-point
@@ -5361,6 +5374,160 @@ region is before whatever is written at its position."
     (set-marker end-marker end (marker-buffer end-marker))
     (set-marker-insertion-type start-marker (< start end))
     (set-marker-insertion-type end-marker nil)))
+
+;; Host text and region text.  `widget-setup' puts
+;; `widget-before-change' on `before-change-functions', and that refuses
+;; every edit outside of a field.  A buffer of `vui-mount' wants that,
+;; but the host of an inline region owns the text around it: there vui
+;; guards the text of the regions alone, and leaves the buffer with its
+;; own change hooks once the last region is gone.
+
+(defconst vui--widget-change-hooks
+  '((before-change-functions . widget-before-change)
+    (after-change-functions . widget-after-change))
+  "The change hooks `widget-setup' adds, each with the hook variable.")
+
+(defun vui--inline-regions-p ()
+  "Return non-nil when the buffer has an inline region.
+Not the rows of a stream that went with the tree it was in: they stay
+in `vui--inline-instances' with no region (see `vui--inline-bounds')."
+  (cl-some #'vui--inline-bounds vui--inline-instances))
+
+(defun vui--note-host-widget-hooks ()
+  "Note the widget.el change hooks of the buffer, before its first region.
+Not in a buffer of `vui-mount', which is not a host."
+  (unless (or vui--mounted-root (vui--inline-regions-p))
+    (setq vui--host-widget-hooks
+          (cl-remove-if-not (lambda (hook)
+                              (memq (cdr hook) (symbol-value (car hook))))
+                            vui--widget-change-hooks))))
+
+(defun vui--host-fields-p ()
+  "Return non-nil when the buffer has widget.el fields that are not vui's.
+The fields of vui have a `:vui-path' (see `vui--render-vnode')."
+  (cl-flet ((host-field-p (widget) (not (plist-member (cdr widget) :vui-path))))
+    (or (cl-some #'host-field-p widget-field-list)
+        (cl-some #'host-field-p widget-field-new))))
+
+(defun vui--inline-host-change-hooks ()
+  "Set the change hooks of an inline host after `widget-setup'.
+While the buffer has regions, `vui--inline-before-change' guards their
+text in place of `widget-before-change', and `vui--inline-after-change'
+keeps text inserted at their ends outside of them.  Once none is left,
+these and the hooks of widget.el go.  A host with widgets of its own
+keeps the guard of widget.el all along: one that had its hooks before
+its first region \(see `vui--note-host-widget-hooks'), or that has
+fields of its own \(see `vui--host-fields-p'), made before the first
+region or after it.  Nothing in a buffer of `vui-mount'."
+  (unless vui--mounted-root
+    (let ((regions (vui--inline-regions-p))
+          (own-guard (or (assq 'before-change-functions vui--host-widget-hooks)
+                         (vui--host-fields-p))))
+      ;; A refused change in this command emptied the hooks `widget-setup'
+      ;; added to: the other hooks of the buffer come first
+      (vui--restore-change-hooks (current-buffer))
+      (if (and regions (not own-guard))
+          (progn
+            (remove-hook 'before-change-functions #'widget-before-change t)
+            (add-hook 'before-change-functions #'vui--inline-before-change nil t)
+            (add-hook 'after-change-functions #'vui--inline-after-change nil t))
+        (remove-hook 'before-change-functions #'vui--inline-before-change t)
+        (remove-hook 'after-change-functions #'vui--inline-after-change t)
+        (unless (or regions own-guard)
+          (dolist (hook vui--widget-change-hooks)
+            (unless (member hook vui--host-widget-hooks)
+              (remove-hook (car hook) (cdr hook) t))))))))
+
+(defvar-local vui--insertions-at-ends nil
+  "The regions that end where the change in progress inserts, or nil.
+Set by `vui--inline-before-change' for `vui--inline-after-change'.")
+
+(defun vui--inline-before-change (from to)
+  "Refuse a change from FROM to TO in the text of a region, out of a field.
+On `before-change-functions' of an inline host in place of
+`widget-before-change' (see `vui--inline-host-change-hooks'), with the
+same checks, but for the text of the regions alone: the host text
+around them stays editable.  An insertion at an edge of a region is
+outside of it, or in the field at that edge.  An empty region has no
+text to change.
+
+The regions that end at an insertion outside of a field are noted:
+`insert-before-markers' takes their end markers along, and
+`vui--inline-after-change' puts them back.  Also with
+`inhibit-read-only', which process output binds as it inserts."
+  (setq vui--insertions-at-ends nil)
+  (let ((from-field (widget-field-find from))
+        (in-region nil))
+    (dolist (instance vui--inline-instances)
+      (pcase (vui--inline-bounds instance)
+        (`(,start . ,end)
+         (cond ((/= from to)
+                (when (and (< start end) (< from end) (> to start))
+                  (setq in-region t)))
+               ((< start from end) (setq in-region t))
+               ((and (= from end) (not from-field))
+                (push instance vui--insertions-at-ends))))))
+    (when (and in-region (not inhibit-read-only))
+      (let ((to-field (widget-field-find to)))
+        (cond ((not (eq from-field to-field))
+               (vui--refuse-change
+                "Change should be restricted to a single field"))
+              ((null from-field)
+               (vui--refuse-change
+                "Attempt to change text outside editable field"))
+              (widget-field-use-before-change
+               (widget-apply from-field :notify
+                             from-field (list 'before-change from to))))))))
+
+(defun vui--inline-after-change (beg _end _length)
+  "Put the regions that ended at BEG back before the text inserted there.
+On `after-change-functions' of an inline host, with
+`vui--inline-before-change', which notes those regions.  Text
+inserted with `insert-before-markers' moves their markers past it, and
+the next render would delete it as the region's own."
+  (dolist (instance vui--insertions-at-ends)
+    (dolist (marker (list (vui-instance-region-start instance)
+                          (vui-instance-region-end instance)))
+      (when (and (marker-position marker) (> marker beg))
+        (set-marker marker beg))))
+  (setq vui--insertions-at-ends nil))
+
+(defun vui--refuse-change (message)
+  "Signal `text-read-only' with MESSAGE from a change hook.
+Emacs empties `before-change-functions' when one of them signals:
+note what the current buffer has there, so that the end of the
+command puts it back (see `vui--restore-change-hooks')."
+  (unless (assq (current-buffer) vui--refused-change-hooks)
+    (push (cons (current-buffer) before-change-functions)
+          vui--refused-change-hooks)
+    (add-hook 'post-command-hook #'vui--restore-change-hooks))
+  (signal 'text-read-only (list message)))
+
+(defun vui--restore-change-hooks (&optional buffer)
+  "Put back the hooks a refused change emptied in BUFFER.
+Without BUFFER, in all buffers that had one: at the end of the command
+\(see `vui--refuse-change').  Hooks added since then stay, after
+those.
+
+Nothing to put back while the guard of the regions is on the hook:
+the refusal emptied a `let' of it then.  Nor when the hook is no
+longer local, after a major mode: the hooks were the buffer's."
+  (dolist (entry (if buffer
+                     (and (assq buffer vui--refused-change-hooks)
+                          (list (assq buffer vui--refused-change-hooks)))
+                   vui--refused-change-hooks))
+    (setq vui--refused-change-hooks (delq entry vui--refused-change-hooks))
+    (when (buffer-live-p (car entry))
+      (with-current-buffer (car entry)
+        (let ((hooks (cdr entry)))
+          (when (and (local-variable-p 'before-change-functions)
+                     (not (memq #'vui--inline-before-change
+                                before-change-functions)))
+            (setq before-change-functions
+                  (append hooks (cl-remove-if (lambda (hook) (memq hook hooks))
+                                              before-change-functions))))))))
+  (unless vui--refused-change-hooks
+    (remove-hook 'post-command-hook #'vui--restore-change-hooks)))
 
 (defun vui--inline-register (instance position after-empty &optional skip-parked)
   "Add INSTANCE, to be mounted at POSITION, to `vui--inline-instances'.
@@ -8377,6 +8544,7 @@ field that is set up takes in text inserted at its end (see
         ;; `widget-setup' also clears the undo list: every write binds it
         (let ((widget-field-new written))
           (widget-setup))
+        (vui--inline-host-change-hooks)
         (mapc #'vui--field-add-placeholder written)))))
 
 (defun vui-make-stream (&optional separator)
@@ -11968,8 +12136,9 @@ instances alongside its regular content.
 The region is ephemeral UI, not document content: vui rewrites it
 on every state update, keeps those rewrites out of the undo
 history, and removes the region when the instance is unmounted.
-Manual edits inside the region (outside of input fields) are
-overwritten by the next re-render.
+The text of the region is read-only outside of its input fields, and
+what is changed there anyway is overwritten by the next re-render.
+The host text around it stays editable.
 
 POSITION must not fall strictly inside another inline instance's
 region.  At the start of one, the new region goes above it; at the
@@ -12029,6 +12198,7 @@ whatever they render (see `vui--stream-append-row')."
     ;; puts them around what it wrote (see `vui--inline-set-bounds').
     (setf (vui-instance-region-start instance) (copy-marker pos))
     (setf (vui-instance-region-end instance) (copy-marker pos))
+    (vui--note-host-widget-hooks)
     (vui--inline-register instance pos after-empty)
     ;; Release component resources when the buffer is killed
     (add-hook 'kill-buffer-hook #'vui--teardown-on-kill nil t)
@@ -12143,7 +12313,9 @@ Returns INSTANCE, or nil if it was already unmounted."
                 (vui--park-streams pos end-pos instance)
                 (delete-region pos end-pos))))
           ;; Put back the header line a sticky table header replaced
-          (vui--table-restore-header-line)))
+          (vui--table-restore-header-line)
+          ;; And the change hooks of the host, after the last region
+          (vui--inline-host-change-hooks)))
       (when start (set-marker start nil))
       (when end (set-marker end nil))
       (setf (vui-instance-region-start instance) nil)

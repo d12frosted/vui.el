@@ -111,11 +111,16 @@ Inline regions are ephemeral UI chrome, not document content:
   undo a form back into existence, and undoing host-buffer edits made
   while a form is mounted may restore positions inaccurately if the
   form changed size in between. Keep forms short-lived.
-- *Manual edits*: text you type inside the region (outside of input
-  fields) is overwritten by the next re-render. Text typed at the
-  region's boundaries stays outside it. A field that starts or ends the
-  region is the exception: what you type at that edge of the field goes
-  into the field, and the region grows with it.
+- *Manual edits*: the host text around a region stays editable while
+  the region is mounted, and after it is gone. The text of the region
+  itself is read-only outside of its input fields; what Lisp code
+  changes there anyway (with =inhibit-read-only= bound) is overwritten
+  by the next re-render. Text typed at the region's boundaries stays
+  outside it. A field that starts or ends the region is the exception:
+  what you type at that edge of the field goes into the field, and the
+  region grows with it. A host buffer with widget.el fields of its own
+  (a Customize buffer, say) keeps the rules of widget.el: text outside
+  of all fields is read-only there, as it was before the mount.
 - *Edits from hooks*: =:on-mount= and =:on-update= run inside the
   render. They can write or delete host text outside the region, and
   the region keeps its place. Text they write at its boundaries stays
