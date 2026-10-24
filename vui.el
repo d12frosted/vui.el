@@ -531,10 +531,27 @@ Movement wraps around the buffer, and a negative N moves forward.  See
                  (idx (mod (- i (1- n)) len)))
             (goto-char (nth idx positions))))))))
 
+(defun vui-field-activate (pos &optional event)
+  "Invoke the editable field at POS, also when POS is at its end.
+The keymap of a field covers the position right after its text, where
+typing goes into the field, but `widget-field-activate' looks for the
+field in the character after POS: at the end of a field it finds none,
+and runs the global binding of the key instead (RET inserts a newline,
+into the field).  This one takes the field that ends at POS, which is
+the field typing goes into there, also when another field starts at
+POS.  EVENT is passed to the field's action."
+  (interactive "@d")
+  (if-let* ((field (or (cl-find pos widget-field-list
+                                :key #'widget-field-end :test #'eql)
+                       (widget-field-at pos))))
+      (widget-apply-action field event)
+    (widget-field-activate pos event)))
+
 (defvar vui--field-nav-keymap (make-sparse-keymap)
   "Keymap merged over `widget-field-keymap' on vui editable fields.
 It makes TAB and S-TAB use vui's unified navigation (which also stops on
-text buttons) from inside a field; field editing keys fall through to
+text buttons) from inside a field, and RET submit the field also at its
+end (see `vui-field-activate'); field editing keys fall through to
 `widget-field-keymap'.  Bindings are installed by
 `vui--install-keymap-keys'.")
 
@@ -598,7 +615,10 @@ a keymap once the variable is bound, which would otherwise leave a stale
     (define-key map [remap widget-forward] #'vui-forward)
     (define-key map [remap widget-backward] #'vui-backward)
     (define-key map [remap forward-button] #'vui-forward)
-    (define-key map [remap backward-button] #'vui-backward)))
+    (define-key map [remap backward-button] #'vui-backward))
+  ;; RET in a field submits it, also at the end of the field
+  (define-key vui--field-nav-keymap [remap widget-field-activate]
+              #'vui-field-activate))
 
 (vui--install-keymap-keys)
 

@@ -90,6 +90,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =RET= at the end of a =vui-field= (for example after =C-e= in a field
+  that ends its line) submits the field. Before, it inserted a newline into
+  the field's value, and =:on-submit= did not run: the field's keymap
+  is active there, but =widget-field-activate= finds no field at its
+  end and falls back to the global binding. vui fields now remap it to
+  the new =vui-field-activate=, which takes the field that ends at
+  point.
+
 - A buffer that hosts =vui-mount-inline= regions stays editable around
   them. Before, the first mount made all text outside of the fields of
   the buffer read-only ("Attempt to change text outside editable

@@ -474,5 +474,119 @@ it."
         (expect (buffer-string) :to-equal "top\nn xy !\nstatus: b")
         (expect (vui-fet--text 'n) :to-equal "xy ")))))
 
+;;; RET at the end of a field
+
+(defvar vui-fet--submitted nil
+  "The values the `on-submit' of `vui-fet-name' got, the latest first.")
+
+(vui-defcomponent vui-fet-name (submit)
+  "A field that ends its line, and the name it holds.
+With SUBMIT, its `on-submit' pushes to `vui-fet--submitted'."
+  :state ((name ""))
+  :render (vui-vstack
+           (vui-hstack
+            (vui-text "Name:")
+            (vui-field :key 'name :value name :size 6
+                       :on-change (lambda (value) (vui-set-state :name value))
+                       :on-submit (when submit
+                                    (lambda (value)
+                                      (push value vui-fet--submitted)))))
+           (vui-text (format "Hello, %s!" name))))
+
+(defun vui-fet--type-name ()
+  "Type a name in the `name' field, go to the end of the line, press RET.
+Keys go through the command loop as if typed, so the current buffer is
+shown in the selected window first."
+  (switch-to-buffer (current-buffer))
+  (goto-char (widget-field-start (vui-fet--field 'name)))
+  (execute-kbd-macro (kbd "B o b C-e"))
+  (expect (point) :to-equal (widget-field-end (vui-fet--field 'name)))
+  (execute-kbd-macro (kbd "RET")))
+
+(vui-defcomponent vui-fet-submit-row (value)
+  "A field with VALUE, then text on its line.
+Its `on-submit' pushes to `vui-fet--submitted'."
+  :render (vui-hstack
+           (vui-field :key 'row :value value :size 4
+                      :on-submit (lambda (v) (push v vui-fet--submitted)))
+           (vui-text "tail")))
+
+(vui-defcomponent vui-fet-submit-pair ()
+  "Two fields with no text between them, the first one full.
+Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
+  :render (vui-hstack
+           :spacing 0
+           (vui-field :key 'a :value "aaa" :size 3
+                      :on-submit (lambda (v) (push (list 'a v) vui-fet--submitted)))
+           (vui-field :key 'b :value "bb" :size 3
+                      :on-submit (lambda (v) (push (list 'b v) vui-fet--submitted)))))
+
+(describe "RET at the end of a field"
+  (before-each (setq vui-fet--submitted nil))
+
+  (it "submits the field in a buffer of vui-mount"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (unwind-protect
+            (with-current-buffer (vui-instance-buffer
+                                  (vui-mount (vui-component 'vui-fet-name
+                                                            :submit t)
+                                             "*vui-fet-ret*"))
+              (vui-fet--type-name)
+              (expect vui-fet--submitted :to-equal '("Bob"))
+              (expect (vui-fet--text 'name) :to-equal "Bob   ")
+              (expect (buffer-substring-no-properties (point-min) (point-max))
+                      :to-equal "Name: Bob   \nHello, Bob!"))
+          (vui-fet--kill "*vui-fet-ret*")))))
+
+  (it "submits the field of an inline region"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (with-temp-buffer
+          (insert "HEAD\n\nTAIL")
+          (vui-mount-inline (vui-component 'vui-fet-name :submit t) 6)
+          (vui-fet--type-name)
+          (expect vui-fet--submitted :to-equal '("Bob"))
+          (expect (buffer-string)
+                  :to-equal "HEAD\nName: Bob   \nHello, Bob!\nTAIL")))))
+
+  (it "leaves a field with no on-submit as it is"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (with-temp-buffer
+          (insert "HEAD\n\nTAIL")
+          (vui-mount-inline (vui-component 'vui-fet-name) 6)
+          (vui-fet--type-name)
+          (expect (vui-fet--text 'name) :to-equal "Bob   ")
+          (expect (buffer-string)
+                  :to-equal "HEAD\nName: Bob   \nHello, Bob!\nTAIL")))))
+
+  (it "submits the field it ends, not the one that starts there"
+    ;; Text typed there goes into the field that ends there
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (with-temp-buffer
+          (switch-to-buffer (current-buffer))
+          (vui-mount-inline (vui-component 'vui-fet-submit-pair))
+          (goto-char (widget-field-start (vui-fet--field 'a)))
+          (execute-kbd-macro (kbd "C-e"))
+          (expect (point) :to-equal (widget-field-start (vui-fet--field 'b)))
+          (execute-kbd-macro (kbd "RET"))
+          (expect vui-fet--submitted :to-equal '((a "aaa")))))))
+
+  (dolist (value '("ab" ""))
+    (it (format "submits a field followed by text on its line (%S)" value)
+      ;; An empty field starts where it ends
+      (let ((vui-render-delay nil))
+        (save-window-excursion
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (vui-mount-inline (vui-component 'vui-fet-submit-row :value value))
+            (goto-char (widget-field-end (vui-fet--field 'row)))
+            (let ((text (buffer-string)))
+              (execute-kbd-macro (kbd "RET"))
+              (expect vui-fet--submitted :to-equal (list value))
+              (expect (buffer-string) :to-equal text))))))))
+
 (provide 'vui-field-edge-test)
 ;;; vui-field-edge-test.el ends here
