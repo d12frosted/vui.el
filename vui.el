@@ -6786,6 +6786,14 @@ more than it: its cells are cut, or overflow, at the width it has
                                     :vui--cut-width (elt widths i))
                        col))))
 
+(defun vui--table-column-width (col)
+  "Return the :width of table column COL in the current units, or nil.
+A :min-width above it raises it, so cells are cut or overflow at the
+:min-width."
+  (let ((width (vui--width (plist-get col :width)))
+        (min-width (vui--width (plist-get col :min-width))))
+    (if (and width min-width) (max width min-width) width)))
+
 (defun vui--table-gap (border border-face)
   "Return the width between two columns of a table with BORDER.
 That is the separator drawn in BORDER-FACE, and with a border the cell
@@ -6820,6 +6828,7 @@ pushed to its car.
 
 Column options:
   :width W    - Target width for the VALUE portion of cell
+  :min-width M - Floor for the column width, whatever the other options
   :grow       - If t, pad short content to :width (minimum width behavior)
   :truncate   - If t, truncate long content; if nil, overflow with ¦
 
@@ -6832,7 +6841,8 @@ Width calculation:
          (widths (make-vector col-count 0)))
     (cl-loop for col in columns
              for i from 0
-             do (let ((declared-width (vui--width (plist-get col :width)))
+             do (let ((declared-width (vui--table-column-width col))
+                      (min-width (vui--width (plist-get col :min-width)))
                       (grow (plist-get col :grow))
                       (truncate-p (plist-get col :truncate))
                       ;; A header over more columns than this one sizes
@@ -6877,7 +6887,10 @@ Width calculation:
                         ;; If any overflow/truncate needed, use declared-width; else shrink to max-w
                         (aset widths i (if has-overflow
                                            declared-width
-                                         max-w)))))))
+                                         max-w)))))
+                  ;; :min-width is a floor, whatever the branch above
+                  (when min-width
+                    (aset widths i (max (aref widths i) min-width)))))
     ;; A header over several columns that is wider than they are
     (let ((gap (vui--table-gap border border-face)))
       (dolist (group (vui--table-header-groups columns))
@@ -7182,13 +7195,11 @@ Handles :truncate and overflow:
              do (let* ((align (if header-p :left (or (plist-get col :align) :left)))
                        (truncate-p (plist-get col :truncate))
                        (grow (plist-get col :grow))
-                       ;; A column a header over several columns widened
-                       ;; holds more than its :width: cut at what it holds
                        ;; A column that a header over several columns
                        ;; widened holds more than its :width: it cuts at
                        ;; what it holds (see `vui--table-cut-columns')
                        (declared-width (or (plist-get col :vui--cut-width)
-                                           (vui--width (plist-get col :width))))
+                                           (vui--table-column-width col)))
                        (face (when header-p (or header-face 'vui-table-header)))
                        ;; Get content as string (works for both vnodes and strings).
                        ;; A header wears its face from here on, so it is
