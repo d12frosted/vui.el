@@ -35,6 +35,119 @@
                    :children (list (vui-text "Hello World"))))
       (expect (buffer-string) :to-equal "Hello World")))
 
+  (it "renders a single vnode given as its children"
+    (let ((caught nil))
+      (vui-defcomponent single-good-child ()
+        :render (vui-text "fine"))
+      (with-temp-buffer
+        (vui-render (vui-error-boundary
+                     :on-error (lambda (err) (setq caught err))
+                     :fallback (lambda (_) (vui-text "Fallback"))
+                     :children (vui-component 'single-good-child)))
+        (expect (buffer-string) :to-equal "fine")
+        (expect caught :to-be nil))))
+
+  (it "catches the error of a single child"
+    (vui-defcomponent single-bad-child ()
+      :render (error "Single boom"))
+    (with-temp-buffer
+      (vui-render (vui-error-boundary
+                   :fallback (lambda (err)
+                               (vui-text (format "Caught: %s" (cadr err))))
+                   :children (vui-component 'single-bad-child)))
+      (expect (buffer-string) :to-equal "Caught: Single boom")))
+
+  (it "keeps the place of a nil child"
+    ;; A boundary with no id is known by its place among the children:
+    ;; a nil sibling that comes and goes does not move it
+    (let ((renders 0))
+      (vui-defcomponent nil-place-flaky ()
+        :render (if (< (cl-incf renders) 2)
+                    (error "First render fails")
+                  (vui-text "ok")))
+      (vui-defcomponent nil-place-app (flag)
+        :render
+        (vui-error-boundary
+         :fallback (lambda (_) (vui-text "outer"))
+         :children (list (when flag (vui-text "X "))
+                         (vui-error-boundary
+                          :fallback (lambda (_) (vui-text "inner"))
+                          :children (list (vui-component 'nil-place-flaky))))))
+      (let ((instance (vui-mount (vui-component 'nil-place-app :flag t)
+                                 "*test-nil-place*")))
+        (unwind-protect
+            (with-current-buffer "*test-nil-place*"
+              (expect (buffer-string) :to-equal "X inner")
+              (vui-update instance '(:flag nil))
+              (expect (buffer-string) :to-equal "inner")
+              (vui-update instance '(:flag t))
+              (expect (buffer-string) :to-equal "X inner"))
+          (kill-buffer "*test-nil-place*")))))
+
+  (it "keeps a single child of a sibling boundary when the other fails"
+    ;; The dashboard of the error handling guide
+    (vui-defcomponent single-side () :render (vui-text "Side"))
+    (vui-defcomponent single-main () :render (error "Main broke"))
+    (vui-defcomponent single-dashboard ()
+      :render
+      (vui-hstack :spacing 4
+                  (vui-error-boundary
+                   :id "sidebar"
+                   :fallback (lambda (_) (vui-text "[Sidebar unavailable]"))
+                   :children (vui-component 'single-side))
+                  (vui-error-boundary
+                   :id "main"
+                   :fallback (lambda (_) (vui-text "[Content unavailable]"))
+                   :children (vui-component 'single-main))))
+    (vui-mount (vui-component 'single-dashboard) "*test-single-dashboard*")
+    (unwind-protect
+        (with-current-buffer "*test-single-dashboard*"
+          (expect (buffer-string) :to-equal "Side    [Content unavailable]"))
+      (kill-buffer "*test-single-dashboard*")))
+
+  (it "keeps the state of a single child when its parent re-renders"
+    (vui-defcomponent single-counter ()
+      :state ((n 0))
+      :render (vui-button (format "n=%d" n)
+                :on-click (lambda () (vui-set-state :n (1+ n)))))
+    (vui-defcomponent single-parent (tick)
+      :render (vui-vstack
+               (vui-text (format "tick=%d" tick))
+               (vui-error-boundary
+                :fallback (lambda (_) (vui-text "fb"))
+                :children (vui-component 'single-counter))))
+    (let ((vui-render-delay nil)
+          (instance (vui-mount (vui-component 'single-parent :tick 0)
+                               "*test-single-state*")))
+      (unwind-protect
+          (with-current-buffer "*test-single-state*"
+            (goto-char (point-min))
+            (search-forward "[n=0]")
+            (vui-test--click-button-at (match-beginning 0))
+            (expect (buffer-string) :to-equal "tick=0\n[n=1]")
+            (vui-update instance '(:tick 1))
+            (expect (buffer-string) :to-equal "tick=1\n[n=1]"))
+        (kill-buffer "*test-single-state*"))))
+
+  (it "recovers a single child on reset"
+    (let ((should-error t))
+      (vui-defcomponent single-reset-child ()
+        :render (if should-error (error "boom") (vui-text "healthy")))
+      (vui-defcomponent single-reset-app ()
+        :render
+        (vui-error-boundary
+         :id 'test-single-reset
+         :fallback (lambda (_) (vui-text "fallback"))
+         :children (vui-component 'single-reset-child)))
+      (vui-mount (vui-component 'single-reset-app) "*test-single-reset*")
+      (unwind-protect
+          (with-current-buffer "*test-single-reset*"
+            (expect (buffer-string) :to-equal "fallback")
+            (setq should-error nil)
+            (vui-reset-error-boundary 'test-single-reset)
+            (expect (buffer-string) :to-equal "healthy"))
+        (kill-buffer "*test-single-reset*"))))
+
   (it "catches errors and renders fallback"
     (with-temp-buffer
       (vui-defcomponent error-component ()

@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-error-boundary= takes a single vnode as =:children=, as the
+  error handling guide writes it. Before, it took only a list: a single
+  child made the boundary catch its own =wrong-type-argument= and show
+  the fallback, even when the child rendered fine, and a reset could
+  never bring the child back. A list of children is taken as before.
+
 - =RET= at the end of a =vui-field= (for example after =C-e= in a field
   that ends its line) submits the field. Before, it inserted a newline into
   the field's value, and =:on-submit= did not run: the field's keymap

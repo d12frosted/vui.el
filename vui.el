@@ -1920,7 +1920,8 @@ Error state is scoped to the mounted tree (also one that `vui-render'
 mounts), so two apps using the same ID do not interfere, and a fresh
 mount starts with a clean slate.
 
-CHILDREN are the vnodes to render normally when no error.
+CHILDREN is what to render normally when no error: a vnode, or a
+list of vnodes.
 
 Example:
   (vui-error-boundary
@@ -1935,7 +1936,9 @@ Example:
     :id \\='my-boundary
     :children (list (my-component)))"
   (vui-vnode-error-boundary--create
-   :children children
+   ;; A list stays as it is: a nil in it keeps its place, and with it
+   ;; the place of a boundary with no id after it
+   :children (if (listp children) children (list children))
    :fallback fallback
    :on-error on-error
    :id id))

@@ -22,12 +22,12 @@ If =possibly-broken= throws an error during render, the fallback is shown instea
 
 ** Properties
 
-| Property    | Description                                  |
-|-------------+----------------------------------------------|
-| =:id=       | Optional identifier for this boundary        |
-| =:fallback= | Function =(lambda (error) vnode)=            |
+| Property    | Description                                     |
+|-------------+-------------------------------------------------|
+| =:id=       | Optional identifier for this boundary           |
+| =:fallback= | Function =(lambda (error) vnode)=               |
 | =:on-error= | Optional callback, called once per caught error |
-| =:children= | Protected content                            |
+| =:children= | Protected content: a vnode, or a list of them   |
 
 =:id= may be omitted: the boundary's identity is then derived from its
 position in the rendered tree, which is stable across re-renders as long
