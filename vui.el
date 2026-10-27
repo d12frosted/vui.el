@@ -5723,10 +5723,11 @@ and a new field written at their path would be taken for them.  See
 
 (defun vui--marker-out-of-field (marker start end)
   "Move MARKER out of the field from START to END when it is inside it.
-MARKER is a boundary: of an inline region, of a stream, of a stream
-node.  No boundary belongs inside a field, so one that is there was
-left behind by an edit at the edge of the field.  A marker that stays
-before text inserted at it was at the end of the field and goes to END.
+MARKER is a boundary of a stream or of a stream node (see
+`vui--region-around-field' for an inline region).  No boundary
+belongs inside a field, so one that is there was left behind by an
+edit at the edge of the field.  A marker that stays before text
+inserted at it was at the end of the field and goes to END.
 One that advances was at its start and goes to START.  MARKER may be
 nil or point nowhere."
   (when (and marker
@@ -5734,8 +5735,30 @@ nil or point nowhere."
              (< start marker end))
     (set-marker marker (if (marker-insertion-type marker) start end))))
 
+(defun vui--region-around-field (instance start end)
+  "Keep the field from START to END inside the region of inline INSTANCE.
+The region holds the field: it starts at the start of the field or
+before it, and ends at the end of the field or after it.  A region
+marker that an edit put inside the field, or at its other edge, goes
+back.  Two edits leave one at the other edge: text that fills an empty
+field at the start of the region takes the start marker to the end of
+the field, and deleting all the text of a field at the end of the
+region leaves the end marker at the start of the field, before the
+padding.  A marker that is nil or points nowhere (INSTANCE was
+unmounted) stays as it is."
+  (let ((region-start (vui-instance-region-start instance))
+        (region-end (vui-instance-region-end instance)))
+    (when (and region-start (eq (marker-buffer region-start) (current-buffer))
+               (< start region-start)
+               (<= region-start end))
+      (set-marker region-start start))
+    (when (and region-end (eq (marker-buffer region-end) (current-buffer))
+               (<= start region-end)
+               (< region-end end))
+      (set-marker region-end end))))
+
 (defun vui--field-sync-boundaries (widget root)
-  "Move the boundaries an edit of WIDGET left inside its field.
+  "Move the boundaries an edit of WIDGET left inside its field or past it.
 ROOT is the root instance WIDGET was rendered for.
 
 When a field is the last thing of a region, an edit at its end changes
@@ -5748,15 +5771,18 @@ behind, and an item appended to a stream lands in the middle of the
 field.  The same goes for a character typed at the start of a field
 that starts an inline region, whose start advances past it.
 
-The boundaries in question are the region of ROOT when it is an inline
-instance, and the markers of the streams of this buffer."
+The boundaries in question are those of the regions WIDGET is in: the
+region of ROOT and, when ROOT is a stream row, the regions that hold
+its stream (see `vui--region-around-field').  And the markers of the
+streams of this buffer."
   (let* ((overlay (widget-get widget :field-overlay))
          (start (and (overlayp overlay) (overlay-start overlay)))
          (end (and start (overlay-end overlay))))
     (when (and start (< start end))
       (when (and root (vui--inline-p root))
-        (vui--marker-out-of-field (vui-instance-region-start root) start end)
-        (vui--marker-out-of-field (vui-instance-region-end root) start end))
+        ;; A stream row is also inside the regions that hold its stream
+        (dolist (instance (cons root (vui-instance-regions root)))
+          (vui--region-around-field instance start end)))
       (dolist (handle vui--streams)
         (vui--stream-markers-out-of-field handle start end)))))
 

@@ -90,6 +90,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A field at an edge of a =vui-mount-inline= region keeps all of its
+  text in the region. Before:
+  - text that filled an empty field at the start of the region (a
+    character typed into a field of size 1, say) moved the start of the
+    region past it. The next render left that text outside the region,
+    so a field that shows what was typed showed "xx" where it should
+    have shown "x";
+  - deleting all the text of a field at the end of the region put the
+    padding after the end of the region, and it stayed in the host
+    buffer after =vui-unmount=.
+  The same went for the regions around a stream row whose field starts
+  or ends them.
+
 - A =vui-field= is at least one character wide. Before, an empty field
   of =:size= 0 (one that a =vui-flex= item gave no room, say) had no
   text at all, and took in everything written after it: its value

@@ -144,6 +144,23 @@ it."
   :render (vui-fragment (vui-text (or label "L:"))
                         (vui-field :key 'word :value "abcd" :size 4)))
 
+(vui-defcomponent vui-fet-echo (size)
+  "An empty field of SIZE that follows what is typed, and the text under it."
+  :state ((text ""))
+  :render (vui-vstack
+           (vui-field :key 'echo :value text :size size
+                      :on-change (lambda (value) (vui-set-state :text value)))
+           (vui-text (format "echo %s" text))))
+
+(vui-defcomponent vui-fet-last-field (label size value)
+  "LABEL, when non-nil, then a field of SIZE with VALUE that ends the region."
+  :render (vui-fragment (when label (vui-text label))
+                        (vui-field :key 'last :value value :size size)))
+
+(vui-defcomponent vui-fet-bare-stream (stream)
+  "STREAM and nothing else."
+  :render (vui-stream stream))
+
 ;;; Text a render puts next to a field it keeps
 
 (describe "a field that ends a stream item"
@@ -407,6 +424,42 @@ it."
         (vui-update instance '(:label "M:"))
         (expect (buffer-string) :to-equal "HEAD\nM:abcd\nTAIL")
         (vui-unmount instance)
+        (expect (buffer-string) :to-equal "HEAD\n\nTAIL"))))
+
+  ;; All of the text goes: the end of the region is at the start of the
+  ;; field, and the padding goes in after it
+  (dolist (spec '(("L:" 1 "x") ("L:" 3 "abc") (nil 1 "x") (nil 3 "abc")))
+    (pcase-let ((`(,label ,size ,value) spec))
+      (it (format "keeps its padding inside the region when all its text goes (%S %d)"
+                  label size)
+        (with-temp-buffer
+          (insert "HEAD\n\nTAIL")
+          (let ((instance (vui-mount-inline
+                           (vui-component 'vui-fet-last-field
+                                          :label label :size size :value value)
+                           6))
+                (field (vui-fet--field 'last)))
+            (delete-region (widget-field-start field) (widget-field-end field))
+            (expect (buffer-string)
+                    :to-equal (format "HEAD\n%s%s\nTAIL" (or label "")
+                                      (make-string size ?\s)))
+            (vui-unmount instance)
+            (expect (buffer-string) :to-equal "HEAD\n\nTAIL"))))))
+
+  (it "keeps the region around it when all the text of a stream row's field goes"
+    ;; The row ends the stream, and the stream ends the inline mount
+    (with-temp-buffer
+      (insert "HEAD\n\nTAIL")
+      (let* ((s (vui-make-stream))
+             (instance (vui-mount-inline
+                        (vui-component 'vui-fet-bare-stream :stream s) 6)))
+        (vui-stream-append s (vui-component 'vui-fet-last-field
+                                            :size 2 :value "ab"))
+        (let ((field (vui-fet--field 'last)))
+          (delete-region (widget-field-start field) (widget-field-end field)))
+        (expect (buffer-string) :to-equal "HEAD\n  \nTAIL")
+        (expect (vui--inline-bounds instance) :to-equal '(6 . 8))
+        (vui-unmount instance)
         (expect (buffer-string) :to-equal "HEAD\n\nTAIL")))))
 
 (describe "a field that starts an inline region"
@@ -419,7 +472,45 @@ it."
           (insert "Z")
           (vui-fet--settle instance)
           (expect (buffer-string) :to-equal "HEAD\nZabcd\nTAIL")
-          (expect (vui-fet--text 'word) :to-equal "Zabcd"))))))
+          (expect (vui-fet--text 'word) :to-equal "Zabcd")))))
+
+  ;; The field was empty and the text fills it: the start of the region
+  ;; advances past all of the field, to its end
+  (dolist (spec '((1 "x") (2 "xy")))
+    (pcase-let ((`(,size ,text) spec))
+      (it (format "keeps text that fills it inside the region (size %d)" size)
+        (let ((vui-render-delay nil))
+          (with-temp-buffer
+            (insert "HEAD\n\nTAIL")
+            (let ((instance (vui-mount-inline
+                             (vui-component 'vui-fet-echo :size size) 6)))
+              (goto-char (widget-field-start (vui-fet--field 'echo)))
+              (insert text)
+              (expect (buffer-string)
+                      :to-equal (format "HEAD\n%s\necho %s\nTAIL" text text))
+              (expect (vui-fet--text 'echo) :to-equal text)
+              (expect (car (vui--inline-bounds instance)) :to-equal 6)
+              (vui-update instance (list :size size))
+              (expect (buffer-string)
+                      :to-equal (format "HEAD\n%s\necho %s\nTAIL" text text))))))))
+
+  (it "keeps the region around it when it starts a stream row"
+    ;; The row starts the stream, and the stream starts the inline mount:
+    ;; both regions start at the field
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (insert "HEAD\n\nTAIL")
+        (let* ((s (vui-make-stream))
+               (instance (vui-mount-inline
+                          (vui-component 'vui-fet-chat :stream s :label "a") 6)))
+          (vui-stream-append s (vui-component 'vui-fet-last-field
+                                              :size 1 :value ""))
+          (goto-char (widget-field-start (vui-fet--field 'last)))
+          (insert "z")
+          (expect (buffer-string) :to-equal "HEAD\nz\nstatus: a\nTAIL")
+          (expect (car (vui--inline-bounds instance)) :to-equal 6)
+          (vui-unmount instance)
+          (expect (buffer-string) :to-equal "HEAD\n\nTAIL"))))))
 
 (describe "a field that ends the last item of a stream"
   (it "keeps its padding before an item appended after a deletion"
