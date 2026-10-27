@@ -203,6 +203,15 @@ By default, renders are deferred briefly to allow batching. Configure with =vui-
 (setq vui-render-delay 0.1)
 #+end_src
 
+With =nil=, a field whose =:on-change= sets state renders in the middle
+of the edit. Typing works, but a command that edits such a field inside
+=save-excursion= leaves point at the start of the buffer: every kill
+command (=C-k=, =C-w=, =M-d=, =M-DEL=, =zap-to-char=), and =C-t=, which
+also loses part of its edit. The render erases the text that the saved
+position pointed into. Keep a delay (even a tiny one) for apps with
+such fields, and don't call =vui-flush-sync= from their =:on-change=:
+it renders at once with any delay.
+
 ** Force Immediate Render
 
 Use =vui-flush-sync= when you need immediate updates:

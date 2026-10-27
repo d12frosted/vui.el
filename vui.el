@@ -2163,7 +2163,18 @@ request of each root.")
 (defcustom vui-render-delay 0.01
   "Seconds to wait before rendering when using deferred rendering.
 This delay allows multiple state changes to be batched into a single
-re-render for better performance.  Set to nil to render immediately."
+re-render for better performance.  Set to nil to render immediately.
+
+Known issue with nil: when a field's :on-change sets state, a
+command that edits the field inside `save-excursion' leaves point at
+the start of the buffer.  Every kill command does this:
+\\[kill-line], \\[kill-region], \\[kill-word], \\[backward-kill-word], \\[zap-to-char].
+\\[transpose-chars] also loses part of its edit.
+The render that the edit triggers erases the buffer, so the position
+saved by `save-excursion' collapses to the start.  A delay, even a
+tiny one, renders after the command and avoids this, unless the
+:on-change calls `vui-flush-sync', which renders at once with any
+delay."
   :type '(choice (number :tag "Delay in seconds")
           (const :tag "Disabled" nil))
   :group 'vui)

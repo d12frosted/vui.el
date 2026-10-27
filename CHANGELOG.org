@@ -1275,6 +1275,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   engine where sensible, so the conformance comparison explored in
   yibie/textui#1 stays meaningful.
 
+** Known issues
+
+- With =vui-render-delay= set to nil, when a field's =:on-change= sets
+  state, a command that edits the field inside =save-excursion= leaves
+  point at the start of the buffer. Every kill command does this (=C-k=,
+  =C-w=, =M-d=, =M-DEL=, =zap-to-char=), and =C-t= (=transpose-chars=)
+  also loses part of its edit. The synchronous render that the edit
+  triggers erases the buffer, so the position saved by =save-excursion=
+  collapses to the start. The default delay (0.01) renders after the
+  command and is not affected, unless the =:on-change= calls
+  =vui-flush-sync=, which renders at once with any delay.
+
 * v1.4.0 - 2026-08-18
 
 ** Added
