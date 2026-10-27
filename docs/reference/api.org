@@ -485,7 +485,7 @@ fields with parsing and validation, use =vui-typed-field= from =vui-components.e
 | Property       | Type     | Description                     |
 |----------------+----------+---------------------------------|
 | =:value=       | string   | Initial content (default "")    |
-| =:size=        | integer  | Width in characters             |
+| =:size=        | integer  | Width, default 20 (at least 1)  |
 | =:placeholder= | string   | Hint text shown while empty     |
 | =:on-change=   | function | Called with value on change     |
 | =:on-submit=   | function | Called with value on RET        |

@@ -1432,7 +1432,9 @@ When :keymap is set, this keymap is active when point is on the button."
   "Create a field vnode.
 All arguments are keyword-based:
   :VALUE       - initial field content (defaults to empty string)
-  :SIZE        - field width in characters
+  :SIZE        - field width in characters (default 20); a longer
+                 value widens the field, and an empty field is at
+                 least one character wide
   :PLACEHOLDER - hint text shown in `vui-field-placeholder' face
                  while the field is empty
   :ON-CHANGE   - called with value on each change (triggers re-render)
@@ -1737,6 +1739,8 @@ Children render at their natural width.  Wrap a child in
 `vui-flex-item' to give it a proportional share of the leftover
 width instead.  When the children's natural widths already exceed
 the total, everything renders at natural width and growers get zero.
+A `vui-field' grower given zero is still one character wide, so such
+a row is one column over its width.
 
 Without :wrap, children are assumed to render on a single line;
 multi-line children are measured by their widest line, but the row
@@ -11790,7 +11794,10 @@ is written."
                               ;; keys fall through to `widget-field-keymap'
                               :keymap (make-composed-keymap
                                        vui--field-nav-keymap widget-field-keymap)
-                              :size (or size 20)
+                              ;; At least 1: an empty field of size 0
+                              ;; has no text, and its overlay takes in
+                              ;; whatever is written after it
+                              :size (max 1 (or size 20))
                               :value value
                               :secret (when secret-p ?*)
                               :value-face user-face  ; Always use user face for field content

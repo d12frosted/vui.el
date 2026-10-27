@@ -90,6 +90,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-field= is at least one character wide. Before, an empty field
+  of =:size= 0 (one that a =vui-flex= item gave no room, say) had no
+  text at all, and took in everything written after it: its value
+  became the rest of the buffer.
+
 - When a render replaces the text of the field point is in (an
   =:on-submit= that clears it, say), point that was in the old text
   stays in the new text, and spaces typed after the old text stay after

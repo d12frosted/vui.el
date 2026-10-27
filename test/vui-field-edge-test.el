@@ -697,5 +697,46 @@ Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
                   (expect (vui-fet--text 'shout) :to-equal "HI X        ")))
             (vui-fet--kill "*vui-fet-shout*")))))))
 
+(vui-defcomponent vui-fet-narrow (value)
+  "A field of size 0 with VALUE, typed into, and text under it."
+  :state ((n 0))
+  :render (vui-vstack
+           (vui-field :key 'narrow :value value :size 0
+                      :on-change (lambda (_) (vui-set-state :n (1+ n))))
+           (vui-text (format "tail %d" n))))
+
+(describe "a field of size 0"
+  (it "keeps a place to type at when it is empty"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (vui-mount-inline (vui-component 'vui-fet-narrow :value ""))
+        (expect (buffer-string) :to-equal " \ntail 0")
+        (expect (vui-fet--text 'narrow) :to-equal " ")
+        (expect (widget-value (vui-fet--field 'narrow)) :to-equal ""))))
+
+  (it "does not take in the text after it when it re-renders"
+    ;; The value stays empty, so the render clears what was typed
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (unwind-protect
+            (progn
+              (vui-mount (vui-component 'vui-fet-narrow :value "")
+                         "*vui-fet-narrow*")
+              (with-current-buffer "*vui-fet-narrow*"
+                (switch-to-buffer (current-buffer))
+                (goto-char (widget-field-start (vui-fet--field 'narrow)))
+                (vui-fet--keys "x")
+                (expect (buffer-substring-no-properties (point-min) (point-max))
+                        :to-equal " \ntail 1")
+                (expect (widget-value (vui-fet--field 'narrow)) :to-equal "")))
+          (vui-fet--kill "*vui-fet-narrow*")))))
+
+  (it "is as wide as its value"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (vui-mount-inline (vui-component 'vui-fet-narrow :value "ab"))
+        (expect (buffer-string) :to-equal "ab\ntail 0")
+        (expect (vui-fet--text 'narrow) :to-equal "ab")))))
+
 (provide 'vui-field-edge-test)
 ;;; vui-field-edge-test.el ends here
