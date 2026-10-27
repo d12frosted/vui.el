@@ -244,7 +244,8 @@ Access the last error:
 
 #+begin_src elisp
 vui-last-error
-;; => (lifecycle (error "Something failed") "on-mount in my-component")
+;; => (lifecycle (error "Something failed")
+;;     (:component my-component :hook "on-mount"))
 #+end_src
 
 * Debugging Workflow

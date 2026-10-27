@@ -213,14 +213,14 @@ Parent unmounting
 
 Both can achieve similar goals. Here's when to use each:
 
-| Scenario                          | Use           |
-|-----------------------------------+---------------|
-| Simple setup on mount             | =:on-mount=   |
-| Setup that depends on props/state | =vui-vui-use-effect=  |
-| Simple cleanup on unmount         | =:on-unmount= |
-| Cleanup tied to specific values   | =vui-vui-use-effect=  |
-| Compare previous/current values   | =:on-update=  |
-| React to specific dep changes     | =vui-vui-use-effect=  |
+| Scenario                          | Use              |
+|-----------------------------------+------------------|
+| Simple setup on mount             | =:on-mount=      |
+| Setup that depends on props/state | =vui-use-effect= |
+| Simple cleanup on unmount         | =:on-unmount=    |
+| Cleanup tied to specific values   | =vui-use-effect= |
+| Compare previous/current values   | =:on-update=     |
+| React to specific dep changes     | =vui-use-effect= |
 
 ** Lifecycle Hooks
 

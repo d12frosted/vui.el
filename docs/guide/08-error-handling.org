@@ -179,12 +179,15 @@ The most recent error is stored in =vui-last-error=:
 
 #+begin_src elisp
 vui-last-error
-;; => (lifecycle (error "Something broke") "on-mount in my-component")
+;; => (lifecycle (error "Something broke")
+;;     (:component my-component :hook "on-mount"))
 ;; or
-;; => (event (error "Click failed") "on-click in button-component")
+;; => (event (error "Click failed")
+;;     (:component button-component :hook "on-click"))
 #+end_src
 
-Structure: =(TYPE ERROR CONTEXT)=
+Structure: =(TYPE ERROR CONTEXT)=, where CONTEXT is a plist with the
+=:component= name and the =:hook= (or callback) name.
 
 ** Using in Debugging
 
@@ -193,8 +196,9 @@ Structure: =(TYPE ERROR CONTEXT)=
   (let ((type (nth 0 vui-last-error))
         (err (nth 1 vui-last-error))
         (context (nth 2 vui-last-error)))
-    (message "Last error [%s]: %s\nContext: %s"
-             type err context)))
+    (message "Last error [%s] in %s of %s: %s"
+             type (plist-get context :hook) (plist-get context :component)
+             (error-message-string err))))
 #+end_src
 
 * Best Practices

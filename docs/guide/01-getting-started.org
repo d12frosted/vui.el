@@ -215,4 +215,4 @@ Now that you understand the basics, explore:
 - [[file:04-layout.org][Layout]] - Arrange elements with hstack, vstack, tables
 - [[file:05-hooks.org][Hooks]] - Side effects, refs, and memoization
 
-Or jump straight to [[file:../examples/03-todo-app.el][a complete todo app example]].
+Or jump straight to [[file:../examples/02-todo-app.el][a complete todo app example]].

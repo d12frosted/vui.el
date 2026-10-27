@@ -1173,6 +1173,21 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Documentation
 
+- Guide examples that did not run as written now do: the temperature
+  converter of the components guide (it reformatted the field under
+  the cursor on every key), the cons options of =vui-select= (the pairs
+  are =(VALUE . LABEL)=), the button truncation output, the table, retry,
+  preloading and =make-process= examples of the hooks guide, the
+  =vui-last-error= format in the error handling and dev tools guides
+  (its context is a plist), the hook names in the performance guide
+  (=vui-use-memo=, =vui-use-memo*=, =vui-use-callback=), the
+  =vui-use-effect= table in the lifecycle guide, and the link to the
+  todo app example. The =vui-use-callback= examples wrapped their body
+  in a lambda, so the callback only returned a function: the body is
+  the callback itself. The hooks guide also says what =vui-use-async=
+  keeps: the result of each call for its last key, not a cache of all
+  keys.
+
 - Added an External Updates guide (=docs/guide/12-external-updates.org=)
   covering updates that start outside a component: a process sentinel, a
   global timer, a hook. It documents the two approaches - publishing a

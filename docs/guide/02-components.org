@@ -327,33 +327,46 @@ Components can use other components:
 When multiple components need to share state, lift it to a common ancestor:
 
 #+begin_src elisp
-;; Parent owns the state
+;; Parent owns the state: the last text typed, and which scale
+;; (celsius or fahrenheit) it is in
 (vui-defcomponent temperature-app ()
-  :state ((celsius 0))
+  :state ((input '(celsius . "0")))
   :render
-  (vui-fragment
-   (vui-component 'temperature-input
-                  :label "Celsius"
-                  :value celsius
-                  :on-change (lambda (v) (vui-set-state :celsius v)))
-   (vui-newline)
-   (vui-component 'temperature-input
-                  :label "Fahrenheit"
-                  :value (+ 32 (* celsius 1.8))
-                  :on-change (lambda (v)
-                               (vui-set-state :celsius
-                                              (/ (- v 32) 1.8))))))
+  (let ((scale (car input))
+        (text (cdr input)))
+    (cl-flet ((shown (in-scale convert)
+                ;; The field typed in shows the text as typed; the other
+                ;; one shows it converted
+                (cond ((eq scale in-scale) text)
+                      ((string-blank-p text) "")
+                      (t (format "%.1f" (funcall convert
+                                                 (string-to-number text)))))))
+      (vui-fragment
+       (vui-component 'temperature-input
+                      :label "Celsius"
+                      :value (shown 'celsius (lambda (f) (/ (- f 32) 1.8)))
+                      :on-change (lambda (v)
+                                   (vui-set-state :input (cons 'celsius v))))
+       (vui-newline)
+       (vui-component 'temperature-input
+                      :label "Fahrenheit"
+                      :value (shown 'fahrenheit (lambda (c) (+ 32 (* c 1.8))))
+                      :on-change (lambda (v)
+                                   (vui-set-state :input (cons 'fahrenheit v))))))))
 
 ;; Child is stateless, calls parent's callback
 (vui-defcomponent temperature-input (label value on-change)
   :render
   (vui-hstack
    (vui-text (format "%s: " label))
-   (vui-field :value (format "%.1f" value)
+   (vui-field :value value
               :size 10
-              :on-change (lambda (new-val)
-                           (funcall on-change (string-to-number new-val))))))
+              :on-change on-change)))
 #+end_src
+
+The parent keeps the text you typed and the field you typed it in. That
+field shows the text as you typed it, so it does not change under the
+cursor. Only the other field shows a converted value.
 
 * Mounting Components
 

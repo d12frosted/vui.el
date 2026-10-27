@@ -180,7 +180,7 @@ When =:max-width= is set and the button label (including brackets) exceeds that 
 
 Output:
 #+begin_example
-[Very long b...]
+[Very long ...]
 #+end_example
 
 This is particularly useful in table cells with =:truncate= enabled, where the
@@ -344,13 +344,13 @@ Creates a selection from a list of options:
 
 *** Options as Cons Cells
 
-For display-value pairs, use cons cells:
+For value-label pairs, use cons cells of =(VALUE . LABEL)=:
 
 #+begin_src elisp
 (vui-select :value country-code
-            :options '(("United States" . "US")
-                       ("United Kingdom" . "UK")
-                       ("Germany" . "DE"))
+            :options '(("US" . "United States")
+                       ("UK" . "United Kingdom")
+                       ("DE" . "Germany"))
             :on-change (lambda (code)
                          (vui-set-state :country-code code)))
 ;; Shows: "United States", stores: "US"

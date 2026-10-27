@@ -210,9 +210,9 @@ Cleanup runs:
 (vui-defcomponent memoized-callback ()
   :state ((count 0))
   :render
+  ;; The body is the callback itself, not a function that returns one
   (let ((increment (vui-use-callback (count)
-                     (lambda ()
-                       (vui-set-state :count (1+ count))))))
+                     (vui-set-state :count (1+ count)))))
     (vui-button "Increment"
                 :on-click increment)))
 #+end_src
@@ -235,8 +235,7 @@ Without =vui-use-callback=, a new function is created on every render. This can 
   :state ((count 0))
   :render
   (let ((handle-click (vui-use-callback (count)
-                        (lambda ()
-                          (vui-set-state :count (1+ count))))))
+                        (vui-set-state :count (1+ count)))))
     (vui-component 'child
                    :on-click handle-click)))  ; Same reference if count unchanged
 #+end_src
@@ -270,16 +269,19 @@ Use =vui-use-memo= when:
 
 #+begin_src elisp
 (vui-defcomponent expensive-computation ()
-  :state ((data large-dataset)
+  :state ((data large-dataset)   ; a list of (:name STRING :size NUMBER)
           (sort-key :name))
   :render
   (let ((sorted (vui-use-memo (data sort-key)
                   ;; Only sorts when data or sort-key changes
-                  (seq-sort-by (lambda (item)
-                                 (plist-get item sort-key))
-                               #'string<
+                  (seq-sort-by (lambda (item) (plist-get item sort-key))
+                               (if (eq sort-key :size) #'< #'string<)
                                data))))
-    (vui-table :rows sorted)))
+    (vui-table :columns '((:header "Name") (:header "Size" :align :right))
+               :rows (mapcar (lambda (item)
+                               (list (plist-get item :name)
+                                     (format "%d" (plist-get item :size))))
+                             sorted))))
 #+end_src
 
 * Async Data Loading - =vui-use-async=
@@ -331,12 +333,15 @@ Render 2: use-async called → returns (:status ready :data ...)
 
 ** Key-Based Caching
 
-The first argument is a cache key. Results are cached and reused for the same key:
+The first argument is a key. Each =vui-use-async= call keeps its result
+while its key stays the same; a new key loads again, and replaces the
+result of the old one:
 
 #+begin_src elisp
 ;; First render with user-id=1: loads data
 ;; Re-render with user-id=1: returns cached result instantly
 ;; Render with user-id=2: loads new data (different key)
+;; Back to user-id=1: loads again (only the last key is kept)
 (vui-use-async user-id
   (lambda (resolve _reject)
     (funcall resolve (fetch-user user-id))))
@@ -353,8 +358,10 @@ You can report errors in two ways:
 
 #+begin_src elisp
 (vui-defcomponent with-error-handling ()
+  :state ((attempt 0))
   :render
-  (let ((result (vui-use-async 'data
+  ;; Retry changes the attempt, so the key changes and the data loads again
+  (let ((result (vui-use-async (list 'data attempt)
                   (lambda (resolve reject)
                     (if (not connected)
                         (funcall reject "Network unavailable")
@@ -365,7 +372,7 @@ You can report errors in two ways:
         (vui-text (format "Failed: %s" (plist-get result :error)))
         (vui-newline)
         (vui-button "Retry"
-                    :on-click (lambda () (vui-set-state :retry (random))))))
+                    :on-click (lambda () (vui-set-state :attempt (1+ attempt))))))
       ('pending (vui-text "Loading..."))
       ('ready (render-data (plist-get result :data))))))
 #+end_src
@@ -394,9 +401,8 @@ For external commands that may take time, use =make-process= with a sentinel:
                                         (with-current-buffer output-buffer
                                           (prog1 (buffer-string)
                                             (kill-buffer))))
-                             (progn
-                               (kill-buffer output-buffer)
-                               (funcall reject "hledger failed"))))))))))))
+                             (kill-buffer output-buffer)
+                             (funcall reject "hledger failed"))))))))))
     (pcase (plist-get result :status)
       ('pending (vui-text "Loading balance..."))
       ('error (vui-text (format "Error: %s" (plist-get result :error))))
@@ -433,24 +439,26 @@ You can have multiple =vui-use-async= calls in a component, each with its own ke
 
 ** Preloading Data
 
-Since =vui-use-async= caches by key, you can preload data before it's needed:
+Each =vui-use-async= call keeps its result while its key stays the same,
+so you can start loading data before it is needed. Call it for every
+tab on every render, in the same order (vui matches each call to its
+result by its place in the render), and use the result of the tab on
+screen:
 
 #+begin_src elisp
 (vui-defcomponent tabbed-view ()
   :state ((tab 'overview))
   :render
-  (progn
-    ;; Preload data for other tabs while viewing current tab
-    (vui-use-async 'details-data
-      (lambda (resolve _reject) (funcall resolve (fetch-details))))
-    (vui-use-async 'history-data
-      (lambda (resolve _reject) (funcall resolve (fetch-history))))
-
-    ;; Render current tab - data may already be cached
+  ;; Load the data of every tab, so it is ready when the tab is opened
+  (let ((details (vui-use-async 'details-data
+                   (lambda (resolve _reject) (funcall resolve (fetch-details)))))
+        (history (vui-use-async 'history-data
+                   (lambda (resolve _reject) (funcall resolve (fetch-history))))))
     (pcase tab
       ('overview (render-overview))
-      ('details (render-details (vui-use-async 'details-data ...)))
-      ('history (render-history (vui-use-async 'history-data ...))))))
+      ;; The data may be there already when the tab is opened
+      ('details (render-details details))
+      ('history (render-history history)))))
 #+end_src
 
 ** When to Use
@@ -750,7 +758,7 @@ Follow these rules to avoid bugs:
 (vui-defcomponent good-example ()
   :render
   (let ((count (vui-use-ref 0))
-        (callback (vui-use-callback () (lambda () ...))))
+        (callback (vui-use-callback () ...)))
     ...))
 
 ;; BAD: hook inside conditional

@@ -100,7 +100,7 @@ A few things to know:
 - A memo component still re-renders on its own =vui-set-state=, since
   state changes are part of the check.
 
-* Memoization - =use-memo=
+* Memoization - =vui-use-memo=
 
 Cache expensive computations:
 
@@ -109,7 +109,7 @@ Cache expensive computations:
   :state ((items large-list)
           (filter ""))
   :render
-  (let ((filtered (use-memo (items filter)
+  (let ((filtered (vui-use-memo (items filter)
                     ;; Only recomputes when items or filter changes
                     (seq-filter
                      (lambda (item)
@@ -130,21 +130,21 @@ For performance, use =eq= comparison when appropriate:
 
 #+begin_src elisp
 ;; Default: structural comparison (equal)
-(use-memo (data) ...)
+(vui-use-memo (data) ...)
 
 ;; Identity comparison (faster for symbols, identical objects)
-(use-memo* (symbol-key)
+(vui-use-memo* (symbol-key)
   :compare 'eq
   ...)
 
 ;; Custom comparison
-(use-memo* (data)
+(vui-use-memo* (data)
   :compare (lambda (old new)
              (= (length (car old)) (length (car new))))
   ...)
 #+end_src
 
-* Stable Callbacks - =use-callback=
+* Stable Callbacks - =vui-use-callback=
 
 Prevent unnecessary child re-renders by keeping callback references stable:
 
@@ -152,9 +152,9 @@ Prevent unnecessary child re-renders by keeping callback references stable:
 (vui-defcomponent parent ()
   :state ((count 0))
   :render
-  (let ((increment (use-callback (count)
-                     (lambda ()
-                       (vui-set-state :count (1+ count))))))
+  ;; The body is the callback itself, not a function that returns one
+  (let ((increment (vui-use-callback (count)
+                     (vui-set-state :count (1+ count)))))
     ;; Same function reference if count unchanged
     (vui-component 'child :on-action increment)))
 #+end_src
@@ -274,8 +274,8 @@ components overlap.
 * Performance Checklist
 
 1. [ ] Use =:should-update= (or =:memo t=) for components with expensive renders
-2. [ ] Use =use-memo= for expensive computations
-3. [ ] Use =use-callback= for callbacks passed to children
+2. [ ] Use =vui-use-memo= for expensive computations
+3. [ ] Use =vui-use-callback= for callbacks passed to children
 4. [ ] Use =vui-batch= for multiple state updates
 5. [ ] Provide =:key= for list items
 6. [ ] Profile with =vui-timing-enabled= to find bottlenecks
@@ -288,7 +288,7 @@ components overlap.
 
 1. Create a list of 1000 items
 2. Add a filter input
-3. Use =use-memo= for filtering
+3. Use =vui-use-memo= for filtering
 4. Add =:should-update= to list items
 5. Profile before and after with =vui-report-timing=
 #+end_quote
@@ -296,4 +296,4 @@ components overlap.
 * What's Next?
 
 - [[file:10-dev-tools.org][Developer Tools]] - Debugging and inspection
-- [[file:05-hooks.org][Hooks]] - use-memo and use-callback details
+- [[file:05-hooks.org][Hooks]] - vui-use-memo and vui-use-callback details

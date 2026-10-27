@@ -2856,7 +2856,7 @@ captured environment does not defeat the cache."
   "Return cached callback or update it if DEPS changed.
 COMPARE specifies comparison mode (default `equal').
 Called from within a component's render function.
-CALLBACK-FN is a thunk that returns the actual callback."
+CALLBACK-FN is the callback itself (see `vui-use-callback')."
   (unless vui--current-instance
     (error "vui-use-callback called outside of component context"))
   (let* ((instance vui--current-instance)
