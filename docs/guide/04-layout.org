@@ -345,6 +345,9 @@ The =:width=, =:grow=, and =:truncate= options interact to control how columns h
   wide, and a smaller =:width= is raised to M
 - Without =:grow=, short content shrinks the column
 - Without =:truncate=, long content either overflows (¦) or expands the column
+- The header of a column counts as content: a header wider than =:width=
+  is cut (or overflows) like a cell, unless =:grow t= without =:truncate=
+  lets it widen the column
 
 ** Interactive Cells
 

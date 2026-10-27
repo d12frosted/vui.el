@@ -1020,6 +1020,58 @@
       (vui-mount-inline (vui-component 'layout-empty-table) 6)
       (expect (buffer-string) :to-equal "HEAD\nTAIL"))))
 
+(describe "vui-table header wider than the :width of its column"
+  ;; The header counts as a cell: the column keeps its :width, and the
+  ;; header is cut, or overflows, there
+
+  (it "truncates the header at the width of the column"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "LongHeader" :width 6
+                                                 :truncate t))
+                             :rows '(("a"))
+                             :border :ascii))
+      (expect (buffer-string)
+              :to-equal (concat "+--------+\n| Lon... |\n+--------+\n"
+                                "| a      |\n+--------+"))))
+
+  (it "lets the header overflow at the width of the column"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "LongHeader" :width 3))
+                             :rows '(("a"))
+                             :border :ascii))
+      (expect (buffer-string)
+              :to-equal (concat "+-----+\n| Lon ¦gHeader\n+-----+\n"
+                                "| a   |\n+-----+"))))
+
+  (it "cuts the header at a :min-width above :width"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "LongHeader" :width 6
+                                                 :min-width 8 :truncate t))
+                             :rows '(("a"))
+                             :border :ascii))
+      (expect (buffer-string)
+              :to-equal (concat "+----------+\n| LongH... |\n+----------+\n"
+                                "| a        |\n+----------+"))))
+
+  (it "pins the header as it is cut"
+    (with-temp-buffer
+      (vui-render (vui-table :sticky-header t
+                             :columns '((:header "LongHeader" :width 3))
+                             :rows '(("a") ("b"))
+                             :border :ascii))
+      (goto-char (point-min))
+      (search-forward "| b")
+      (expect (substring-no-properties
+               (vui--table-sticky-header (line-beginning-position))
+               1)
+              :to-equal "| Lon ¦gHeader")))
+
+  (it "widens a column with :grow for its header, as before"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header "LongHeader" :width 3 :grow t))
+                             :rows '(("a"))))
+      (expect (buffer-string) :to-equal "LongHeader\na         "))))
+
 (describe "vui-table column :min-width"
   (it "pads a column to its minimum width"
     ;; The basic table of the layout guide

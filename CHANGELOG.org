@@ -90,6 +90,12 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A table header wider than the =:width= of its column (without
+  =:grow=) is cut, or overflows, at that width, as a cell is. Before,
+  it widened the column to its full text while it was still cut at
+  =:width=: a header with =:truncate= was cut to "Lon..." in a column
+  wide enough for all of it.
+
 - A table column's =:min-width= is a floor for its width, as the
   =vui-table= docstring says. It was ignored: a column with only
   =:min-width= shrank to its content, so the basic table of the layout

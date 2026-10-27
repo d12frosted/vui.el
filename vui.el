@@ -6835,7 +6835,8 @@ Column options:
 Width calculation:
   - :width nil           -> auto-size to max(content)
   - :width W :grow t     -> column width = W (enforced minimum)
-  - :width W :grow nil   -> column width = max(content) if all fit, else W"
+  - :width W :grow nil   -> column width = max(content) if all fit, else W
+  The header of the column counts as content."
   (let* ((header-face (or header-face 'vui-table-header))
          (col-count (length columns))
          (widths (make-vector col-count 0)))
@@ -6876,8 +6877,15 @@ Width calculation:
                       ;; :grow nil - column is max(content), overflow/truncate at :width
                       (let ((max-w 1)
                             (has-overflow nil))
+                        ;; The header is a cell like the others: one
+                        ;; wider than :width is cut, or overflows, there
+                        ;; (see `vui--render-table-row')
                         (when header
-                          (setq max-w (max max-w (vui--text-width (vui--faced header header-face)))))
+                          (let ((header-w (vui--text-width
+                                           (vui--faced header header-face))))
+                            (if (> header-w declared-width)
+                                (setq has-overflow t)
+                              (setq max-w (max max-w header-w)))))
                         (dolist (row rows)
                           (when (and (listp row) (< i (length row)))
                             (let ((cell-w (vui--table-measure-cell row i measures)))
