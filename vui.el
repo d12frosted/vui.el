@@ -12573,7 +12573,8 @@ BUFFER-OR-INSTANCE selects what to unmount:
 - nil, a buffer, or a buffer name: the instance mounted in that
   buffer (default: current buffer) via `vui-mount'.  The buffer's
   content is erased, but the buffer itself is not killed.  With no
-  field left in it, Lisp code can edit it again.
+  field left in it, Lisp code can edit it again.  The inline mounts
+  in the buffer unmount too, as their regions go with the text.
 - an instance returned by `vui-mount-inline': its managed region is
   removed from the host buffer; the rest of the buffer is untouched.
 - a component row of a `vui-stream': its region and the separator
@@ -12609,7 +12610,17 @@ Returns the unmounted instance, or nil if nothing was mounted."
             (with-current-buffer buf
               (setq vui--tearing-down t))
             (unwind-protect
-                (vui--unmount-root instance)
+                (progn
+                  (vui--unmount-root instance)
+                  ;; The erase below takes the regions of the inline
+                  ;; mounts with it: they unmount as when a mount takes
+                  ;; the buffer
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (when vui--inline-instances
+                        (dolist (inline-instance vui--inline-instances)
+                          (vui--unmount-root inline-instance))
+                        (kill-local-variable 'vui--inline-instances)))))
               (when (buffer-live-p buf)
                 (with-current-buffer buf
                   (setq vui--tearing-down nil))))

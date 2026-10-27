@@ -97,6 +97,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-unmount= of a =vui-mount= buffer also unmounts the inline mounts
+  in it, as a new =vui-mount= in the buffer and a kill of the buffer do.
+  Before, their regions went with the erased text, but the instances
+  stayed: their on-unmount hooks and cleanups did not run, and they
+  stayed in the buffer's inline mounts. A mount that one of their hooks
+  asks for goes in once all is gone, as one from a hook of the tree.
+
 - A =vui-table= column with a =:width= or =:min-width= that is not a
   whole number of characters, 0 or more, signals an error that names
   the option and the column (counting from 0). Before, such values

@@ -88,6 +88,51 @@
       (goto-char (point-min))
       (expect (insert "x") :to-throw 'text-read-only))))
 
+(describe "vui-unmount of a buffer with inline mounts"
+  :var (unmounted)
+  (before-each
+    (setq unmounted nil)
+    (vui-defcomponent vui-um-inline-root ()
+      :render (vui-text "ROOT"))
+    (vui-defcomponent vui-um-inline-label ()
+      :on-unmount (setq unmounted t)
+      :render (vui-text "[inline]"))
+    (vui-defcomponent vui-um-inline-next ()
+      :render (vui-text "NEXT"))
+    (vui-defcomponent vui-um-inline-remounter ()
+      :on-unmount (vui-mount (vui-component 'vui-um-inline-next)
+                             "*vui-um-inline*")
+      :render (vui-text "[inline]")))
+  (after-each
+    (when (get-buffer "*vui-um-inline*")
+      (let ((inhibit-modification-hooks t))
+        (kill-buffer "*vui-um-inline*"))))
+
+  (it "unmounts the inline mounts with the tree"
+    (let* ((root (vui-mount (vui-component 'vui-um-inline-root)
+                            "*vui-um-inline*"))
+           (inline (with-current-buffer "*vui-um-inline*"
+                     (vui-mount-inline (vui-component 'vui-um-inline-label)
+                                       (point-max)))))
+      (vui-unmount root)
+      (expect unmounted :to-be t)
+      (expect (vui-instance-mounted-p inline) :to-be 'unmounted)
+      (with-current-buffer "*vui-um-inline*"
+        (expect vui--inline-instances :to-be nil)
+        (expect (buffer-string) :to-equal ""))))
+
+  (it "mounts the tree a hook of an inline mount asks for once all is gone"
+    ;; As for a hook of the tree: the mount waits for the erase, which
+    ;; would take its text otherwise
+    (let ((root (vui-mount (vui-component 'vui-um-inline-root)
+                           "*vui-um-inline*")))
+      (with-current-buffer "*vui-um-inline*"
+        (vui-mount-inline (vui-component 'vui-um-inline-remounter)
+                          (point-max)))
+      (vui-unmount root)
+      (with-current-buffer "*vui-um-inline*"
+        (expect (buffer-string) :to-equal "NEXT")))))
+
 (describe "vui-mount over a previous mount"
   (it "remounts over a field-containing buffer without error"
     ;; Same failure mode as unmount: `vui-mount' erases the previous
