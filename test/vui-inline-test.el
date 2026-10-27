@@ -1762,5 +1762,164 @@ and shows TEXT, or nothing when TEXT is nil."
             (expect (insert "x") :to-throw 'text-read-only))
         (kill-buffer buffer)))))
 
+;; A stream at the start of a region.  The start marker of a region with
+;; text advances past text written at it, so that what the host writes
+;; there stays outside.  A stream that starts the region writes there
+;; too, when it changes its first item in place or a row first in it
+;; renders again, and what it writes is the region's.
+
+(vui-defcomponent inline-head-root (log)
+  "LOG, then a status line."
+  :render (vui-vstack (vui-stream log) (vui-text "status")))
+
+(vui-defcomponent inline-head-quiet (text)
+  "TEXT, or nothing when TEXT is empty."
+  :render (vui-text (or text "")))
+
+(vui-defcomponent inline-head-card (inner)
+  "A line, then INNER."
+  :render (vui-vstack (vui-text "[c]") (vui-stream inner)))
+
+(vui-defcomponent inline-head-lead (inner)
+  "INNER, then a line."
+  :render (vui-vstack (vui-stream inner) (vui-text "[c]")))
+
+(defvar vui-inline-test--other-log nil
+  "The stream an `inline-head-writer' appends to, or nil.")
+
+(vui-defcomponent inline-head-writer (text)
+  "TEXT; its `:on-update' appends to `vui-inline-test--other-log'."
+  :on-update (when vui-inline-test--other-log
+               (vui-stream-append vui-inline-test--other-log (vui-text "a1")))
+  :render (vui-text text))
+
+(vui-defcomponent inline-head-tail (log)
+  "A line, then LOG, which ends the tree."
+  :render (vui-vstack (vui-text "A:") (vui-stream log)))
+
+(defun vui-inline-test--head-check (log edit expected)
+  "Mount `inline-head-root' with LOG in a host, call EDIT, check the region.
+EDIT is called with the root instance after the mount.  The region is
+EXPECTED then, and after a render of the whole tree, and the unmount
+leaves the host as it was."
+  (let ((vui-render-delay nil))
+    (with-temp-buffer
+      (insert "host\n\ntail")
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-head-root :log log) 6)))
+        (funcall edit instance)
+        (expect (vui-inline-test--region-text instance) :to-equal expected)
+        (expect (buffer-substring-no-properties (point-min) (point-max))
+                :to-equal (concat "host\n" expected "\ntail"))
+        (vui-rerender instance)
+        (expect (vui-inline-test--region-text instance) :to-equal expected)
+        (vui-unmount instance)
+        (expect (buffer-substring-no-properties (point-min) (point-max))
+                :to-equal "host\n\ntail")))))
+
+(describe "a stream at the start of an inline region"
+  (it "keeps the region around its first line when it is updated"
+    (let ((log (vui-make-stream)))
+      (vui-stream-append log (vui-text "l0"))
+      (vui-inline-test--head-check
+       log
+       (lambda (_) (vui-stream-update-last log (vui-text "L0")))
+       "L0\nstatus")))
+
+  (it "keeps the region around its first node when it is updated"
+    (let ((log (vui-make-stream)))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (let ((node (vui-stream-open log (vui-text "n0"))))
+           (vui-stream-append log (vui-text "l1"))
+           (vui-stream-update node (vui-text "N0"))))
+       "N0\nl1\nstatus")))
+
+  (it "keeps the region around its first row when the row renders again"
+    (let ((log (vui-make-stream)))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (vui-stream-append log (vui-component 'inline-head-quiet :text "r0"))
+         (vui-update (car (vui-stream-handle-items-rev log)) '(:text "R0")))
+       "R0\nstatus")))
+
+  (it "keeps the region around its first row when the row gets text"
+    (let ((log (vui-make-stream)))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (vui-stream-append log (vui-component 'inline-head-quiet :text ""))
+         (let ((row (car (vui-stream-handle-items-rev log))))
+           (vui-stream-append log (vui-text "l1"))
+           (vui-update row '(:text "R0"))))
+       "R0\nl1\nstatus")))
+
+  (it "keeps the region around its first row when the row's stream grows"
+    (let ((log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (vui-stream-append log (vui-component 'inline-head-card :inner inner))
+         (vui-stream-append inner (vui-text "x0")))
+       "[c]\nx0\nstatus")))
+
+  (it "keeps every region around the stream of its first row"
+    ;; Three regions start where the inner stream starts: the root, the
+    ;; row, and the stream of the row starts both
+    (let ((log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-stream-append inner (vui-text "i0"))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (vui-stream-append log (vui-component 'inline-head-lead :inner inner))
+         (let ((row (car (vui-stream-handle-items-rev log))))
+           (vui-stream-update-last inner (vui-text "I0"))
+           (expect (vui-inline-test--region-text row) :to-equal "I0\n[c]")))
+       "I0\n[c]\nstatus")))
+
+  (it "keeps every region around a row first in the stream of its first row"
+    (let ((log (vui-make-stream))
+          (inner (vui-make-stream)))
+      (vui-inline-test--head-check
+       log
+       (lambda (_)
+         (vui-stream-append log (vui-component 'inline-head-lead :inner inner))
+         (let ((outer (car (vui-stream-handle-items-rev log))))
+           (vui-stream-append inner (vui-component 'inline-head-quiet
+                                                   :text "r0"))
+           (vui-update (car (vui-stream-handle-items-rev inner))
+                       '(:text "R0"))
+           (expect (vui-inline-test--region-text outer) :to-equal "R0\n[c]")))
+       "R0\n[c]\nstatus")))
+
+  (it "leaves out what a row's hook appends to the region that ends there"
+    ;; Region A ends with a stream, region B starts where A ends, with a
+    ;; stream.  The first row of B's stream renders again, and its hook
+    ;; appends to A's stream: that item is A's alone
+    (let ((vui-render-delay nil)
+          (la (vui-make-stream))
+          (lb (vui-make-stream)))
+      (vui-stream-append la (vui-text "a0"))
+      (with-temp-buffer
+        (insert "host\n\ntail")
+        (let* ((a (vui-mount-inline (vui-component 'inline-head-tail :log la) 6))
+               (b (vui-mount-inline (vui-component 'inline-head-root :log lb)
+                                    (cdr (vui--inline-bounds a)))))
+          (vui-stream-append lb (vui-component 'inline-head-writer :text "r0"))
+          (let ((vui-inline-test--other-log la))
+            (vui-update (car (vui-stream-handle-items-rev lb)) '(:text "W")))
+          (expect (vui-inline-test--region-text a) :to-equal "A:\na0\na1")
+          (expect (vui-inline-test--region-text b) :to-equal "W\nstatus")
+          (vui-unmount b)
+          (expect (buffer-substring-no-properties (point-min) (point-max))
+                  :to-equal "host\nA:\na0\na1\ntail")
+          (vui-unmount a)
+          (expect (buffer-substring-no-properties (point-min) (point-max))
+                  :to-equal "host\n\ntail"))))))
+
 (provide 'vui-inline-test)
 ;;; vui-inline-test.el ends here

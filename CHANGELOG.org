@@ -90,6 +90,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-stream= at the start of a =vui-mount-inline= region keeps the
+  region around what it writes there. Before, the start of the region
+  moved past the first item of the stream when that item changed in
+  place: a =vui-stream-update-last= or =vui-stream-update= of it, or a
+  render of a stream row first in the stream (its own state changed, or
+  a stream in it grew). That item was outside the region from then on,
+  and stayed in the host buffer after =vui-unmount=. The same went for
+  the regions of stream rows that start with a stream.
+
 - A field at an edge of a =vui-mount-inline= region keeps all of its
   text in the region. Before:
   - text that filled an empty field at the start of the region (a

@@ -4242,20 +4242,27 @@ as a message, and the others are made."
       (setq vui--stream-late-edits nil)
       (vui--stream-run-waiting edits nil))))
 
-(defmacro vui--advancing-ends (ends &rest body)
-  "Run BODY with the end markers of ENDS advancing with text written at them.
-ENDS is a list from `vui--regions-ending-at'.  Their insertion types
+(defvar vui--held-starts nil
+  "The inline instances whose start markers a row render holds, or nil.
+A stream row that starts regions writes inside them, and their start
+markers stay before its text while it renders (see
+`vui--rerender-inline-1').  A hook of the row can write to another
+stream that ends where they start: see `vui--stream-released-starts'.")
+
+(defmacro vui--marker-types (markers type &rest body)
+  "Run BODY with the markers in MARKERS at insertion TYPE.
+MARKERS is a list from `vui--region-edges-at'.  Their insertion types
 are put back after BODY, also when it signals."
-  (declare (indent 1) (debug t))
-  (let ((sym (make-symbol "ends")))
-    `(let ((,sym ,ends))
+  (declare (indent 2) (debug t))
+  (let ((sym (make-symbol "markers")))
+    `(let ((,sym ,markers))
        (unwind-protect
            (progn
-             (dolist (end ,sym)
-               (set-marker-insertion-type (car end) t))
+             (dolist (marker ,sym)
+               (set-marker-insertion-type (car marker) ,type))
              ,@body)
-         (dolist (end ,sym)
-           (set-marker-insertion-type (car end) (cdr end)))))))
+         (dolist (marker ,sym)
+           (set-marker-insertion-type (car marker) (cdr marker)))))))
 
 (defvar vui--held-hook-errors nil
   "A list cell for the errors of hooks that wait to be signalled, or nil.
@@ -4522,7 +4529,16 @@ buffer."
                (vui--enclosing-regions
                 (cons instance
                       (and row-p (or (vui-instance-regions instance)
-                                     vui--enclosing-regions)))))
+                                     vui--enclosing-regions))))
+               ;; A row at the start of the regions around it writes
+               ;; inside them: their start markers stay before its text
+               (held-starts (and row-p
+                                 (vui--region-edges-at
+                                  (cdr vui--enclosing-regions) pos
+                                  #'vui-instance-region-start)))
+               (vui--held-starts (append (seq-take (cdr vui--enclosing-regions)
+                                                   (length held-starts))
+                                         vui--held-starts)))
           ;; Queue re-render requests until commit and effects are done
           (setq vui--rendering-p t)
           (unwind-protect
@@ -4542,13 +4558,17 @@ buffer."
                                        ;; A row with no text, at the end of
                                        ;; the regions around it, grows them
                                        ;; with the text it writes now
-                                       (vui--advancing-ends
+                                       (vui--marker-types
                                            (and row-p (= pos end-pos)
-                                                (vui--regions-ending-at
+                                                (vui--region-edges-at
                                                  (cdr vui--enclosing-regions)
-                                                 pos))
-                                         (vui--inline-replace-text
-                                          instance pos end-pos)))))
+                                                 pos #'vui-instance-region-end))
+                                           t
+                                         ;; And a row at their start
+                                         ;; writes inside them
+                                         (vui--marker-types held-starts nil
+                                           (vui--inline-replace-text
+                                            instance pos end-pos))))))
                     ;; The header line of a sticky table that is gone, as
                     ;; in `vui--rerender-buffer'.  Not when a hook killed
                     ;; the buffer: another one is current then
@@ -8530,30 +8550,55 @@ after it.  CELL is a cell of `vui-stream-handle-items-rev'."
 Bound by `vui--stream-append-row' around the mount of the row, and
 taken by `vui--mount-inline' (see `vui-instance-layout').")
 
-(defun vui--regions-ending-at (regions pos)
-  "Return the end markers of REGIONS that end at POS, with their types.
+(defun vui--region-edges-at (regions pos edge)
+  "Return the EDGE markers of REGIONS that are at POS, with their types.
+EDGE is `vui-instance-region-start' or `vui-instance-region-end'.
 Each as (MARKER . TYPE), innermost first: REGIONS are inline instances,
-innermost first, and the walk stops at the first that does not end at
+innermost first, and the walk stops at the first whose EDGE is not at
 POS."
   (let ((result nil))
     (catch 'done
       (dolist (region regions)
-        (let ((region-end (vui-instance-region-end region)))
-          (if (and region-end (marker-position region-end)
-                   (= region-end pos))
-              (push (cons region-end (marker-insertion-type region-end))
-                    result)
+        (let ((marker (funcall edge region)))
+          (if (and marker (marker-position marker) (= marker pos))
+              (push (cons marker (marker-insertion-type marker)) result)
             (throw 'done nil)))))
     (nreverse result)))
 
 (defun vui--stream-end-regions (handle)
   "Return the end markers of the regions that end where HANDLE ends.
-See `vui--regions-ending-at': the regions of
+See `vui--region-edges-at': the regions of
 `vui-stream-handle-enclosing' whose end is the end of the stream."
   (let ((end (vui-stream-handle-region-end handle)))
     (and end (marker-position end)
-         (vui--regions-ending-at (vui-stream-handle-enclosing handle)
-                                 (marker-position end)))))
+         (vui--region-edges-at (vui-stream-handle-enclosing handle)
+                               (marker-position end)
+                               #'vui-instance-region-end))))
+
+(defun vui--stream-released-starts (handle)
+  "Return the start markers that HANDLE's stream lets go of, with types.
+The held starts of `vui--held-starts' of the regions that are not
+around the stream, as from `vui--region-edges-at'.  A stream that ends
+where such a region starts is before it, and so is what it writes
+there."
+  (let ((enclosing (vui-stream-handle-enclosing handle))
+        (result nil))
+    (dolist (instance vui--held-starts)
+      (let ((start (vui-instance-region-start instance)))
+        (unless (or (memq instance enclosing)
+                    (null start) (null (marker-position start)))
+          (push (cons start (marker-insertion-type start)) result))))
+    result))
+
+(defun vui--stream-start-regions (handle)
+  "Return the start markers of the regions that start where HANDLE starts.
+See `vui--region-edges-at': the regions of
+`vui-stream-handle-enclosing' whose start is the start of the stream."
+  (let ((start (vui-stream-handle-region-start handle)))
+    (and start (marker-position start)
+         (vui--region-edges-at (vui-stream-handle-enclosing handle)
+                               (marker-position start)
+                               #'vui-instance-region-start))))
 
 (defconst vui--empty-table (make-hash-table :test 'equal :size 1)
   "A hash table that stays empty: nothing is ever put in it.")
@@ -8571,51 +8616,60 @@ writes at the end of the stream is theirs too, but the end marker of a
 region with text stays before text written at it, so that an item
 appended after a row is not the row's.  While BODY runs, the end
 markers of the regions that end with the stream advance with that text
-(see `vui--stream-end-regions' and `vui--advancing-ends')."
+\(see `vui--stream-end-regions' and `vui--marker-types').  The same
+holds for the start of the stream, the first thing in such regions: the
+start marker of a region with text advances past text written at it,
+so that what the host writes there stays outside.  While BODY runs, the
+start markers of the regions that start with the stream stay before
+that text (see `vui--stream-start-regions'), but for those of the
+regions that a row render holds and that are not around the stream
+\(see `vui--stream-released-starts')."
   (declare (indent 1) (debug t))
   (let ((pending (make-symbol "pending"))
         (at-hook (make-symbol "at-hook")))
     (macroexp-let2 nil handle handle
-      `(vui--advancing-ends (vui--stream-end-regions ,handle)
-         (let ((vui--context-stack (vui-stream-handle-context ,handle))
-               ;; Not a part of the render of the component that is
-               ;; rendering now, if any (a hook of it writes).  As in a
-               ;; render of the stream, the widgets in what BODY writes
-               ;; belong to the component that renders the stream.
-               (vui--current-instance (vui-stream-handle-parent ,handle))
-               (vui--root-instance (or (vui--stream-root ,handle)
-                                       vui--root-instance))
-               (vui--new-children nil)
-               (vui--child-index 0)
-               ;; A component in it (a function there made it) is a new
-               ;; one: not a child of that component, which keeps its own
-               (vui--reconcile-lookup
-                (and (vui-stream-handle-parent ,handle)
-                     (list :parent (vui-stream-handle-parent ,handle)
-                           :vec [] :by-key vui--empty-table)))
-               (vui--created-instances nil)
-               ;; Fields that wait in `widget-field-new' now belong to
-               ;; a render in progress, which sets them up when it is
-               ;; done
-               (,pending widget-field-new)
-               ;; The stream ends where the render that runs the hook
-               ;; writes (see `vui--hook-frames')
-               (,at-hook (vui--stream-hook-frame ,handle)))
-           (cl-incf vui--stream-writes)
-           ;; The stream can be outside a narrowing, and so can the
-           ;; fields it writes
-           (save-restriction
-             (widen)
-             ;; Also when BODY signals: an item put back after a write
-             ;; that failed has fields, and is in the stream (see
-             ;; `vui--stream-writing')
-             (unwind-protect (save-excursion ,@body)
-               (vui--setup-fields-written ,pending)
-               (when ,at-hook
-                 (let ((end (vui-stream-handle-region-end ,handle)))
-                   (when (and end (marker-position end))
-                     (vui--advance-hook-point ,at-hook
-                                              (marker-position end))))))))))))
+      `(vui--marker-types (vui--stream-end-regions ,handle) t
+         (vui--marker-types (vui--stream-released-starts ,handle) t
+           (vui--marker-types (vui--stream-start-regions ,handle) nil
+             (let ((vui--context-stack (vui-stream-handle-context ,handle))
+                   ;; Not a part of the render of the component that is
+                   ;; rendering now, if any (a hook of it writes).  As in a
+                   ;; render of the stream, the widgets in what BODY writes
+                   ;; belong to the component that renders the stream.
+                   (vui--current-instance (vui-stream-handle-parent ,handle))
+                   (vui--root-instance (or (vui--stream-root ,handle)
+                                           vui--root-instance))
+                   (vui--new-children nil)
+                   (vui--child-index 0)
+                   ;; A component in it (a function there made it) is a new
+                   ;; one: not a child of that component, which keeps its own
+                   (vui--reconcile-lookup
+                    (and (vui-stream-handle-parent ,handle)
+                         (list :parent (vui-stream-handle-parent ,handle)
+                               :vec [] :by-key vui--empty-table)))
+                   (vui--created-instances nil)
+                   ;; Fields that wait in `widget-field-new' now belong to
+                   ;; a render in progress, which sets them up when it is
+                   ;; done
+                   (,pending widget-field-new)
+                   ;; The stream ends where the render that runs the hook
+                   ;; writes (see `vui--hook-frames')
+                   (,at-hook (vui--stream-hook-frame ,handle)))
+               (cl-incf vui--stream-writes)
+               ;; The stream can be outside a narrowing, and so can the
+               ;; fields it writes
+               (save-restriction
+                 (widen)
+                 ;; Also when BODY signals: an item put back after a write
+                 ;; that failed has fields, and is in the stream (see
+                 ;; `vui--stream-writing')
+                 (unwind-protect (save-excursion ,@body)
+                   (vui--setup-fields-written ,pending)
+                   (when ,at-hook
+                     (let* ((end (vui-stream-handle-region-end ,handle))
+                            (pos (and end (marker-position end))))
+                       (when pos
+                         (vui--advance-hook-point ,at-hook pos)))))))))))))
 
 (defun vui--stream-hook-frame (handle)
   "Return the frame of `vui--hook-frames' where HANDLE's stream ends, or nil.
