@@ -340,7 +340,9 @@ The =:width=, =:grow=, and =:truncate= options interact to control how columns h
 
 *Notes:*
 - =:grow t= acts as a minimum width guarantee
-- =:truncate t= acts as a maximum width guarantee
+- =:truncate t= acts as a maximum width guarantee, also below the
+  width of "..." (3): a column of width 2 shows "he" for "hello", with
+  no ellipsis
 - =:min-width M= applies to every case above: the column is at least M
   wide, and a smaller =:width= is raised to M
 - Without =:grow=, short content shrinks the column

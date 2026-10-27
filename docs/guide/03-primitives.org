@@ -183,6 +183,12 @@ Output:
 [Very long ...]
 #+end_example
 
+The button is never wider than =:max-width=. When "..." doesn't fit
+next to the brackets, the label is clipped without it:
+=(vui-button "hello" :max-width 4)= renders =[he]=. When the brackets
+leave no room for the label, they are dropped too: =:max-width 2=
+renders =he=.
+
 This is particularly useful in table cells with =:truncate= enabled, where the
 column width is passed automatically to button children.
 

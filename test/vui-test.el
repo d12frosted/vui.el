@@ -200,6 +200,31 @@
       ;; At minimum should show [...] (5 chars)
       (expect (buffer-string) :to-equal "[...]")))
 
+  (it "clips the label without an ellipsis when the ellipsis does not fit"
+    ;; Room for the brackets, but not for "..." between them
+    (with-temp-buffer
+      (vui-render (vui-button "hello world" :max-width 4))
+      (expect (buffer-string) :to-equal "[he]")))
+
+  (it "drops the brackets when they leave no room for the label"
+    (dolist (case '((2 . "he") (1 . "h") (0 . "")))
+      (with-temp-buffer
+        (vui-render (vui-button "hello world" :max-width (car case)))
+        (expect (buffer-string) :to-equal (cdr case)))))
+
+  (it "keeps the brackets of an empty label that fits"
+    (with-temp-buffer
+      (vui-render (vui-button "" :max-width 2))
+      (expect (buffer-string) :to-equal "[]")))
+
+  (it "truncates a wide label by its width, not by its length"
+    (let ((vui-width-mode 'char))
+      (dolist (case '((1 . "") (2 . "你") (3 . "...") (4 . "[你]")
+                      (6 . "[...]") (7 . "[你...]")))
+        (with-temp-buffer
+          (vui-render (vui-button "你好世界" :max-width (car case)))
+          (expect (buffer-string) :to-equal (cdr case))))))
+
   ;; No-decoration support
   (it "accepts no-decoration property"
     (let ((node (vui-button "Click" :no-decoration t)))
@@ -227,6 +252,11 @@
       ;; max-width 3: just "..."
       (vui-render (vui-button "hello world" :max-width 3 :no-decoration t))
       (expect (buffer-string) :to-equal "...")))
+
+  (it "clips a no-decoration label narrower than the ellipsis"
+    (with-temp-buffer
+      (vui-render (vui-button "hello world" :max-width 2 :no-decoration t))
+      (expect (buffer-string) :to-equal "he")))
 
   ;; Help-echo support (performance optimization)
   (it "defaults help-echo to :default"

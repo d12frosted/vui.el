@@ -310,6 +310,22 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
                  :columns '((:header "A" :width 5) (:header "B"))
                  :rows '(("overflowing" "x"))))))
 
+  (it "table :truncate narrower than the ellipsis"
+    (dolist (width '(0 1 2))
+      (vui-test--parity
+       (lambda () (vui-table
+                   :border :ascii
+                   :columns `((:header "LongHeader" :width ,width :truncate t))
+                   :rows '(("hello") ("a")))))))
+
+  (it "button :max-width narrower than the ellipsis"
+    (dolist (width '(0 1 2 3 4))
+      (dolist (no-decoration '(nil t))
+        (vui-test--parity
+         (lambda () (vui-button "hello world" :max-width width
+                                :no-decoration no-decoration
+                                :on-click #'ignore))))))
+
   (it "button :max-width truncation"
     (vui-test--parity
      (lambda () (vui-button "a fairly long label" :max-width 12
@@ -545,6 +561,32 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
         ;; [ + label + ... + ] must fit in 8 columns = 56px
         (expect (vui-test--px s) :to-be-less-than 57)
         (expect s :to-match "\\.\\.\\.\\]$"))))
+
+  (it "button :max-width narrower than its brackets and a glyph"
+    ;; The brackets leave no room for a wide glyph: the label goes
+    ;; without them, and is not empty when a glyph of it fits
+    (vui-test--with-pixel-font
+      (let ((s (vui-test--render-string
+                (vui-button "你好世界" :max-width 3 :on-click #'ignore))))
+        (expect (vui-test--px s) :to-be-less-than 22)
+        (expect s :not :to-equal "")
+        (expect s :not :to-equal "[]"))))
+
+  (it "table keeps a truncated button with a wide label aligned"
+    (vui-test--with-pixel-font
+      (dolist (width '(1 2 3 4 5))
+        (let ((lines (split-string
+                      (vui-test--render-string
+                       (vui-table
+                        :border :ascii
+                        :columns `((:width ,width :truncate t) (:width 1))
+                        :rows (list (list "abcdefgh" "x")
+                                    (list (vui-button "你好世界"
+                                                      :on-click #'ignore)
+                                          "x"))))
+                      "\n")))
+          (expect (length (seq-uniq (mapcar #'vui-test--px lines)))
+                  :to-equal 1)))))
 
   (it "button :max-width leaves a short label alone"
     (vui-test--with-pixel-font

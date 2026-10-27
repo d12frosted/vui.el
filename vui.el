@@ -1407,7 +1407,9 @@ render in its place, as a fragment of their own."
   "Create a button vnode with LABEL and optional PROPS.
 PROPS is a plist accepting :on-click, :face, :disabled, :max-width,
 :no-decoration, :help-echo, :tab-order, :keymap, :key.
-When :max-width is set, the button will truncate its label to fit.
+When :max-width is set, the button will truncate its label to fit:
+the ellipsis is left out when it does not fit, and the brackets when
+they leave no room for the label.
 When :no-decoration is t, the button renders without [ ] brackets.
 When :help-echo is nil, tooltip is disabled (improves performance).
 When :help-echo is a string, that string is used as tooltip.
@@ -6470,14 +6472,35 @@ MAX-PIXELS, it is clipped and ELLIPSIS is appended."
         (concat (vui--clip-string string (- max-pixels ellipsis-pixels))
                 ellipsis)))))
 
+(defun vui--button-text (label max-width no-decoration)
+  "Return the text of a button with LABEL, at most MAX-WIDTH wide.
+The label is in brackets unless NO-DECORATION.  A label that does not
+fit is truncated with \"...\" (see `vui--truncate-string').  The
+brackets stay when some of the label fits between them; otherwise the
+label goes without them.  No MAX-WIDTH means no limit."
+  (let ((decorated (if no-decoration label (concat "[" label "]"))))
+    (if (or (null max-width) (<= (vui--text-width decorated) max-width))
+        decorated
+      (let* ((room (- max-width (if no-decoration 0 (vui--text-width "[]"))))
+             (inside (and (not no-decoration) (> room 0)
+                          (vui--truncate-string label room "..."))))
+        (if (and inside (not (string-empty-p inside)))
+            (concat "[" inside "]")
+          (vui--truncate-string label (max 0 max-width) "..."))))))
+
 (defun vui--truncate-string (str width &optional ellipsis)
   "Truncate STR to the specified WIDTH, optionally appending ELLIPSIS. The
 truncation method depends on vui-width-mode: it uses character-based
 truncation if the mode is char, and pixel-based truncation if the mode
-is pixel."
-  (pcase vui-width-mode
-    ('char (truncate-string-to-width str width nil nil ellipsis))
-    ('pixel (vui--truncate-string-pixelwise str width nil ellipsis (vui--string-pixel-width ellipsis)))))
+is pixel.  The result is never wider than WIDTH: an ELLIPSIS wider than
+WIDTH is left out, and STR is clipped to WIDTH without it."
+  (let ((ellipsis (and ellipsis (<= (vui--text-width ellipsis) width)
+                       ellipsis)))
+    (pcase vui-width-mode
+      ('char (truncate-string-to-width str width nil nil ellipsis))
+      ('pixel (vui--truncate-string-pixelwise
+               str width nil ellipsis
+               (and ellipsis (vui--string-pixel-width ellipsis)))))))
 
 ;; Render Pixel Width
 
@@ -6810,6 +6833,23 @@ the paths of a row change when it switches between the two ways of
 rendering."
   (let ((vui--render-path (cons index vui--render-path)))
     (vui--measure-block vnode)))
+
+(defun vui--table-truncated-button (button width)
+  "Return a copy of BUTTON that truncates its label to WIDTH.
+The cell of a column with `:truncate' renders it in place of BUTTON.
+WIDTH is in the current units, and `:max-width' in columns: in `pixel'
+mode the copy gets the columns that fit in WIDTH."
+  (vui-vnode-button--create
+   :label (vui-vnode-button-label button)
+   :on-click (vui-vnode-button-on-click button)
+   :face (vui-vnode-button-face button)
+   :disabled-p (vui-vnode-button-disabled-p button)
+   :max-width (vui--width-to-chars width)
+   :no-decoration (vui-vnode-button-no-decoration button)
+   :help-echo (vui-vnode-button-help-echo button)
+   :tab-order (vui-vnode-button-tab-order button)
+   :keymap (vui-vnode-button-keymap button)
+   :key (vui-vnode-key button)))
 
 (defun vui--cell-to-string (cell)
   "Convert CELL to string content by rendering it.
@@ -7320,6 +7360,13 @@ Handles :truncate and overflow:
                        ;; Handle truncation or overflow
                        (display-content
                         (cond
+                         ;; A button truncates its own label: what it
+                         ;; renders is measured (see `vui--button-text')
+                         ((and truncate-p declared-width
+                               (> content-width declared-width)
+                               (vui-vnode-button-p cell))
+                          (vui--measure-render-to-string
+                           (vui--table-truncated-button cell declared-width)))
                          ;; Truncate if content exceeds width and :truncate is set
                          ((and truncate-p declared-width (> content-width declared-width))
                           (vui--truncate-string content declared-width "..."))
@@ -7351,18 +7398,7 @@ Handles :truncate and overflow:
                          (render-cell
                           (if (and is-vnode truncate-p declared-width
                                    (vui-vnode-button-p cell))
-                              ;; Create a copy of the button with max-width set
-                              (vui-vnode-button--create
-                               :label (vui-vnode-button-label cell)
-                               :on-click (vui-vnode-button-on-click cell)
-                               :face (vui-vnode-button-face cell)
-                               :disabled-p (vui-vnode-button-disabled-p cell)
-                               :max-width declared-width
-                               :no-decoration (vui-vnode-button-no-decoration cell)
-                               :help-echo (vui-vnode-button-help-echo cell)
-                               :tab-order (vui-vnode-button-tab-order cell)
-                               :keymap (vui-vnode-button-keymap cell)
-                               :key (vui-vnode-key cell))
+                              (vui--table-truncated-button cell declared-width)
                             cell))
                          ;; Update path for table cells: (col row ...parent-path...)
                          ;; Only for data rows (row-idx is non-nil)
@@ -11470,20 +11506,7 @@ is written."
            (help-echo (vui-vnode-button-help-echo vnode))
            (tab-order (vui-vnode-button-tab-order vnode))
            (keymap (vui-vnode-button-keymap vnode))
-           ;; Brackets add 2 chars around the label unless :no-decoration
-           (bracket-width (if no-decoration 0 (vui--text-width "[]")))
-           (display-label
-            (if (and max-width (> (+ (vui--text-width label) bracket-width) max-width))
-                ;; Need truncation: available = max-width - brackets - 3 (...)
-                (let ((available (- max-width bracket-width (vui--text-width "..."))))
-                  (if (<= available 0)
-                      "..."  ; Just show [...] or ... for very small widths
-                    (concat (substring label 0 (vui--index-of
-                                                label
-                                                (min available (vui--text-width label))))
-                            "...")))
-              label))
-           (text (if no-decoration display-label (concat "[" display-label "]")))
+           (text (vui--button-text label max-width no-decoration))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)

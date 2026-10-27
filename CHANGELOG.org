@@ -90,6 +90,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Truncation stays inside its width when that width is narrower than
+  the ellipsis. Before, a =vui-table= column with =:truncate t= and a
+  =:width= below 3 showed the whole text with "..." after it, wider
+  than the column, and a =vui-button= with a =:max-width= below 5
+  showed "[...]". Now the text is clipped without the ellipsis ("he"
+  for "hello" at width 2), and a button keeps its brackets only when
+  they leave room for the label ("[he]" at width 4, "he" at width 2).
+  A button also truncates a label of wide characters (CJK, say) by
+  its width, not by its length, and a truncated button in a
+  =:truncate= column fits the column in =pixel= =vui-width-mode= too:
+  it was given a limit several times too wide.
+
 - A =vui-stream= at the start of a =vui-mount-inline= region keeps the
   region around what it writes there. Before, the start of the region
   moved past the first item of the stream when that item changed in

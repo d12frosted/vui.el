@@ -1232,6 +1232,47 @@
       (expect (buffer-string) :to-match "| hello\\.\\.\\. |")
       (expect (buffer-string) :not :to-match "world")))
 
+  (it "truncates without an ellipsis to a width narrower than the ellipsis"
+    (with-temp-buffer
+      (vui-render (vui-table
+                   :columns '((:header "LongHeader" :width 2 :truncate t))
+                   :rows (list '("hello") '("a") (list (vui-button "press")))
+                   :border :ascii))
+      (expect (buffer-string)
+              :to-equal (concat "+----+\n"
+                                "| Lo |\n"
+                                "+----+\n"
+                                "| he |\n"
+                                "| a  |\n"
+                                "| pr |\n"
+                                "+----+"))))
+
+  (it "keeps every truncated cell inside a column narrower than the ellipsis"
+    (dolist (width '(0 1 2))
+      (with-temp-buffer
+        (vui-render (vui-table
+                     :columns `((:header "LongHeader" :width ,width
+                                         :truncate t))
+                     :rows (list '("hello") (list (vui-button "press")))
+                     :border :ascii))
+        (let ((lines (split-string (buffer-string) "\n")))
+          (dolist (line lines)
+            (expect (length line) :to-equal (length (car lines))))))))
+
+  (it "keeps a truncated button with a wide label inside its column"
+    (let ((vui-width-mode 'char))
+      (dolist (width '(1 2 3 4 5 6))
+        (with-temp-buffer
+          (vui-render (vui-table
+                       :columns `((:width ,width :truncate t) (:width 1))
+                       :rows (list (list "abcdefgh" "x")
+                                   (list (vui-button "你好世界") "x"))
+                       :border :ascii))
+          (let ((lines (split-string (buffer-string) "\n")))
+            (dolist (line lines)
+              (expect (string-width line)
+                      :to-equal (string-width (car lines)))))))))
+
   (it "does not truncate when content fits width"
     (with-temp-buffer
       (vui-render (vui-table
