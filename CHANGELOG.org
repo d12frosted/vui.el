@@ -97,6 +97,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-mount-inline= from a hook of a tree while the trees of its
+  buffer unmount (an =:on-unmount= that runs in =vui-unmount=, a kill of
+  the buffer, or a =vui-mount= that takes it) waits until they are gone,
+  as a =vui-mount= does there, and returns nil. Before, it went in at
+  once: the erase that followed took its text, and the instance stayed
+  mounted with no one to unmount it, so its =:on-unmount= and cleanups
+  never ran. A =vui-unmount= puts it in once the buffer is erased; a
+  kill of the buffer or another mount drops it.
+
+- A buffer whose kill a function of =kill-buffer-hook= stopped takes
+  mounts again. Before, every later =vui-mount= in it waited for a
+  teardown that was over, and returned nil.
+
 - =vui-unmount= of a =vui-mount= buffer also unmounts the inline mounts
   in it, as a new =vui-mount= in the buffer and a kill of the buffer do.
   Before, their regions went with the erased text, but the instances

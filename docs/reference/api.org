@@ -137,6 +137,13 @@ Pass the returned instance to =vui-unmount= to dismiss the UI (teardown
 also runs automatically when the buffer is killed), or drive it with
 =vui-rerender= / =vui-update= / =vui-update-props=.
 
+Called from a hook of a tree in the buffer while the trees of the
+buffer unmount (its =:on-unmount=, say), the mount waits until they are
+gone and returns nil. It then goes in at POSITION, or at the end of the
+buffer when the text that went makes it shorter than that. The mount is
+dropped when the buffer is killed, or when another mount takes the
+buffer while they unmount.
+
 #+begin_src elisp
 ;; An ephemeral form that dismisses itself on submit
 (let ((form nil))

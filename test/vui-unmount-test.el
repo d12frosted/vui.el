@@ -133,6 +133,182 @@
       (with-current-buffer "*vui-um-inline*"
         (expect (buffer-string) :to-equal "NEXT")))))
 
+(defvar vui-um-late-log nil
+  "What the components of the late inline mount specs did, latest first.")
+
+(defvar vui-um-late-result 'unset
+  "What `vui-mount-inline' returned to the hook that called it.")
+
+(vui-defcomponent vui-um-late ()
+  :on-mount (push 'late-mounted vui-um-late-log)
+  :on-unmount (push 'late-unmounted vui-um-late-log)
+  :render (vui-text "[late]"))
+
+(vui-defcomponent vui-um-late-asker ()
+  :on-unmount (setq vui-um-late-result
+                    (vui-mount-inline (vui-component 'vui-um-late)
+                                      (point-max)))
+  :render (vui-text "[asker]"))
+
+(vui-defcomponent vui-um-late-root (ask)
+  :on-unmount (when ask
+                (setq vui-um-late-result
+                      (vui-mount-inline (vui-component 'vui-um-late)
+                                        (point-max))))
+  :render (vui-text "ROOT"))
+
+(defvar vui-um-late-shown nil
+  "Non-nil when `vui-um-late-empty' renders text.")
+
+(vui-defcomponent vui-um-late-empty ()
+  :render (vui-text (if vui-um-late-shown "<E>" "")))
+
+(vui-defcomponent vui-um-late-at (comp pos)
+  :on-unmount (vui-mount-inline (vui-component comp) pos)
+  :render (vui-text "[at]"))
+
+(vui-defcomponent vui-um-late-row ()
+  :on-mount (push 'row-mounted vui-um-late-log)
+  :on-unmount (push 'row-unmounted vui-um-late-log)
+  :render (vui-text "<row>"))
+
+(vui-defcomponent vui-um-late-streamer (stream)
+  :on-unmount (vui-stream-append stream (vui-component 'vui-um-late-row))
+  :render (vui-vstack (vui-text "ROOT") (vui-stream stream)))
+
+(vui-defcomponent vui-um-late-unmounter ()
+  :on-unmount (progn (vui-unmount)
+                     (setq vui-um-late-result
+                           (vui-mount-inline (vui-component 'vui-um-late)
+                                             (point-max))))
+  :render (vui-text "[unmounter]"))
+
+(defun vui-um-late--late-instances ()
+  "Return the inline mounts of `vui-um-late' in the current buffer."
+  (seq-filter (lambda (instance)
+                (eq (vui-component-def-name (vui-instance-def instance))
+                    'vui-um-late))
+              vui--inline-instances))
+
+(describe "an inline mount asked for while the trees of a buffer unmount"
+  :var (root)
+  (before-each
+    (setq vui-um-late-log nil
+          vui-um-late-result 'unset))
+  (after-each
+    (when (get-buffer "*vui-um-late*")
+      (let ((inhibit-modification-hooks t))
+        (kill-buffer "*vui-um-late*"))))
+
+  (it "goes in once the buffer is erased, from an inline mount's hook"
+    (setq root (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*"))
+    (with-current-buffer "*vui-um-late*"
+      (vui-mount-inline (vui-component 'vui-um-late-asker) (point-max)))
+    (vui-unmount root)
+    (expect vui-um-late-result :to-be nil)
+    (with-current-buffer "*vui-um-late*"
+      (expect (buffer-string) :to-equal "[late]")
+      (let ((late (vui-um-late--late-instances)))
+        (expect (length late) :to-equal 1)
+        (expect (vui--inline-bounds (car late)) :to-equal '(1 . 7))
+        ;; It is a mount of the buffer like any other: it goes with it
+        (kill-buffer)
+        (expect (reverse vui-um-late-log)
+                :to-equal '(late-mounted late-unmounted)))))
+
+  (it "goes in once the buffer is erased, from the root's hook"
+    (setq root (vui-mount (vui-component 'vui-um-late-root :ask t)
+                          "*vui-um-late*"))
+    (vui-unmount root)
+    (expect vui-um-late-result :to-be nil)
+    (with-current-buffer "*vui-um-late*"
+      (expect (buffer-string) :to-equal "[late]")
+      (let ((late (car (vui-um-late--late-instances))))
+        (vui-unmount late)
+        (expect (buffer-string) :to-equal "")
+        (expect (reverse vui-um-late-log)
+                :to-equal '(late-mounted late-unmounted)))))
+
+  (it "does not happen when the buffer is killed"
+    (setq root (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*"))
+    (with-current-buffer "*vui-um-late*"
+      (vui-mount-inline (vui-component 'vui-um-late-asker) (point-max)))
+    (kill-buffer "*vui-um-late*")
+    (expect vui-um-late-result :to-be nil)
+    (expect vui-um-late-log :to-be nil))
+
+  (it "does not happen when another mount takes the buffer"
+    (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*")
+    (with-current-buffer "*vui-um-late*"
+      (vui-mount-inline (vui-component 'vui-um-late-asker) (point-max)))
+    (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*")
+    (expect vui-um-late-result :to-be nil)
+    (expect vui-um-late-log :to-be nil)
+    (with-current-buffer "*vui-um-late*"
+      (expect (buffer-string) :to-equal "ROOT")
+      (expect (vui-um-late--late-instances) :to-be nil)))
+
+  (it "goes in at the end of the buffer when its position went with the text"
+    ;; Both ask for a position past the end of the erased buffer, and
+    ;; go in at its end, as mounted there one after the other: the one
+    ;; with text above the empty region at the end
+    (setq vui-um-late-shown nil)
+    (setq root (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*"))
+    (with-current-buffer "*vui-um-late*"
+      (vui-mount-inline (vui-component 'vui-um-late-at
+                                       :comp 'vui-um-late :pos 100)
+                        (point-max))
+      (vui-mount-inline (vui-component 'vui-um-late-at
+                                       :comp 'vui-um-late-empty :pos 100)
+                        (point-max)))
+    (vui-unmount root)
+    (with-current-buffer "*vui-um-late*"
+      (expect (buffer-string) :to-equal "[late]")
+      (setq vui-um-late-shown t)
+      (dolist (instance vui--inline-instances)
+        (vui-rerender instance))
+      (expect (buffer-string) :to-equal "[late]<E>")))
+
+  (it "is not for a row a hook appends to a stream"
+    ;; The row goes in the stream at once, and with the tree of the stream
+    (let ((stream (vui-make-stream)))
+      (vui-stream-append stream (vui-text "item"))
+      (setq root (vui-mount (vui-component 'vui-um-late-streamer :stream stream)
+                            "*vui-um-late*"))
+      (vui-unmount root)
+      (expect (reverse vui-um-late-log) :to-equal '(row-mounted row-unmounted))
+      (with-current-buffer "*vui-um-late*"
+        (expect (buffer-string) :to-equal "")
+        (expect vui--inline-instances :to-be nil)
+        (expect vui--mounts-after-teardown :to-be nil))))
+
+  (it "is not asked for by an unmount of the buffer from a hook"
+    ;; The unmount that runs the hook does it all: the hook goes on
+    (setq root (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*"))
+    (with-current-buffer "*vui-um-late*"
+      (vui-mount-inline (vui-component 'vui-um-late-unmounter) (point-max)))
+    (vui-unmount root)
+    (expect vui-um-late-result :to-be nil)
+    (with-current-buffer "*vui-um-late*"
+      (expect (buffer-string) :to-equal "[late]")))
+
+  (it "goes in at once after a kill of the buffer that did not happen"
+    (with-current-buffer (get-buffer-create "*vui-um-late*")
+      (insert "host ")
+      (vui-mount-inline (vui-component 'vui-um-late-asker) (point-max))
+      (add-hook 'kill-buffer-hook (lambda () (error "Not now")) 90 t)
+      (expect (kill-buffer) :to-throw 'error)
+      (remove-hook 'kill-buffer-hook (car (last kill-buffer-hook)) t)
+      (setq vui-um-late-log nil)
+      (let ((late (vui-mount-inline (vui-component 'vui-um-late) (point-max))))
+        (expect (vui-instance-p late) :to-be-truthy)
+        (expect vui-um-late-log :to-equal '(late-mounted)))
+      ;; A mount that takes the buffer too
+      (expect (vui-instance-p
+               (vui-mount (vui-component 'vui-um-late-root) "*vui-um-late*"))
+              :to-be-truthy)
+      (expect (buffer-string) :to-equal "ROOT"))))
+
 (describe "vui-mount over a previous mount"
   (it "remounts over a field-containing buffer without error"
     ;; Same failure mode as unmount: `vui-mount' erases the previous

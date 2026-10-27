@@ -12215,6 +12215,13 @@ still mount."
         (error
          (vui--handle-error 'lifecycle "on-unmount" err instance))))))
 
+(defun vui--mount-waits-p (buf)
+  "Return non-nil when a mount in BUF waits for its trees to unmount.
+See `vui--mounts-after-teardown'."
+  (with-current-buffer buf
+    (or vui--tearing-down
+        (and vui--mounted-root (memq vui--mounted-root vui--unmounting)))))
+
 (defun vui--mount-root (component-vnode buf resize)
   "Mount COMPONENT-VNODE as the root of BUF, render it, and return it.
 The work of `vui-mount' and `vui-render', which shows BUF only for the
@@ -12225,9 +12232,7 @@ and do not see its context values.
 
 While the tree of BUF unmounts, the mount waits until it is gone (see
 `vui--mounts-after-teardown'), and this returns nil."
-  (if (with-current-buffer buf
-        (or vui--tearing-down
-            (and vui--mounted-root (memq vui--mounted-root vui--unmounting))))
+  (if (vui--mount-waits-p buf)
       (with-current-buffer buf
         (setq vui--mounts-after-teardown
               (append vui--mounts-after-teardown
@@ -12385,6 +12390,13 @@ and run the full teardown lifecycle (which also happens
 automatically when the buffer is killed), or drive it with
 `vui-rerender' / `vui-update' / `vui-update-props'.
 
+Called from a hook of a tree in the buffer while the trees of the
+buffer unmount (its `:on-unmount', say), the mount waits until they
+are gone, as in `vui-mount', and this returns nil.  It goes in at
+POSITION, or at the end of the buffer when the text that went makes
+it shorter than that.  The mount is dropped when the buffer is
+killed, or when another mount takes the buffer while they unmount.
+
 Example - an ephemeral form that dismisses itself on submit:
 
   (let* ((form nil))
@@ -12394,7 +12406,18 @@ Example - an ephemeral form that dismisses itself on submit:
              :on-submit (lambda (params)
                           (vui-unmount form)
                           (run-query params))))))"
-  (vui--mount-inline component-vnode (or position (point))))
+  (let ((buf (current-buffer))
+        (pos (or position (point))))
+    (if (vui--mount-waits-p buf)
+        (progn
+          (setq vui--mounts-after-teardown
+                (append vui--mounts-after-teardown
+                        (list (lambda ()
+                                (with-current-buffer buf
+                                  (vui--mount-inline
+                                   component-vnode (min pos (point-max))))))))
+          nil)
+      (vui--mount-inline component-vnode pos))))
 
 (defun vui--mount-inline (component-vnode pos &optional base-path after-empty)
   "Mount COMPONENT-VNODE inline at POS and return the instance.
@@ -12501,7 +12524,12 @@ killed."
     (let ((vui--held-hook-errors nil))
       (dolist (instance vui--inline-instances)
         (vui--unmount-root instance)))
-    (kill-local-variable 'vui--inline-instances)))
+    (kill-local-variable 'vui--inline-instances))
+  ;; The trees are gone, and so is what their hooks asked to mount.  A
+  ;; later function of `kill-buffer-hook' can still stop the kill: the
+  ;; buffer takes mounts again then.
+  (setq vui--tearing-down nil
+        vui--mounts-after-teardown nil))
 
 (defun vui--unmount-inline (instance)
   "Tear down inline INSTANCE and remove its region from the buffer.
@@ -12604,8 +12632,10 @@ Returns the unmounted instance, or nil if nothing was mounted."
      (t
       (when-let* ((instance (vui-get-instance buffer-or-instance)))
         ;; A hook of the tree unmounts it again: the unmount that runs it
-        ;; does the rest
-        (unless (memq instance vui--unmounting)
+        ;; does the rest.  So does a hook of an inline mount of the
+        ;; buffer, which runs once the tree is detached from it.
+        (unless (or (memq instance vui--unmounting)
+                    (null (vui-instance-buffer instance)))
           (let ((buf (vui-instance-buffer instance)))
             (with-current-buffer buf
               (setq vui--tearing-down t))
