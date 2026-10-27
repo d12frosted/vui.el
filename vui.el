@@ -1631,6 +1631,8 @@ Column spec properties (each column is a plist):
                     is wider than they are with the gaps between them.
   :width N        - Fixed width in characters
   :min-width N    - Minimum width, expand for content (default 1)
+                    Both are whole numbers of characters, 0 or more;
+                    any other value signals an error.
   :align ALIGN    - :left (default), :center, :right
 
 Table properties:
@@ -6917,6 +6919,17 @@ more than it: its cells are cut, or overflow, at the width it has
                                     :vui--cut-width (elt widths i))
                        col))))
 
+(defun vui--table-check-widths (columns)
+  "Signal an error for a bad :width or :min-width of COLUMNS.
+Each is a whole number of characters: a non-negative integer."
+  (cl-loop for col in columns
+           for i from 0
+           do (dolist (option '(:width :min-width))
+                (let ((width (plist-get col option)))
+                  (unless (or (null width) (natnump width))
+                    (error "vui-table: %s of column %d is %S, not a non-negative integer"
+                           option i width))))))
+
 (defun vui--table-column-width (col)
   "Return the :width of table column COL in the current units, or nil.
 A :min-width above it raises it, so cells are cut or overflow at the
@@ -6968,6 +6981,7 @@ Width calculation:
   - :width W :grow t     -> column width = W (enforced minimum)
   - :width W :grow nil   -> column width = max(content) if all fit, else W
   The header of the column counts as content."
+  (vui--table-check-widths columns)
   (let* ((header-face (or header-face 'vui-table-header))
          (col-count (length columns))
          (widths (make-vector col-count 0)))

@@ -90,6 +90,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-table= column with a =:width= or =:min-width= that is not a
+  whole number of characters, 0 or more, signals an error that names
+  the option and the column (counting from 0). Before, such values
+  crashed deep in the layout code: a string always, a float when the
+  content was shorter than a =:min-width= or a =:width= with =:grow t=,
+  or longer than a =:width= of 2.5. A negative =:width= drew a broken
+  table. A float that worked before (=5.0= as a =:width= without
+  =:grow=) is refused too: round it first.
+
 - Truncation stays inside its width when that width is narrower than
   the ellipsis. Before, a =vui-table= column with =:truncate t= and a
   =:width= below 3 showed the whole text with "..." after it, wider

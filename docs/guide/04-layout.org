@@ -307,6 +307,10 @@ Output:
 | =:truncate=    | If t, truncate long content with "..."             |
 | =:align=       | =:left=, =:center=, or =:right=                    |
 
+=:width= and =:min-width= are whole numbers of characters, 0 or more
+(also in =pixel= =vui-width-mode=). Any other value, such as =2.5= or
+="5"=, signals an error that names the column, counting from 0.
+
 A header can go over several columns: =:header-span N= on a column
 puts its header over it and the N-1 columns after it, which have no
 =:header= of their own. Each column keeps its own cells, width and

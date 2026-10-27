@@ -1126,6 +1126,41 @@
       ;; The overflow is cut at the column width, not at :width
       (expect (buffer-string) :to-equal "abcdef z"))))
 
+(describe "vui-table column widths that are not whole numbers"
+  (it "signals an error naming the column and the option"
+    (dolist (case '(((:width 2.5) . ":width of column 1 is 2.5")
+                    ((:width 2.5 :grow t) . ":width of column 1 is 2.5")
+                    ((:width 2.5 :truncate t) . ":width of column 1 is 2.5")
+                    ((:width "5") . ":width of column 1 is \"5\"")
+                    ((:width -1) . ":width of column 1 is -1")
+                    ((:width 5.0) . ":width of column 1 is 5.0")
+                    ((:min-width 2.5) . ":min-width of column 1 is 2.5")
+                    ((:min-width "5") . ":min-width of column 1 is \"5\"")
+                    ((:min-width -3) . ":min-width of column 1 is -3")))
+      (let ((err (condition-case err
+                     (with-temp-buffer
+                       (vui-render (vui-table :columns (list '(:header "A")
+                                                             (car case))
+                                              :rows '(("a" "b")))))
+                   (error err))))
+        (expect (car-safe err) :to-be 'error)
+        (expect (cadr err) :to-match (regexp-quote (cdr case))))))
+
+  (it "signals in pixel mode too"
+    (let ((vui-width-mode 'pixel))
+      ;; Without the check this crashes deeper, with another error
+      (expect (with-temp-buffer
+                (vui-render (vui-table :columns '((:width 2.5 :grow t))
+                                       :rows '(("a")))))
+              :to-throw 'error
+              '("vui-table: :width of column 0 is 2.5, not a non-negative integer"))))
+
+  (it "takes a width of zero"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:width 0 :truncate t) (:min-width 0))
+                             :rows '(("abc" "d"))))
+      (expect (buffer-string) :to-equal " d"))))
+
 (describe "vui-table"
   (it "creates a table vnode"
     (let ((node (vui-table
