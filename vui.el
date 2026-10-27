@@ -5004,7 +5004,8 @@ neighbour) on restore.  :label is the widget's `:tag', kept alongside
 :identity so a key shared across the buffer can be disambiguated on
 restore (see `vui--find-widget-by-identity').  :at-end is non-nil for a
 point at the end of an editable field (see `vui--field-ending-at', which
-START is passed on to).  With START and END, :line counts from the
+START is passed on to), and :field-text the text of a field (see
+`vui--field-text').  With START and END, :line counts from the
 line of START instead of the first line of the buffer, and :from-end
 to END, so the cost depends on the region, not on where it is."
   (let* ((field (vui--field-ending-at (point) start))
@@ -5017,7 +5018,8 @@ to END, so the cost depends on the region, not on where it is."
                (identity (vui--widget-identity elt))
                (label (vui--elt-get elt :vui-tag)))
           (list :path path :identity identity :label label :offset offset
-                :at-end (and field t)))
+                :at-end (and field t)
+                :field-text (and (widgetp elt) (vui--field-text elt))))
       ;; No element at point - save line/column as fallback
       (list :line (if start
                       ;; Between the starts of the two lines, so every
@@ -5166,23 +5168,50 @@ true look-alikes."
             (when (and by-label (null (cdr by-label)))
               (car by-label))))))))
 
-(defun vui--goto-widget-offset (widget offset &optional at-end)
+(defun vui--field-text (field)
+  "Return the text of editable FIELD without its padding, or nil.
+Trailing spaces are padding, as for `widget-field-value-get'."
+  (when-let* ((start (widget-field-start field))
+              (end (widget-field-end field)))
+    (string-trim-right (buffer-substring-no-properties start end) " +")))
+
+(defun vui--goto-widget-offset (widget offset &optional at-end text)
   "Move point into WIDGET, OFFSET characters past its start.
 Point is clamped to WIDGET's bounds; a nil OFFSET counts as 0.  With
 AT-END non-nil move to the end of WIDGET instead, wherever that is by
 now: the position was the end of a field (see `vui--field-ending-at').
-That holds for a field only; the end of a button is not on the button."
+That holds for a field only; the end of a button is not on the button.
+
+TEXT is the text the field had (see `vui--field-text').  When the
+field has other text now, the program replaced it, and the padding
+after the new text is not a place to type at: point goes no further
+than the end of the new text, and AT-END means that end.  Spaces
+between TEXT and OFFSET were typed after it (the value drops them), so
+they stay after the new text, unless there is none: a cleared field
+has nothing to put them after."
   (let* ((bounds (vui--widget-bounds widget))
          (widget-start (car bounds))
-         (widget-end (cdr bounds)))
+         (widget-end (cdr bounds))
+         (new-text (and text (widgetp widget) (vui--field-text widget))))
     (when (and widget-start widget-end)
-      (goto-char (if (and at-end (widgetp widget))
-                     widget-end
-                   ;; Cap at (1- end) because bounds are exclusive on
-                   ;; the right.
-                   (max widget-start
-                        (min (+ widget-start (or offset 0))
-                             (1- widget-end))))))))
+      (goto-char (cond
+                  ((and new-text (not (equal new-text text)))
+                   (let ((offset (or offset 0))
+                         (len (length new-text)))
+                     (+ widget-start
+                        (cond
+                         (at-end len)
+                         ((<= offset (length text)) (min offset len))
+                         ((string-empty-p new-text) 0)
+                         (t (min (+ len (- offset (length text)))
+                                 (- widget-end widget-start)))))))
+                  ((and at-end (widgetp widget))
+                   widget-end)
+                  ;; Cap at (1- end) because bounds are exclusive on
+                  ;; the right.
+                  (t (max widget-start
+                          (min (+ widget-start (or offset 0))
+                               (1- widget-end)))))))))
 
 (defun vui--path-lt (a b)
   "Non-nil when numeric key list A sorts before B lexicographically.
@@ -5230,6 +5259,7 @@ to START instead of the buffer beginning."
   (let* ((path (plist-get cursor-info :path))
          (offset (plist-get cursor-info :offset))
          (at-end (plist-get cursor-info :at-end))
+         (field-text (plist-get cursor-info :field-text))
          (identity (plist-get cursor-info :identity))
          (label (plist-get cursor-info :label))
          (line (plist-get cursor-info :line))
@@ -5259,10 +5289,10 @@ to START instead of the buffer beginning."
     (cond
      ;; Path still resolves to the saved widget (most common, fast path)
      (path-ok
-      (vui--goto-widget-offset path-widget offset at-end))
+      (vui--goto-widget-offset path-widget offset at-end field-text))
      ;; Path drifted: relocate the same widget by stable identity
      (identity-widget
-      (vui--goto-widget-offset identity-widget offset at-end))
+      (vui--goto-widget-offset identity-widget offset at-end field-text))
      (t
       ;; The saved widget is gone.  Recover to the surviving widget nearest
       ;; it in the component tree (`vui--path-nearest-widget'): the sibling

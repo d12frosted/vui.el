@@ -588,5 +588,114 @@ Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
               (expect vui-fet--submitted :to-equal (list value))
               (expect (buffer-string) :to-equal text))))))))
 
+(vui-defcomponent vui-fet-composer (size)
+  "A field of SIZE that its `on-submit' clears, and the last sent text."
+  :state ((text "") (sent nil))
+  :render (vui-vstack
+           (vui-field :key 'input :value text :size size
+                      :on-change (lambda (value) (vui-set-state :text value))
+                      :on-submit (lambda (value)
+                                   (vui-batch
+                                    (vui-set-state :sent value)
+                                    (vui-set-state :text ""))))
+           (vui-text (format "Sent: %s" sent))))
+
+(vui-defcomponent vui-fet-shout ()
+  "A field that upcases what is typed."
+  :state ((text ""))
+  :render (vui-field :key 'shout :value text :size 12
+                     :on-change (lambda (value)
+                                  (vui-set-state :text (upcase value)))))
+
+(defun vui-fet--keys (keys &optional instance)
+  "Run KEYS as if typed, then wait for the render INSTANCE scheduled."
+  (execute-kbd-macro (kbd keys))
+  (when instance (vui-fet--settle instance)))
+
+(describe "a field whose text a render replaces"
+  (dolist (delay '(nil 0.01))
+    (it (format "puts point at the end of the new text (delay %s)" delay)
+      (let ((vui-render-delay delay))
+        (save-window-excursion
+          (unwind-protect
+              (let ((instance (vui-mount (vui-component 'vui-fet-composer
+                                                        :size 10)
+                                         "*vui-fet-chat*")))
+                (with-current-buffer "*vui-fet-chat*"
+                  (switch-to-buffer (current-buffer))
+                  (goto-char (widget-field-start (vui-fet--field 'input)))
+                  (vui-fet--keys "h i" instance)
+                  (vui-fet--keys "RET" instance)
+                  (expect (point)
+                          :to-equal (widget-field-start (vui-fet--field 'input)))
+                  (vui-fet--keys "y o" instance)
+                  (expect (vui-fet--text 'input) :to-equal "yo        ")
+                  (expect (buffer-substring-no-properties (point-min) (point-max))
+                          :to-equal "yo        \nSent: hi")))
+            (vui-fet--kill "*vui-fet-chat*"))))))
+
+  (it "puts point at the end of the new text after a full field"
+    ;; Point is at the end of the field, past its last character
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (unwind-protect
+            (progn
+              (vui-mount (vui-component 'vui-fet-composer :size 3)
+                         "*vui-fet-chat*")
+              (with-current-buffer "*vui-fet-chat*"
+                (switch-to-buffer (current-buffer))
+                (goto-char (widget-field-start (vui-fet--field 'input)))
+                (vui-fet--keys "a b c RET")
+                (expect (point)
+                        :to-equal (widget-field-start (vui-fet--field 'input)))
+                (vui-fet--keys "x")
+                (expect (vui-fet--text 'input) :to-equal "x  ")))
+          (vui-fet--kill "*vui-fet-chat*")))))
+
+  (it "puts point at the end of the new text in an inline region"
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (with-temp-buffer
+          (switch-to-buffer (current-buffer))
+          (insert "HEAD\n\nTAIL")
+          (vui-mount-inline (vui-component 'vui-fet-composer :size 4) 6)
+          (goto-char (widget-field-start (vui-fet--field 'input)))
+          (vui-fet--keys "h i RET y o")
+          (expect (buffer-string)
+                  :to-equal "HEAD\nyo  \nSent: hi\nTAIL")))))
+
+  (it "keeps a space typed between words"
+    ;; The value drops the trailing space, so the render writes the same
+    ;; text as before: point stays after the space
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (unwind-protect
+            (progn
+              (vui-mount (vui-component 'vui-fet-composer :size 10)
+                         "*vui-fet-chat*")
+              (with-current-buffer "*vui-fet-chat*"
+                (switch-to-buffer (current-buffer))
+                (goto-char (widget-field-start (vui-fet--field 'input)))
+                (vui-fet--keys "a SPC b SPC SPC c")
+                (expect (vui-fet--text 'input) :to-equal "a b  c    ")))
+          (vui-fet--kill "*vui-fet-chat*")))))
+
+  (dolist (delay '(nil 0.01))
+    (it (format "keeps a space that came with new text (delay %s)" delay)
+      ;; The render upcases the text, and the space after it is dropped
+      ;; from the value: point stays after the space
+      (let ((vui-render-delay delay))
+        (save-window-excursion
+          (unwind-protect
+              (let ((instance (vui-mount (vui-component 'vui-fet-shout)
+                                         "*vui-fet-shout*")))
+                (with-current-buffer "*vui-fet-shout*"
+                  (switch-to-buffer (current-buffer))
+                  (goto-char (widget-field-start (vui-fet--field 'shout)))
+                  (vui-fet--keys "h i SPC" instance)
+                  (vui-fet--keys "x" instance)
+                  (expect (vui-fet--text 'shout) :to-equal "HI X        ")))
+            (vui-fet--kill "*vui-fet-shout*")))))))
+
 (provide 'vui-field-edge-test)
 ;;; vui-field-edge-test.el ends here

@@ -90,6 +90,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- When a render replaces the text of the field point is in (an
+  =:on-submit= that clears it, say), point that was in the old text
+  stays in the new text, and spaces typed after the old text stay after
+  the new one. Before, point kept its old offset and could land in the
+  padding, so the next text typed started with spaces: "hi RET yo" in
+  a chat input gave "  yo".
+
 - A table header wider than the =:width= of its column (without
   =:grow=) is cut, or overflows, at that width, as a cell is. Before,
   it widened the column to its full text while it was still cut at
