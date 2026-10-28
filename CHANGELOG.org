@@ -1262,6 +1262,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Documentation
 
+- The inline guide, the reference and the docstring of
+  =vui-mount-inline= say what happens to host text inserted right
+  before a region that starts with a field, or right after one that
+  ends with a field: it goes into the field, as typing there does,
+  since Emacs cannot tell the two apart. The caveat on edits from hooks
+  adds the third place where what a hook writes goes into the region:
+  right after a region that ends with a field.
+
 - Guide examples that did not run as written now do: the temperature
   converter of the components guide (it reformatted the field under
   the cursor on every key), the cons options of =vui-select= (the pairs

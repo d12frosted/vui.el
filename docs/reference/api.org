@@ -124,9 +124,17 @@ rewrite only the instance's region.
 
 The region is ephemeral UI, not document content: vui keeps its rewrites
 out of the undo history, and manual edits inside the region (outside of
-input fields) are overwritten by the next re-render. POSITION must not
-fall strictly inside another inline instance's region. At the start of
-one, the new region goes above it; at the end of one, below it.
+input fields) are overwritten by the next re-render. Text inserted
+right before a region that starts with a field, or right after one
+that ends with a field, goes into that field, the same as typing there:
+it reaches the field's =:on-change= and goes away with the region. Text
+that Lisp code inserts there outside a render does the same, as Emacs
+cannot tell it from typing. If host text may be inserted next to the
+region, start and end the component with something other than a field.
+
+POSITION must not fall strictly inside another inline instance's
+region. At the start of one, the new region goes above it; at the end
+of one, below it.
 
 A component that renders nothing has an empty region, which keeps its
 place among the other regions all the same: a region mounted at its

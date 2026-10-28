@@ -12480,6 +12480,14 @@ The text of the region is read-only outside of its input fields, and
 what is changed there anyway is overwritten by the next re-render.
 The host text around it stays editable.
 
+Text inserted right before a region that starts with a field, or
+right after one that ends with a field, goes into that field, as
+typing there does.  Text that Lisp code inserts there outside a render
+does the same, as it cannot be told apart from typing.  The field's
+`:on-change' gets it, and it goes away with the region.  If host text
+may be inserted next to the region, start and end the component with
+something other than a field.
+
 POSITION must not fall strictly inside another inline instance's
 region.  At the start of one, the new region goes above it; at the
 end of one, below it.
