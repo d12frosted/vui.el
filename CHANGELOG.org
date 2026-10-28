@@ -97,6 +97,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-component= takes the arguments after its props as children, as
+  the guide shows and the stacks do. Before, it read them as more
+  props, so the component got no children. Like the stacks, it drops
+  nil children and splices in lists. Passing children both this way
+  and as a non-nil =:children= signals an error.
 - Deleting all the text of a field that ends a stream item keeps the
   item's end after the field. Before, it stayed at the start of the
   field, before the padding that takes the place of the text: an

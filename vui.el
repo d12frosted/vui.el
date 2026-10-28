@@ -2086,18 +2086,30 @@ in `vui-list'."
 (defun vui-component (type &rest props-and-children)
   "Create a component vnode of TYPE with PROPS-AND-CHILDREN.
 TYPE is a symbol naming a defined component.
-PROPS-AND-CHILDREN is a plist of props; the :children entry holds the
-child vnodes and may appear anywhere in the plist."
+PROPS-AND-CHILDREN is a plist of props followed by child vnodes, as in
+`vui-vstack': the first argument in a key position that is not a
+keyword starts the children, nil children are dropped and lists are
+spliced in.  The children can instead be passed as a :children prop
+\(a list, or a single vnode), which may appear anywhere in the plist.
+A non-nil :children together with positional children signals an
+error."
   (declare (indent 1))
   (let ((props nil)
         (children nil)
+        (children-prop nil)
         (rest props-and-children))
     ;; Parse props and children
-    (while rest
+    (while (and rest (keywordp (car rest)))
       (if (eq (car rest) :children)
-          (setq children (cadr rest))
+          (setq children (cadr rest)
+                children-prop (and children t))
         (setq props (append props (list (car rest) (cadr rest)))))
       (setq rest (cddr rest)))
+    (when rest
+      (when children-prop
+        (error "vui-component: %S got both :children and positional children"
+               type))
+      (setq children (flatten-list rest)))
     (vui-vnode-component--create
      :type type
      :props props

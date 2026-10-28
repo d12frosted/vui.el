@@ -92,7 +92,55 @@
       (expect (plist-get (vui-vnode-component-props vnode) :before) :to-equal 1)
       (expect (plist-get (vui-vnode-component-props vnode) :after) :to-equal 2)
       ;; :key is extracted from props wherever it appears
-      (expect (vui-vnode-key vnode) :to-equal 'k))))
+      (expect (vui-vnode-key vnode) :to-equal 'k)))
+
+  (it "takes arguments after the props as children"
+    (let* ((a (vui-text "a"))
+           (b (vui-text "b"))
+           (vnode (vui-component 'some-comp :name "X" :key 'k a b)))
+      (expect (vui-vnode-component-props vnode) :to-equal '(:name "X" :key k))
+      (expect (vui-vnode-component-children vnode) :to-equal (list a b))
+      (expect (vui-vnode-key vnode) :to-equal 'k)))
+
+  (it "takes children with no props"
+    (let ((a (vui-text "a")))
+      (expect (vui-vnode-component-children (vui-component 'some-comp a))
+              :to-equal (list a))))
+
+  (it "refuses both :children and positional children"
+    (expect (vui-component 'some-comp :children (list (vui-text "a"))
+                           (vui-text "b"))
+            :to-throw 'error))
+
+  (it "drops nil positional children and flattens lists, as stacks do"
+    (let ((a (vui-text "a"))
+          (b (vui-text "b"))
+          (c (vui-text "c")))
+      (expect (vui-vnode-component-children
+               (vui-component 'some-comp :name "X" nil (list a b) (when nil c)))
+              :to-equal (list a b))
+      (expect (vui-vnode-component-children
+               (vui-component 'some-comp :name "X" (when nil c)))
+              :to-be nil)))
+
+  (it "takes positional children after an empty :children"
+    (let ((a (vui-text "a")))
+      (expect (vui-vnode-component-children
+               (vui-component 'some-comp :children nil a))
+              :to-equal (list a))))
+
+  (it "renders positional children through the children binding"
+    (vui-defcomponent vct-card (title)
+      :render
+      (vui-fragment
+       (vui-text (format "= %s =" title))
+       (vui-newline)
+       children))
+    (with-temp-buffer
+      (vui-render (vui-component 'vct-card :title "T"
+                                 (vui-text "one")
+                                 (vui-text " two")))
+      (expect (buffer-string) :to-equal "= T =\none two"))))
 
 (describe "component rendering"
   (it "renders a simple component"

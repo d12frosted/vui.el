@@ -1087,10 +1087,15 @@ proper indent propagation when nested inside other layout containers.
 Create a component vnode.
 
 - TYPE :: Symbol naming a defined component
-- PROPS-AND-CHILDREN :: Plist of props, optionally ending with =:children=
+- PROPS-AND-CHILDREN :: Plist of props, then child vnodes. As with
+  =vui-vstack=, the first argument that is not a keyword starts the
+  children; nil children are dropped and lists are spliced in. The
+  children can be passed as a =:children= prop instead, but not both
+  ways at once (that signals an error).
 
 #+begin_src elisp
 (vui-component 'greeting :name "Alice")
+(vui-component 'card :title "Hello" child1 child2)
 (vui-component 'card :title "Hello" :children (list child1 child2))
 #+end_src
 
