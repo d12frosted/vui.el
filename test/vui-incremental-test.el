@@ -856,8 +856,9 @@
                       (kill-buffer "*inc-cl-forms*")))))
         (let ((wholesale (render-all nil)))
           (expect (car (last wholesale))
-                  :to-equal '((("" 1 4) (">a" 9 12) ("" 12 15) (">b" 24 27))
-                              ((1 4) (12 15))))
+                  ;; A space keeps the fields of a and b apart
+                  :to-equal '((("" 1 4) (">a" 9 12) ("" 13 16) (">b" 25 28))
+                              ((1 4) (13 16))))
           (expect (render-all t) :to-equal wholesale)))))
 
   (it "keeps an empty overlay at the edge of a rewritten child empty"

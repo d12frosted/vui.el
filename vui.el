@@ -4133,6 +4133,13 @@ tells the other end."
           (move-overlay ov (overlay-start ov) (+ (overlay-start ov) length))
         (move-overlay ov (- (overlay-end ov) length) (overlay-end ov))))))
 
+(defvar vui--kept-fields nil
+  "The fields that the insertions in progress keep out of their text.
+Elements are as in `vui--fields-touching', the outermost insertion's
+first.  While text is inserted at an end of these fields, their
+overlays cover it too: `vui--field-edge-at' finds where they really
+end and start from here.")
+
 (defmacro vui--keeping-fields (pos &rest body)
   "Run BODY, which inserts text at POS, and keep it out of the fields there.
 The fields that end or start at POS cover the same text after BODY as
@@ -4141,11 +4148,80 @@ removed, before this form: the fields found at POS are then the ones
 that stay.  Returns the value of BODY."
   (declare (indent 1) (debug t))
   (let ((fields (make-symbol "fields")))
-    `(let ((,fields (vui--fields-touching ,pos)))
+    `(let* ((,fields (vui--fields-touching ,pos))
+            (vui--kept-fields (append vui--kept-fields ,fields)))
        ;; Also when BODY signals: what it wrote can be taken back (see
        ;; `vui--stream-writing'), and the fields stay as they were
-       (unwind-protect (progn ,@body)
+       (unwind-protect (prog1 (progn ,@body)
+                         (vui--field-gaps-before ,fields ,pos))
          (vui--restore-fields ,fields)))))
+
+(defun vui--field-edge-at (pos side)
+  "Return non-nil when a field has its SIDE at POS.
+SIDE is `start' or `end'.  The fields are those with an overlay (see
+`vui--field-overlay-edge-at') and those of the render in progress (see
+`vui--new-field-edge-at')."
+  (or (vui--field-overlay-edge-at pos side)
+      (vui--new-field-edge-at pos side)))
+
+(defun vui--field-overlay-edge-at (pos side)
+  "Return non-nil when a field overlay has its SIDE at POS.
+SIDE is `start' or `end'.  An overlay counts at the text it covers
+outside of the insertions in progress (see `vui--kept-fields')."
+  (let ((edge (lambda (start end) (= pos (if (eq side 'start) start end)))))
+    (seq-some
+     (lambda (ov)
+       (and (overlay-get ov 'field)
+            (pcase (assq ov vui--kept-fields)
+              (`(,_ ,length ,ends)
+               (if ends
+                   (funcall edge (overlay-start ov)
+                            (+ (overlay-start ov) length))
+                 (funcall edge (- (overlay-end ov) length)
+                          (overlay-end ov))))
+              (_ (funcall edge (overlay-start ov) (overlay-end ov))))))
+     ;; One that grew over the insertion in progress covers POS
+     (overlays-in (max (point-min) (1- pos)) (min (point-max) (1+ pos))))))
+
+(defun vui--new-field-edge-at (pos side)
+  "Return non-nil when a field of the render in progress has SIDE at POS.
+SIDE is `start' or `end'.  These fields get their overlays from
+`widget-setup': until then, two markers hold their text."
+  (seq-some
+   (lambda (w)
+     (pcase (widget-get w :field-overlay)
+       (`(,(and (pred markerp) start) . ,end)
+        (and (eq (marker-buffer start) (current-buffer))
+             (= pos (marker-position (if (eq side 'start) start end)))))))
+   widget-field-new))
+
+(defun vui--field-gap ()
+  "Insert a space at point that no field takes in.
+`widget-field-find' takes both ends of a field as its own.  Where one
+field ends and another starts, it finds the two of them and signals
+\"Overlapping fields\" on every edit there, typing too.  A render puts
+this space between a field and a field it would touch: before the
+field it makes, and after the text it inserts before a field (see
+`vui--field-gaps-before')."
+  (vui--keeping-fields (point)
+    (insert " ")))
+
+(defun vui--field-gaps-before (fields pos)
+  "Put a space before the fields in FIELDS that a field now ends at.
+FIELDS comes from `vui--fields-touching' at POS, before text was
+inserted there: the fields that started at POS start where that text
+ends.  Point stays at the end of the text, after the space."
+  (pcase-dolist (`(,ov ,length ,ends) fields)
+    (when (and (not ends) (overlay-buffer ov) (overlay-get ov 'field))
+      (let ((start (- (overlay-end ov) length)))
+        ;; The callers hold FIELDS in `vui--kept-fields'
+        (when (and (> start pos)
+                   (vui--field-edge-at start 'end))
+          (let ((at-start (= (point) start)))
+            (save-excursion
+              (goto-char start)
+              (insert " "))
+            (when at-start (forward-char 1))))))))
 
 (defun vui--flush-queued-rerenders ()
   "Re-render roots queued while a render was in progress.
@@ -4665,6 +4741,15 @@ writes there goes into the region."
       ;; Not when a hook unmounted INSTANCE: its region is gone then
       (when (vui--inline-bounds instance)
         (delete-region new-end-pos (max new-end-pos (marker-position end)))
+        ;; The new text ends with a field where one after the region
+        ;; starts: the space between them is the region's (see
+        ;; `vui--field-gap').  Its fields are all new, and set up later
+        (when (and (vui--new-field-edge-at new-end-pos 'end)
+                   (vui--field-overlay-edge-at new-end-pos 'start))
+          (save-excursion
+            (goto-char new-end-pos)
+            (vui--field-gap))
+          (setq new-end-pos (1+ new-end-pos)))
         (vui--inline-set-bounds instance (marker-position start) new-end-pos)
         (dolist (other below)
           (when (vui--inline-bounds other)
@@ -8301,15 +8386,31 @@ text takes in what is written there."
               (vui--remove-widget-overlays p end)
               (vui--park-streams p end)
               (delete-region p end))
-            (when wrote (insert sep))
-            (let ((s (point))
-                  (vui--render-path (cons step vui--render-path)))
-              (vui--render-instance chosen)
-              (setf (vui-instance-r-len chosen) (- (point) s))
-              (if (> (point) s)
-                  (setq wrote t)
-                ;; no text, so no separator either
-                (delete-region p s)))
+            ;; Held as `vui--keeping-fields' holds them, for the field
+            ;; gaps of this render (see `vui--field-gap')
+            (let* ((held-after (mapcar (lambda (ov)
+                                         (list ov (- (overlay-end ov)
+                                                     (overlay-start ov))
+                                               nil))
+                                       after))
+                   (vui--kept-fields
+                    (append vui--kept-fields
+                            (mapcar (lambda (ov)
+                                      (list ov (- (overlay-end ov)
+                                                  (overlay-start ov))
+                                            t))
+                                    before)
+                            held-after)))
+              (when wrote (insert sep))
+              (let ((s (point))
+                    (vui--render-path (cons step vui--render-path)))
+                (vui--render-instance chosen)
+                (vui--field-gaps-before held-after s)
+                (setf (vui-instance-r-len chosen) (- (point) s))
+                (if (> (point) s)
+                    (setq wrote t)
+                  ;; no text, so no separator either
+                  (delete-region p s))))
             (dolist (ov before)
               (when (overlay-buffer ov)
                 (move-overlay ov (overlay-start ov) p)))
@@ -11905,6 +12006,9 @@ is written."
            ;; Wrap callbacks with error handling
            (wrapped-change (vui--wrap-event-callback "on-change" on-change captured-instance))
            (wrapped-submit (vui--wrap-event-callback "on-submit" on-submit captured-instance)))
+      ;; Not right after another field (see `vui--field-gap')
+      (when (vui--field-edge-at (point) 'end)
+        (vui--field-gap))
       (let ((w (widget-create 'editable-field
                               ;; TAB/S-TAB in a field use vui's unified nav
                               ;; (which also stops on text buttons); editing

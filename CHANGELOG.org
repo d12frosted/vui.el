@@ -97,6 +97,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Two fields side by side get a space between them: in a =vui-hstack=
+  with =:spacing 0=, in a fragment, in two inline regions back to back,
+  or a field of the host buffer next to an inline region. Before, one
+  field ended where the next one started, and =widget.el= signaled
+  "Overlapping fields" on every edit there, deleting or typing.
+  =vui-grid= and =vui-flex= do not count the space in their widths.
+
 - A =vui-mount-inline= from a hook of a tree while the trees of its
   buffer unmount (an =:on-unmount= that runs in =vui-unmount=, a kill of
   the buffer, or a =vui-mount= that takes it) waits until they are gone,

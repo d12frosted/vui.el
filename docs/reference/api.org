@@ -515,6 +515,15 @@ fields with parsing and validation, use =vui-typed-field= from =vui-components.e
            :on-change (lambda (v) (vui-set-state :password v)))
 #+end_src
 
+A field never touches another field: where a field would start right
+where another one ends (=vui-hstack :spacing 0=, a fragment, two inline
+regions back to back, a field of the host buffer next to an inline
+region), a space goes between them. =widget.el= takes both ends of a
+field as part of it, so it refuses every edit where two fields touch.
+=vui-grid= and =vui-flex= measure each cell on its own and do not count
+that space: with =:spacing 0=, a row where two fields meet is one
+character wider than its cells.
+
 ** vui-field-value
 
 #+begin_src elisp

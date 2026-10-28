@@ -603,7 +603,7 @@ Its `on-submit' pushes to `vui-fet--submitted'."
            (vui-text "tail")))
 
 (vui-defcomponent vui-fet-submit-pair ()
-  "Two fields with no text between them, the first one full.
+  "Two fields side by side with no spacing, the first one full.
 Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
   :render (vui-hstack
            :spacing 0
@@ -652,8 +652,7 @@ Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
           (expect (buffer-string)
                   :to-equal "HEAD\nName: Bob   \nHello, Bob!\nTAIL")))))
 
-  (it "submits the field it ends, not the one that starts there"
-    ;; Text typed there goes into the field that ends there
+  (it "submits the field it ends, not the one after it"
     (let ((vui-render-delay nil))
       (save-window-excursion
         (with-temp-buffer
@@ -661,7 +660,7 @@ Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
           (vui-mount-inline (vui-component 'vui-fet-submit-pair))
           (goto-char (widget-field-start (vui-fet--field 'a)))
           (execute-kbd-macro (kbd "C-e"))
-          (expect (point) :to-equal (widget-field-start (vui-fet--field 'b)))
+          (expect (point) :to-equal (widget-field-end (vui-fet--field 'a)))
           (execute-kbd-macro (kbd "RET"))
           (expect vui-fet--submitted :to-equal '((a "aaa")))))))
 
@@ -828,6 +827,217 @@ Their `on-submit's push (KEY VALUE) to `vui-fet--submitted'."
         (vui-mount-inline (vui-component 'vui-fet-narrow :value "ab"))
         (expect (buffer-string) :to-equal "ab\ntail 0")
         (expect (vui-fet--text 'narrow) :to-equal "ab")))))
+
+;;; Two fields side by side
+
+;; `widget-field-find' takes both ends of a field as its own: where one
+;; field ends and the next starts, it finds both and signals
+;; "Overlapping fields" on every edit there.  A render keeps a space
+;; between them.
+
+(vui-defcomponent vui-fet-touch-pair ()
+  "Two full fields side by side with no spacing."
+  :render (vui-hstack
+           :spacing 0
+           (vui-field :key 'a :value "ab" :size 2)
+           (vui-field :key 'b :value "cd" :size 2)))
+
+(vui-defcomponent vui-fet-touch-end ()
+  "Text, then a full field that ends the tree."
+  :render (vui-hstack :spacing 0
+                      (vui-text "A:")
+                      (vui-field :key 'a :value "ab" :size 2)))
+
+(vui-defcomponent vui-fet-touch-start ()
+  "A full field that starts the tree, then text."
+  :render (vui-hstack :spacing 0
+                      (vui-field :key 'b :value "cd" :size 2)
+                      (vui-text ":B")))
+
+(vui-defcomponent vui-fet-touch-switch (mode value)
+  "A field with VALUE, or the text \"x\" when MODE is `text'."
+  :memo t
+  :render (if (eq mode 'text)
+              (vui-text "x")
+            (vui-field :key 'a :value value :size 2)))
+
+(vui-defcomponent vui-fet-touch-kept ()
+  "A field that starts the tree, then text, that never re-renders."
+  :memo t
+  :render (vui-hstack :spacing 0
+                      (vui-field :key 'b :value "cd" :size 2)
+                      (vui-text ":B")))
+
+(vui-defcomponent vui-fet-touch-list (mode value)
+  "A `vui-fet-touch-switch' with MODE and VALUE, then a kept field."
+  :render (vui-fragment
+           (vui-component 'vui-fet-touch-switch :mode mode :value value)
+           (vui-component 'vui-fet-touch-kept)))
+
+(vui-defcomponent vui-fet-nothing ()
+  "No text."
+  :render (vui-text ""))
+
+(defun vui-fet--delete-field-text (key)
+  "Delete the text of the field with KEY as a command would."
+  (let ((w (vui-fet--field key)))
+    (delete-region (widget-field-start w) (widget-field-end w))))
+
+(describe "two fields side by side"
+  (it "get a space between them"
+    (let ((vui-render-delay nil))
+      (unwind-protect
+          (let ((instance (vui-mount (vui-component 'vui-fet-touch-pair)
+                                     "*vui-fet-touch*")))
+            (with-current-buffer "*vui-fet-touch*"
+              (expect (buffer-string) :to-equal "ab cd")
+              (expect (vui-fet--text 'a) :to-equal "ab")
+              (expect (vui-fet--text 'b) :to-equal "cd")
+              (vui-rerender instance)
+              (expect (buffer-string) :to-equal "ab cd")))
+        (vui-fet--kill "*vui-fet-touch*"))))
+
+  (it "take edits at their ends"
+    (let ((vui-render-delay nil))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'vui-fet-touch-pair) "*vui-fet-touch*")
+            (with-current-buffer "*vui-fet-touch*"
+              (vui-fet--delete-field-text 'a)
+              (expect (vui-fet--text 'a) :to-equal "  ")
+              (goto-char (widget-field-start (vui-fet--field 'b)))
+              (insert "x")
+              (expect (vui-fet--text 'b) :to-equal "xcd")
+              (expect (vui-fet--text 'a) :to-equal "  ")))
+        (vui-fet--kill "*vui-fet-touch*"))))
+
+  (it "get a space when a patched child turns into a field before one"
+    (let ((vui-render-delay nil)
+          (vui-incremental-render t))
+      (unwind-protect
+          (let ((instance (vui-mount (vui-component 'vui-fet-touch-list
+                                                    :mode 'text :value "ab")
+                                     "*vui-fet-touch*")))
+            (with-current-buffer "*vui-fet-touch*"
+              ;; The first update records the children's texts
+              (vui-update instance '(:mode text :value "ab"))
+              (expect (buffer-string) :to-equal "xcd:B")
+              (vui-update instance '(:mode field :value "ab"))
+              (expect (buffer-string) :to-equal "ab cd:B")
+              (expect (vui-fet--text 'a) :to-equal "ab")
+              (expect (vui-fet--text 'b) :to-equal "cd")
+              (vui-update instance '(:mode field :value "zz"))
+              (expect (buffer-string) :to-equal "zz cd:B")
+              (vui-update instance '(:mode text :value "zz"))
+              (expect (buffer-string) :to-equal "xcd:B")
+              (goto-char (widget-field-start (vui-fet--field 'b)))
+              (insert "q")
+              (expect (vui-fet--text 'b) :to-equal "qcd")))
+        (vui-fet--kill "*vui-fet-touch*"))))
+
+  (it "of the host get no space from a region with no text between them"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (let* ((one (widget-create 'editable-field :size 2 "h1"))
+               (pos (point))
+               (two (widget-create 'editable-field :size 2 "h2")))
+          (widget-setup)
+          (let ((instance (vui-mount-inline (vui-component 'vui-fet-nothing)
+                                            pos)))
+            (expect (buffer-string) :to-equal "h1h2")
+            (expect (vui-fet--text one) :to-equal "h1")
+            (expect (vui-fet--text two) :to-equal "h2")
+            (vui-unmount instance)
+            (expect (buffer-string) :to-equal "h1h2"))))))
+
+  (it "of two inline regions get a space in the second one"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (let ((first (vui-mount-inline (vui-component 'vui-fet-touch-end)))
+              (second (vui-mount-inline (vui-component 'vui-fet-touch-start)
+                                        (point-max))))
+          (expect (buffer-string) :to-equal "A:ab cd:B")
+          (vui-fet--delete-field-text 'a)
+          (expect (vui-fet--text 'a) :to-equal "  ")
+          (expect (vui-fet--text 'b) :to-equal "cd")
+          (vui-unmount second)
+          (expect (buffer-string) :to-equal "A:  ")
+          (vui-unmount first)
+          (expect (buffer-string) :to-equal "")))))
+
+  (it "of a region mounted before another get a space in the first one"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (let ((second (vui-mount-inline (vui-component 'vui-fet-touch-start)))
+              (first (vui-mount-inline (vui-component 'vui-fet-touch-end) 1)))
+          (expect (buffer-string) :to-equal "A:ab cd:B")
+          (expect (vui-fet--text 'a) :to-equal "ab")
+          (expect (vui-fet--text 'b) :to-equal "cd")
+          (vui-fet--delete-field-text 'b)
+          (expect (vui-fet--text 'b) :to-equal "  ")
+          (vui-unmount first)
+          (expect (buffer-string) :to-equal "  :B")
+          (vui-unmount second)
+          (expect (buffer-string) :to-equal "")))))
+
+  (it "of a region before another keep their space when the first re-renders"
+    (dolist (flag '(nil t))
+      (let ((vui-render-delay nil)
+            (vui-incremental-render flag))
+        (with-temp-buffer
+          (let* ((second (vui-mount-inline (vui-component 'vui-fet-touch-start)))
+                 (first (vui-mount-inline (vui-component 'vui-fet-touch-end) 1)))
+            (dotimes (_ 2)
+              (vui-rerender first)
+              (expect (buffer-string) :to-equal "A:ab cd:B"))
+            (vui-fet--delete-field-text 'b)
+            (expect (vui-fet--text 'b) :to-equal "  ")
+            (vui-unmount first)
+            (expect (buffer-string) :to-equal "  :B")
+            (vui-unmount second))))))
+
+  (it "of the host and a region that starts with one get a space in the region"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (insert "HEAD ")
+        (let ((host (widget-create 'editable-field :size 4 "host"))
+              (pos (point)))
+          (widget-setup)
+          (let ((instance (vui-mount-inline
+                           (vui-component 'vui-fet-touch-start) pos)))
+            (expect (buffer-string) :to-equal "HEAD host cd:B")
+            (expect (vui-fet--text host) :to-equal "host")
+            (vui-fet--delete-field-text 'b)
+            (expect (vui-fet--text 'b) :to-equal "  ")
+            (expect (vui-fet--text host) :to-equal "host")
+            (vui-unmount instance)
+            (expect (buffer-string) :to-equal "HEAD host")
+            (expect (vui-fet--text host) :to-equal "host"))))))
+
+  (it "of a region that ends with one and the host get a space in the region"
+    (let ((vui-render-delay nil))
+      (with-temp-buffer
+        (insert "HEAD ")
+        (let ((pos (point))
+              (host (widget-create 'editable-field :size 4 "host")))
+          (widget-setup)
+          (let ((instance (vui-mount-inline
+                           (vui-component 'vui-fet-touch-end) pos)))
+            (expect (buffer-string) :to-equal "HEAD A:ab host")
+            (expect (vui-fet--text host) :to-equal "host")
+            (dotimes (_ 2)
+              (vui-rerender instance)
+              (expect (buffer-string) :to-equal "HEAD A:ab host")
+              (expect (vui-fet--text host) :to-equal "host"))
+            (goto-char (widget-field-start host))
+            (insert "x")
+            (expect (vui-fet--text host) :to-equal "xhost")
+            (vui-fet--delete-field-text 'a)
+            (expect (vui-fet--text 'a) :to-equal "  ")
+            (expect (vui-fet--text host) :to-equal "xhost")
+            (vui-unmount instance)
+            (expect (buffer-string) :to-equal "HEAD xhost")
+            (expect (vui-fet--text host) :to-equal "xhost")))))))
 
 (provide 'vui-field-edge-test)
 ;;; vui-field-edge-test.el ends here
