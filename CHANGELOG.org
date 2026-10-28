@@ -97,6 +97,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A buffer that renders while no window shows it, or while only a
+  window of another width does, reflows when it is shown again in a
+  window of the width it had before. Such a render (or a stream write)
+  lays out for another width, and the resize hook skipped the next
+  firing when the width matched its last one, so the buffer kept that
+  layout until something else rendered it (#242).
+
 - Two fields side by side get a space between them: in a =vui-hstack=
   with =:spacing 0=, in a fragment, in two inline regions back to back,
   or a field of the host buffer next to an inline region. Before, one

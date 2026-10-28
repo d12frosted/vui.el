@@ -4363,10 +4363,13 @@ tree: what it wrote went with the unmount.  The components it created
 that are not in the tree yet, and so were not unmounted with it, are
 dropped then (see `vui--drop-created').  When BODY signals, the
 components it created that are not in the tree are dropped too, and
-the error goes on.  Return non-nil when BODY ran to its end."
+the error goes on.  Return non-nil when BODY ran to its end.
+The buffer of ROOT is current: the width it renders for is noted
+there (see `vui--note-render-width')."
   (declare (indent 1) (debug t))
   (let ((r (make-symbol "root")))
     `(let* ((,r ,root)
+            (_ (vui--note-render-width))
             (vui--stoppable-root ,r)
             ;; Another tree: what stops the render around it does not
             ;; stop this one
@@ -4904,14 +4907,31 @@ Returns INSTANCE for chaining."
   "The window width this buffer's instances last re-rendered for.
 Set by `vui--on-window-size-change' so height-only size changes (the
 echo area growing, a split below) do not trigger a re-render: layout
-reads widths only.  Nil until the hook first fires.")
+reads widths only.  Nil until the hook first fires, and again once
+something renders for another width (see `vui--note-render-width').")
+
+(defun vui--note-render-width (&optional buffer)
+  "Forget the width BUFFER rendered for, unless it renders for it again.
+BUFFER defaults to the current buffer.  A render lays out for the
+window that shows the buffer, or for the selected window when none
+does (see `vui--window-width').  When that is not the width the
+buffer last rendered for, the buffer can be shown again in a window
+of that width: the next window size change re-renders it all the
+same."
+  (let* ((buffer (or buffer (current-buffer)))
+         (window (get-buffer-window buffer t)))
+    (with-current-buffer buffer
+      (unless (and window vui--resize-last-width
+                   (= (window-width window) vui--resize-last-width))
+        (setq vui--resize-last-width nil)))))
 
 (defun vui--on-window-size-change (_window-or-frame)
   "Re-render this buffer's mounted VUI instances.
 Installed buffer-locally on `window-size-change-functions' by
 `vui-rerender-on-resize'.  Skipped when a window shows the buffer at
 the same width as the previous firing - the hook also fires for
-height-only changes, which cannot affect layout.  With no window to
+height-only changes, which cannot affect layout - and nothing rendered
+in the buffer since then for another width.  With no window to
 measure, it re-renders unconditionally."
   (let* ((window (get-buffer-window nil t))
          (width (and window (window-width window))))
@@ -7559,6 +7579,8 @@ the buffer it will land in, the same way `fill-column\=' is carried in.
 Falls back to the selected window when that buffer is not displayed
 anywhere.  A buffer shown in several windows resolves to the first one
 `get-buffer-window\=' returns, as `vui--on-window-size-change\=' does."
+  ;; A stream write lays out without a render of its root
+  (vui--note-render-width (vui--measure-buffer))
   (if-let* ((window (get-buffer-window (vui--measure-buffer) t)))
       (window-width window)
     (window-width)))

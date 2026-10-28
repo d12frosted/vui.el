@@ -571,6 +571,164 @@ Return what ACTION returned."
               (expect render-count :to-equal 3)))
         (kill-buffer "*test-resize-width-cache*"))))
 
+  (it "re-renders a buffer that rendered while hidden when it is shown again"
+    ;; At the width it had before: the render while hidden laid out for
+    ;; the fallback width
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (window 'fake-window))
+      (vui-defcomponent resize-hidden-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) window))
+                    ((symbol-function 'window-width)
+                     (lambda (&rest _) 80)))
+            (let ((instance (vui-mount (vui-component 'resize-hidden-test)
+                                       "*test-resize-hidden*")))
+              (with-current-buffer "*test-resize-hidden*"
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 2)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 2)
+                ;; Hidden: a render, then the buffer is shown again
+                (setq window nil)
+                (vui-rerender instance)
+                (expect render-count :to-equal 3)
+                (setq window 'fake-window)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 4)
+                ;; Shown: a render does not make the next firing render
+                (vui-rerender instance)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 5))))
+        (kill-buffer "*test-resize-hidden*"))))
+
+  (it "re-renders a buffer that rendered in a window of another width"
+    ;; Shown in a narrow window, rendered while only a wide one shows it,
+    ;; then back in the narrow one alone
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (width 30))
+      (vui-defcomponent resize-other-width-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) 'fake-window))
+                    ((symbol-function 'window-width)
+                     (lambda (&rest _) width)))
+            (let ((instance (vui-mount (vui-component 'resize-other-width-test)
+                                       "*test-resize-hidden*")))
+              (with-current-buffer "*test-resize-hidden*"
+                (vui--on-window-size-change nil)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 2)
+                (setq width 50)
+                (vui-rerender instance)
+                (setq width 30)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 4))))
+        (kill-buffer "*test-resize-hidden*"))))
+
+  (it "re-renders an inline tree that rendered while hidden when it is shown again"
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (window 'fake-window))
+      (vui-defcomponent resize-hidden-inline-test ()
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-text "x")))
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) window))
+                    ((symbol-function 'window-width)
+                     (lambda (&rest _) 80)))
+            (with-current-buffer (get-buffer-create "*test-resize-hidden*")
+              (let ((instance (vui-mount-inline
+                               (vui-component 'resize-hidden-inline-test))))
+                (vui--on-window-size-change nil)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 2)
+                (setq window nil)
+                (vui-rerender instance)
+                (setq window 'fake-window)
+                (vui--on-window-size-change nil)
+                (expect render-count :to-equal 4))))
+        (kill-buffer "*test-resize-hidden*"))))
+
+  (it "re-renders a buffer whose stream laid out for the window while hidden"
+    ;; The append renders no root, but its layout reads the window width
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (window 'fake-window)
+          (stream (vui-make-stream)))
+      ;; Appends after the first one write in place
+      (vui-stream-append stream (vui-text "first"))
+      (vui-defcomponent resize-hidden-stream-test (stream)
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-stream stream)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) window))
+                    ((symbol-function 'window-width)
+                     (lambda (&rest _) 80)))
+            (vui-mount (vui-component 'resize-hidden-stream-test :stream stream)
+                       "*test-resize-hidden*")
+            (with-current-buffer "*test-resize-hidden*"
+              (vui--on-window-size-change nil)
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 2)
+              (setq window nil)
+              (vui-stream-append stream (vui-flex :width 'window (vui-text "a")))
+              (expect render-count :to-equal 2)
+              (setq window 'fake-window)
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 3)))
+        (kill-buffer "*test-resize-hidden*"))))
+
+  (it "re-renders a buffer whose stream measured for the window while hidden"
+    ;; A grid row with a multi-line cell is built from text measured in a
+    ;; temp buffer, so only that measure pass reads the window width
+    (let ((vui-render-delay nil)
+          (render-count 0)
+          (window 'fake-window)
+          (stream (vui-make-stream)))
+      ;; Appends after the first one write in place
+      (vui-stream-append stream (vui-text "first"))
+      (vui-defcomponent resize-hidden-grid-test (stream)
+        :render (progn
+                  (cl-incf render-count)
+                  (vui-stream stream)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) window))
+                    ((symbol-function 'window-width)
+                     (lambda (&rest _) 80)))
+            (vui-mount (vui-component 'resize-hidden-grid-test :stream stream)
+                       "*test-resize-hidden*")
+            (with-current-buffer "*test-resize-hidden*"
+              (vui--on-window-size-change nil)
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 2)
+              (setq window nil)
+              (vui-stream-append stream
+                                 (vui-grid :width 20 :columns 2
+                                           (vui-vstack
+                                            (vui-flex :width 'window
+                                                      (vui-text "a"))
+                                            (vui-text "b"))
+                                           (vui-text "c")))
+              (expect render-count :to-equal 2)
+              (setq window 'fake-window)
+              (vui--on-window-size-change nil)
+              (expect render-count :to-equal 3)))
+        (kill-buffer "*test-resize-hidden*"))))
+
   (it "vui-render tears down a previously mounted tree"
     (let ((vui-render-delay nil)
           (unmounted nil))
