@@ -74,6 +74,10 @@ it."
 
 ;;; Components
 
+(vui-defcomponent vui-fet-stream-only (stream)
+  "A stream and nothing else."
+  :render (vui-stream stream))
+
 (vui-defcomponent vui-fet-chat (stream label)
   "A stream with a status line under it."
   :render (vui-vstack (vui-stream stream)
@@ -232,6 +236,61 @@ it."
         (vui-stream-update node (vui-text "two"))
         (expect (buffer-string) :to-equal "m0 x  two\nstatus: b")
         (expect (vui-fet--text 'm0) :to-equal "x  ")))))
+
+(describe "a field that is all of a stream item"
+  (it "keeps the item around it when all its text goes, then text comes back"
+    (vui-fet--with-chat (s _inst 'vui-fet-chat)
+      (vui-stream-append s (vui-text "top"))
+      (vui-stream-append s (vui-field :key 'only :value "ab" :size 3))
+      (let ((w (vui-fet--field 'only)))
+        (delete-region (widget-field-start w) (widget-field-end w))
+        (expect (buffer-string) :to-equal "top\n   \nstatus: a")
+        (goto-char (widget-field-start w))
+        (insert "q"))
+      (expect (vui-fet--text 'only) :to-equal "q  ")
+      (vui-stream-update-last s (vui-text "done"))
+      (expect (buffer-string) :to-equal "top\ndone\nstatus: a")
+      (vui-stream-append s (vui-text "m1"))
+      (expect (buffer-string) :to-equal "top\ndone\nm1\nstatus: a"))))
+
+(vui-defcomponent vui-fet-field-then-stream (stream label)
+  "A field that ends where STREAM starts, and a status line under them."
+  :render (vui-vstack (vui-fragment (vui-field :key 'pre :value "ab" :size 3)
+                                    (vui-stream stream))
+                      (vui-text (format "status: %s" label))))
+
+(describe "a field that ends where a stream starts"
+  (it "leaves the stream starting at its end when all its text goes"
+    (vui-fet--with-chat (s _inst 'vui-fet-field-then-stream)
+      (vui-stream-append s (vui-text "one"))
+      (let ((w (vui-fet--field 'pre)))
+        (delete-region (widget-field-start w) (widget-field-end w))
+        (expect (marker-position (vui-stream-handle-region-start s))
+                :to-equal (widget-field-end w))))))
+
+(describe "the stream markers a field notes at its edges"
+  (it "are left alone by a later edit when the stream moved them since"
+    ;; A case command that changes nothing notifies the field before the
+    ;; edit only, and typing at the start of the region notifies it after
+    ;; the edit only
+    (let ((vui-render-delay nil))
+      (save-window-excursion
+        (with-temp-buffer
+          (switch-to-buffer (current-buffer))
+          (insert "host\n")
+          (let ((s (vui-make-stream)))
+            (vui-mount-inline (vui-component 'vui-fet-stream-only :stream s)
+                              (point-max))
+            ;; The field ends the stream: the case command notes its end
+            (vui-stream-append s (vui-field :key 'f0 :value "12" :size 3))
+            (goto-char (widget-field-start (vui-fet--field 'f0)))
+            (execute-kbd-macro (kbd "M-u"))
+            (vui-stream-append s (vui-text "second"))
+            (goto-char (widget-field-start (vui-fet--field 'f0)))
+            (execute-kbd-macro (kbd "Z"))
+            (expect (buffer-string) :to-equal "host\nZ12\nsecond")
+            (vui-stream-append s (vui-text "third"))
+            (expect (buffer-string) :to-equal "host\nZ12\nsecond\nthird")))))))
 
 (describe "a field that starts a stream item"
   (it "does not take in a node inserted before its node"
@@ -522,6 +581,64 @@ it."
       (vui-stream-append s (vui-text "m1"))
       (expect (buffer-string) :to-equal "m0 xy \nm1\nstatus: a")
       (expect (vui-fet--text 'm0) :to-equal "xy ")))
+
+  (it "keeps its padding before an item appended after all its text goes"
+    ;; The end of the stream is at the start of the field then, and so is
+    ;; the padding that takes the place of the text
+    (vui-fet--with-chat (s _inst 'vui-fet-chat)
+      (vui-stream-append s (vui-fet--item 'm0 "xyz"))
+      (let ((w (vui-fet--field 'm0)))
+        (delete-region (widget-field-start w) (widget-field-end w)))
+      (expect (buffer-string) :to-equal "m0    \nstatus: a")
+      (vui-stream-append s (vui-text "m1"))
+      (expect (buffer-string) :to-equal "m0    \nm1\nstatus: a")
+      (expect (vui-fet--text 'm0) :to-equal "   ")))
+
+  (it "keeps its padding when all its text goes and the content after the stream re-renders"
+    (vui-fet--with-chat (s inst 'vui-fet-chat)
+      (vui-stream-append s (vui-fet--item 'm0 "xyz"))
+      (let ((w (vui-fet--field 'm0)))
+        (delete-region (widget-field-start w) (widget-field-end w)))
+      (vui-update inst (list :stream s :label "b"))
+      (expect (buffer-string) :to-equal "m0    \nstatus: b")
+      (expect (vui-fet--text 'm0) :to-equal "   ")))
+
+  (it "keeps its padding when the last item starts where it ends and all its text goes"
+    (vui-fet--with-chat (s _inst 'vui-fet-chat "")
+      (vui-stream-append s (vui-fet--item 'm0 "xyz"))
+      (vui-stream-append s (vui-text "one"))
+      (let ((w (vui-fet--field 'm0)))
+        (delete-region (widget-field-start w) (widget-field-end w)))
+      (expect (buffer-string) :to-equal "m0    one\nstatus: a")
+      (vui-stream-update-last s (vui-text "two"))
+      (expect (buffer-string) :to-equal "m0    two\nstatus: a")
+      (expect (vui-fet--text 'm0) :to-equal "   ")))
+
+  (it "keeps what is typed at its end when the last item starts there"
+    (vui-fet--with-chat (s _inst 'vui-fet-chat "")
+      (vui-stream-append s (vui-fet--item 'm0 "xyz"))
+      (vui-stream-append s (vui-text "one"))
+      (goto-char (widget-field-end (vui-fet--field 'm0)))
+      (insert "w")
+      (expect (buffer-string) :to-equal "m0 xyzwone\nstatus: a")
+      (vui-stream-update-last s (vui-text "two"))
+      (expect (buffer-string) :to-equal "m0 xyzwtwo\nstatus: a")
+      (expect (vui-fet--text 'm0) :to-equal "xyzw")))
+
+  (it "puts back no marker an earlier edit noted, on an edit with no before-change notification"
+    (vui-fet--with-chat (s _inst 'vui-fet-chat)
+      (vui-stream-append s (vui-fet--item 'm0 "xyz"))
+      (let ((w (vui-fet--field 'm0)))
+        (delete-region (widget-field-start w) (widget-field-end w))
+        (vui-stream-append s (vui-text "m1"))
+        (expect (buffer-string) :to-equal "m0    \nm1\nstatus: a")
+        ;; widget.el sends no before-change notification for this one
+        (let ((inhibit-read-only t))
+          (goto-char (widget-field-start w))
+          (insert "q")))
+      (expect (buffer-string) :to-equal "m0 q  \nm1\nstatus: a")
+      (vui-stream-append s (vui-text "m2"))
+      (expect (buffer-string) :to-equal "m0 q  \nm1\nm2\nstatus: a")))
 
   (it "keeps a character typed at its end before an appended item"
     (vui-fet--with-chat (s _inst 'vui-fet-chat)

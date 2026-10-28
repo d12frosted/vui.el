@@ -5913,7 +5913,17 @@ streams of this buffer."
         (dolist (instance (cons root (vui-instance-regions root)))
           (vui--region-around-field instance start end)))
       (dolist (handle vui--streams)
-        (vui--stream-markers-out-of-field handle start end)))))
+        (vui--stream-markers-out-of-field handle start end))
+      ;; Those at the end of the field before the edit stay at its end.
+      ;; Not every edit notifies before and after it (a case command
+      ;; that changes nothing, an edit at the start of an inline region):
+      ;; a marker moved out of the field since the notes were taken is
+      ;; somewhere else now
+      (dolist (marker (widget-get widget :vui-edge-markers))
+        (when (and (eq (marker-buffer marker) (current-buffer))
+                   (<= start marker end))
+          (set-marker marker end))))
+    (widget-put widget :vui-edge-markers nil)))
 
 (defun vui--field-add-placeholder (widget)
   "Show WIDGET's placeholder while its field is empty.
@@ -10462,16 +10472,44 @@ has already shifted on its own)."
     (when (and end (marker-position end) (>= pos (marker-position end)))
       (set-marker end pos))))
 
+(defun vui--stream-markers (handle)
+  "Return the markers of HANDLE.
+These are the bounds of the stream, the start of its last item and the
+bounds of its live nodes.  Some of them can be nil."
+  (append (list (vui-stream-handle-region-start handle)
+                (vui-stream-handle-region-end handle)
+                (vui-stream-handle-last-start handle))
+          (mapcan (lambda (node)
+                    (list (vui--stream-node-start node)
+                          (vui--stream-node-end node)))
+                  (vui-stream-handle-nodes handle))))
+
 (defun vui--stream-markers-out-of-field (handle start end)
   "Move the markers of HANDLE out of the field from START to END.
-These are the bounds of the stream, the start of its last item and the
-bounds of its live nodes, see `vui--marker-out-of-field'."
-  (vui--marker-out-of-field (vui-stream-handle-region-start handle) start end)
-  (vui--marker-out-of-field (vui-stream-handle-region-end handle) start end)
-  (vui--marker-out-of-field (vui-stream-handle-last-start handle) start end)
-  (dolist (node (vui-stream-handle-nodes handle))
-    (vui--marker-out-of-field (vui--stream-node-start node) start end)
-    (vui--marker-out-of-field (vui--stream-node-end node) start end)))
+See `vui--stream-markers' and `vui--marker-out-of-field'."
+  (dolist (marker (vui--stream-markers handle))
+    (vui--marker-out-of-field marker start end)))
+
+(defun vui--field-note-edge-markers (widget)
+  "Note the stream markers at the end of WIDGET's field, before an edit.
+After the edit, `vui--field-sync-boundaries' puts them back at the end.
+Deleting all the text of a field leaves the markers of its end at its
+start, before the padding that `widget-after-change' puts in its
+place: the end of a stream that the field ends would stay there, and
+what is appended to the stream would go in front of the padding.  The
+markers at the start of the field stay there by themselves: a stream
+marker does not advance with an insertion while the user edits."
+  (let* ((overlay (widget-get widget :field-overlay))
+         (start (and (overlayp overlay) (overlay-start overlay)))
+         (end (and start (overlay-end overlay)))
+         (noted nil))
+    (when (and start (< start end))
+      (dolist (handle vui--streams)
+        (dolist (marker (vui--stream-markers handle))
+          (when (and marker (eq (marker-buffer marker) (current-buffer)))
+            (when (= marker end)
+              (push marker noted))))))
+    (widget-put widget :vui-edge-markers noted)))
 
 (defun vui--stream-mount-row (handle cell path)
   "Mount the item in CELL of HANDLE's items as a component row at point.
@@ -12051,9 +12089,12 @@ is written."
                                         ;; value, and a remount there (or
                                         ;; a re-render, when not deferred)
                                         ;; would run before the edit
-                                        ;; lands.  Only the notification
-                                        ;; after it counts.
-                                        (unless (eq (car-safe event) 'before-change)
+                                        ;; lands.  That one notes what
+                                        ;; is at the end of the field,
+                                        ;; and the one after the edit
+                                        ;; counts.
+                                        (if (eq (car-safe event) 'before-change)
+                                            (vui--field-note-edge-markers widget)
                                           ;; The edit may have been at
                                           ;; the edge of a region
                                           (vui--field-sync-boundaries

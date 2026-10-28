@@ -97,6 +97,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- Deleting all the text of a field that ends a stream item keeps the
+  item's end after the field. Before, it stayed at the start of the
+  field, before the padding that takes the place of the text: an
+  append went in front of the padding, and a render of what comes
+  after the stream lost the field. The same held for a field that is
+  all of an item: an update of the last item left behind the text
+  typed into it.
+
 - A buffer that renders while no window shows it, or while only a
   window of another width does, reflows when it is shown again in a
   window of the width it had before. Such a render (or a stream write)
