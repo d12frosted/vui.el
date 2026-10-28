@@ -97,6 +97,10 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- =vui-text= puts a keyword property on the text under its plain name,
+  so =:help-echo "tip"= sets =help-echo= and shows a tooltip, as the
+  guide says. Before, the text got a =:help-echo= property that Emacs
+  ignores.
 - =vui-component= takes the arguments after its props as children, as
   the guide shows and the stacks do. Before, it read them as more
   props, so the component got no children. Like the stacks, it drops

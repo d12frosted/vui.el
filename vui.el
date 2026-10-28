@@ -1356,6 +1356,8 @@ Example:
 (defun vui-text (content &rest props)
   "Create a text vnode with CONTENT and optional PROPS.
 PROPS is a plist accepting :face, :key, and other text properties.
+A keyword names the text property without its colon, so :help-echo
+sets `help-echo'; a plain symbol is used as it is.
 
 :face is passed straight through to the `face' text property, so it
 accepts a face symbol (\\='error), or an anonymous face spec - a plist of
@@ -1370,7 +1372,10 @@ and there is no bare-symbol shorthand: write (:inherit error ...), not
    :key (plist-get props :key)
    :properties (cl-loop for (k v) on props by #'cddr
                         unless (memq k '(:face :key))
-                        append (list k v))))
+                        append (list (if (keywordp k)
+                                         (intern (substring (symbol-name k) 1))
+                                       k)
+                                     v))))
 
 (defun vui--wrap-list-children (children)
   "Return CHILDREN with each list in it made a fragment of its own.

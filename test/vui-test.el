@@ -34,7 +34,34 @@
 
   (it "accepts key property"
     (let ((node (vui-text "hello" :key "my-key")))
-      (expect (vui-vnode-key node) :to-equal "my-key"))))
+      (expect (vui-vnode-key node) :to-equal "my-key")))
+
+  (it "puts a keyword property on the text as a plain symbol"
+    (with-temp-buffer
+      (vui-render (vui-text "hi" :help-echo "tip" :mouse-face 'highlight))
+      (expect (get-text-property 1 'help-echo) :to-equal "tip")
+      (expect (get-text-property 1 'mouse-face) :to-equal 'highlight)
+      (expect (get-text-property 1 :help-echo) :to-be nil)))
+
+  (it "passes a symbol property through as it is"
+    (with-temp-buffer
+      (vui-render (vui-text "hi" 'help-echo "tip"))
+      (expect (get-text-property 1 'help-echo) :to-equal "tip")))
+
+  (it "updates the property when a re-render changes it"
+    (vui-defcomponent vt-tip ()
+      :state ((tip "one"))
+      :render (vui-fragment
+               (vui-text "hi" :help-echo tip)
+               (vui-button "go" :on-click (lambda () (vui-set-state :tip "two")))))
+    (vui-mount (vui-component 'vt-tip) "*vt-tip*")
+    (unwind-protect
+        (with-current-buffer "*vt-tip*"
+          (expect (get-text-property 1 'help-echo) :to-equal "one")
+          (push-button (search-forward "go"))
+          (vui-flush-sync)
+          (expect (get-text-property 1 'help-echo) :to-equal "two"))
+      (kill-buffer "*vt-tip*"))))
 
 (describe "vui-fragment"
   (it "creates a fragment with children"

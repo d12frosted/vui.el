@@ -63,8 +63,8 @@ Two non-obvious snags catch people (both surfaced from real use - see
 
 *** With Text Properties
 
-Any property other than =:face= and =:key= is passed through as a plain text
-property:
+Any property other than =:face= and =:key= is put on the text as a text
+property, named without the colon (=:help-echo= sets =help-echo=):
 
 #+begin_src elisp
 (vui-text "Hover me" :help-echo "a tooltip")

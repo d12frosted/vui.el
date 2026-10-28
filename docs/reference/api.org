@@ -415,9 +415,14 @@ Create a text node.
 | =:face=  | symbol | Emacs face for styling  |
 | =:key=   | any    | Reconciliation key      |
 
+Any other property is put on the text as a text property. A keyword
+names the property without its colon (=:help-echo= sets =help-echo=);
+a plain symbol is used as it is.
+
 #+begin_src elisp
 (vui-text "Hello" :face 'bold)
 (vui-text (format "Count: %d" count))
+(vui-text "Hover me" :help-echo "a tooltip")
 #+end_src
 
 ** vui-newline
