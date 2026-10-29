@@ -624,6 +624,11 @@ In an indented =vui-vstack=, the children of an hstack go on from the
 line of the hstack, and the lines they start get the indent of the
 vstack.
 
+An hstack is inline flow, so multi-line children do not sit side by
+side: each child starts where the one before it ends, on its last
+line. For columns of multi-line blocks, use =vui-flex= with =:wrap t=
+or =vui-grid=.
+
 | Option     | Type    | Default | Description                                 |
 |------------+---------+---------+---------------------------------------------|
 | =:spacing= | integer | 1       | Spaces between children                     |
@@ -753,7 +758,8 @@ renders them in place, exactly like a non-wrapped flex - components
 and widgets keep their identity. A row containing a multi-line child
 (a box, a vstack, a table) is composed from the children's rendered
 text so the blocks sit side by side. Composed rows are content:
-buttons keep working, but components in them never mount - no state,
+buttons run their handlers outside any component (so a handler cannot
+call =vui-set-state=), components in them never mount - no state,
 no lifecycle, and =vui-set-state= from inside them does nothing - and
 widget fields do not survive composition. Keep stateful components on
 single-line rows (or outside =:wrap=), and give components a =:key=
@@ -789,8 +795,8 @@ cell wider than its track widens that whole column, across every row,
 so columns stay aligned. A cell may be a function: it is called with
 the track width in characters and returns a vnode. Identity follows
 =vui-flex= =:wrap=: single-line rows render in place, rows containing
-a multi-line cell are composed as text (buttons work; components in
-composed rows never mount, and widget fields do not survive
+a multi-line cell are composed as text (buttons run their handlers outside any component, so a handler
+cannot call =vui-set-state=; components in composed rows never mount, and widget fields do not survive
 composition). Keep stateful components in single-line cells, and give
 components a =:key= so measurement matches them exactly. An empty
 cell keeps its track, so columns stay aligned.

@@ -1286,6 +1286,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Documentation
 
+- The layout guide's nesting example puts its two columns in a
+  =vui-flex :wrap t= instead of a =vui-hstack=. An hstack is inline
+  flow, so the second column started on the last line of the first.
+  The guide, the =vui-hstack= docstring and the API reference now say
+  so and point to =vui-flex :wrap= and =vui-grid= for side by side
+  blocks. The flex and grid docs no longer say buttons in composed
+  rows keep working: they run their handlers outside any component,
+  so a handler that calls =vui-set-state= fails there.
 - The inline guide, the reference and the docstring of
   =vui-mount-inline= say what happens to host text inserted right
   before a region that starts with a field, or right after one that

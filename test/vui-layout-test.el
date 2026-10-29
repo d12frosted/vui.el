@@ -19,6 +19,15 @@
       (button-activate button))))
 
 (describe "vui-hstack"
+  (it "puts a child after a multi-line child on its last line"
+    (with-temp-buffer
+      (vui-render (vui-hstack :spacing 4
+                    (vui-vstack (vui-text "Statistics") (vui-text "Users: 100")
+                                (vui-text "Sales: 50"))
+                    (vui-vstack (vui-text "Actions") (vui-button "Add User"))))
+      (expect (buffer-string)
+              :to-equal "Statistics\nUsers: 100\nSales: 50    Actions\n[Add User]")))
+
   (it "creates an hstack vnode"
     (let ((node (vui-hstack (vui-text "a") (vui-text "b"))))
       (expect (vui-vnode-hstack-p node) :to-be-truthy)
@@ -1911,6 +1920,19 @@
         (kill-buffer buf)))))
 
 (describe "vui-flex"
+  (it "puts multi-line blocks side by side in a wrapping row, as the guide shows"
+    (with-temp-buffer
+      (vui-render (vui-flex :wrap t :spacing 4
+                    (vui-vstack (vui-text "Statistics") (vui-text "Users: 100")
+                                (vui-text "Sales: 50"))
+                    (vui-vstack (vui-text "Actions") (vui-button "Add User")
+                                (vui-button "View Report"))))
+      (expect (mapcar #'string-trim-right
+                      (split-string (buffer-string) "\n"))
+              :to-equal '("Statistics    Actions"
+                          "Users: 100    [Add User]"
+                          "Sales: 50     [View Report]"))))
+
   (it "renders children at natural width when nothing grows"
     (with-temp-buffer
       (vui-render (vui-flex :width 20

@@ -660,7 +660,8 @@ occupies. For example:
 
 Multi-line children become proper blocks: a row places them side by
 side line by line, as tall as its tallest block. Such composed rows
-are text (like table cells): buttons keep working, but components in
+are text (like table cells): buttons run their handlers outside any
+component (so a handler cannot call =vui-set-state=), components in
 them never mount - no state, no lifecycle, no working
 =vui-set-state= - and widget fields do not survive composition. Rows
 whose children are all single-line render exactly like a non-wrapped
@@ -719,19 +720,46 @@ Layouts can be nested for complex structures:
                         (vui-button "Refresh"))
 
             ;; Two-column content
-            (vui-hstack :spacing 4
-                        ;; Left column
-                        (vui-vstack
-                         (vui-text "Statistics")
-                         (vui-text "Users: 100")
-                         (vui-text "Sales: 50"))
+            (vui-flex :wrap t :spacing 4
+              ;; Left column
+              (vui-vstack
+               (vui-text "Statistics")
+               (vui-text "Users: 100")
+               (vui-text "Sales: 50"))
 
-                        ;; Right column
-                        (vui-vstack
-                         (vui-text "Actions")
-                         (vui-button "Add User")
-                         (vui-button "View Report"))))
+              ;; Right column
+              (vui-vstack
+               (vui-text "Actions")
+               (vui-button "Add User")
+               (vui-button "View Report"))))
 #+end_src
+
+The two columns use =vui-flex :wrap t=, not =vui-hstack=. An hstack is
+inline flow: each child goes on from where the one before it ends, so
+a multi-line child pushes the next one down to its last line:
+
+#+begin_example
+Statistics
+Users: 100
+Sales: 50    Actions
+[Add User]
+[View Report]
+#+end_example
+
+A wrapping flex row (or a =vui-grid= row) with a multi-line child is
+composed from the children's text, so the blocks sit side by side:
+
+#+begin_example
+Statistics    Actions
+Users: 100    [Add User]
+Sales: 50     [View Report]
+#+end_example
+
+Composed rows are text. Their buttons run handlers that need no
+component, like =message=, but a handler that calls =vui-set-state=
+fails there, components in them never mount, and fields do not
+survive (see =vui-flex= above). Keep anything interactive that has
+state on single-line rows.
 
 * Styling Containers - =:face= and =:keymap=
 

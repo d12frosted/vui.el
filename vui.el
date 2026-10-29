@@ -1536,6 +1536,11 @@ Options: :spacing N (spaces between children, default 1)
                       see `vui-region')
          :key KEY (for reconciliation)
 
+The children flow inline: each starts where the one before it ends,
+so a multi-line child puts the next one on its last line.  For
+multi-line blocks side by side, use `vui-flex' with :wrap or
+`vui-grid'.
+
 Usage: (vui-hstack child1 child2 child3)
        (vui-hstack :spacing 2 child1 child2)"
   (let ((spacing 1)
@@ -1761,8 +1766,9 @@ their row's leftover, `vui-flex-item' :min-width lets a child shrink).
 A row whose children are all single-line renders them in place, like a
 non-wrapped flex; a row containing a multi-line child is composed from
 the children's rendered text, so a table-like panel row keeps its
-lines side by side.  Composed rows are content: buttons keep working,
-but components in them never mount - no state, no lifecycle, and
+lines side by side.  Composed rows are content: buttons run their
+handlers outside any component, so a handler cannot call
+`vui-set-state'; components in them never mount - no state, no lifecycle, and
 `vui-set-state' from inside them does nothing - and widget fields do
 not survive composition.  Keep stateful components on single-line
 rows (or outside :wrap), and give components a :key so measurement
@@ -1879,7 +1885,8 @@ table or field fills its track exactly.
 
 Identity follows `vui-flex' :wrap: a row of single-line cells renders
 in place (components and widgets keep their identity), a row with a
-multi-line cell is composed as text - buttons keep working, but
+multi-line cell is composed as text - buttons run their handlers
+outside any component (so a handler cannot call `vui-set-state'), and
 components in composed rows never mount (no state, no lifecycle) and
 widget fields do not survive composition.  Keep stateful components
 in single-line cells, and give components a :key so measurement
