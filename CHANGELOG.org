@@ -97,6 +97,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A redefined component renders its new body in trees that are already
+  mounted, as the debugging guide says. Before, every instance kept
+  the definition it was made with, so only new instances saw the
+  change. Instances keep their state, and a =:memo= or
+  =:should-update= component renders the new body too, and so does one
+  below a component whose =:should-update= would skip. In that render
+  memos and callbacks are computed again, effects run again, and new
+  state variables get their initial values. The guide's
+  hot-reload snippet also calls =vui-flush-sync= in the app's buffer,
+  since from another buffer it re-renders nothing.
 - =vui-text= puts a keyword property on the text under its plain name,
   so =:help-echo "tip"= sets =help-echo= and shows a tooltip, as the
   guide says. Before, the text got a =:help-echo= property that Emacs

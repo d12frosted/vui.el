@@ -988,4 +988,248 @@
         (kill-buffer "*test-table-cursor*")))))
 
 
+(describe "redefining a component"
+  (it "renders the new body in a mounted tree and keeps state"
+    (vui-defcomponent rdc-child () :render (vui-text "Original"))
+    (vui-defcomponent rdc-app ()
+      :state ((n 0))
+      :render (vui-fragment
+               (vui-text (format "%d " n))
+               (vui-button "inc" :on-click (lambda () (vui-set-state :n (1+ n))))
+               (vui-component 'rdc-child)))
+    (vui-mount (vui-component 'rdc-app) "*rdc*")
+    (unwind-protect
+        (with-current-buffer "*rdc*"
+          (push-button (progn (goto-char (point-min)) (search-forward "inc")))
+          (vui-flush-sync)
+          (vui-defcomponent rdc-child () :render (vui-text "Modified"))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "1 [inc]Modified"))
+      (kill-buffer "*rdc*")))
+
+  (it "renders the new body of a component whose should-update says no"
+    (vui-defcomponent rdc-memo () :should-update (ignore) :render (vui-text "Original"))
+    (vui-defcomponent rdc-memo-app ()
+      :render (vui-component 'rdc-memo))
+    (vui-mount (vui-component 'rdc-memo-app) "*rdc-memo*")
+    (unwind-protect
+        (with-current-buffer "*rdc-memo*"
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "Original")
+          (vui-defcomponent rdc-memo () :should-update (ignore) :render (vui-text "Modified"))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "Modified"))
+      (kill-buffer "*rdc-memo*")))
+
+  (it "does not bail out a redefined child of a patched component list"
+    (let ((vui-incremental-render t))
+      (vui-defcomponent rdc-bail () :should-update (ignore)
+        :render (vui-text "Original"))
+      (vui-defcomponent rdc-other () :render (vui-text "other"))
+      (vui-defcomponent rdc-list ()
+        :render (vui-vstack (vui-component 'rdc-other) (vui-component 'rdc-bail)))
+      (vui-mount (vui-component 'rdc-list) "*rdc-list*")
+      (unwind-protect
+          (with-current-buffer "*rdc-list*"
+            (vui-flush-sync)
+            (vui-defcomponent rdc-bail () :should-update (ignore)
+              :render (vui-text "Modified"))
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "other\nModified"))
+        (kill-buffer "*rdc-list*"))))
+
+  (it "recomputes memos and callbacks and reruns effects of the new body"
+    (let ((log nil))
+      (vui-defcomponent rdc-hooks ()
+        :render (let ((m (vui-use-memo () "memo-v1"))
+                      (cb (vui-use-callback () "cb-v1")))
+                  (vui-use-effect ()
+                    (push 'v1 log)
+                    (lambda () (push 'cleanup-v1 log)))
+                  (vui-text (format "%s %s" m (funcall cb)))))
+      (vui-mount (vui-component 'rdc-hooks) "*rdc-hooks*")
+      (unwind-protect
+          (with-current-buffer "*rdc-hooks*"
+            (vui-defcomponent rdc-hooks ()
+              :render (let ((m (vui-use-memo () "memo-v2"))
+                            (cb (vui-use-callback () "cb-v2")))
+                        (vui-use-effect ()
+                          (push 'v2 log)
+                          nil)
+                        (vui-text (format "%s %s" m (funcall cb)))))
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "memo-v2 cb-v2")
+            (expect (reverse log) :to-equal '(v1 cleanup-v1 v2))
+            ;; Once: the effect's empty deps hold again after that render
+            (vui-flush-sync)
+            (expect (reverse log) :to-equal '(v1 cleanup-v1 v2)))
+        (kill-buffer "*rdc-hooks*"))))
+
+  (it "keeps the effects of an unchanged child of a redefined component"
+    (let ((runs 0))
+      (vui-defcomponent rdc-kid ()
+        :render (progn (vui-use-effect () (cl-incf runs)) (vui-text "kid")))
+      (vui-defcomponent rdc-parent () :render (vui-component 'rdc-kid))
+      (vui-mount (vui-component 'rdc-parent) "*rdc-parent*")
+      (unwind-protect
+          (with-current-buffer "*rdc-parent*"
+            (vui-defcomponent rdc-parent ()
+              :render (vui-vstack (vui-component 'rdc-kid)))
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "kid")
+            (expect runs :to-equal 1))
+        (kill-buffer "*rdc-parent*"))))
+
+  (it "measures a redefined cell with fresh memos"
+    (vui-defcomponent rdc-mcell () :render (vui-text (vui-use-memo () "ab")))
+    (vui-defcomponent rdc-mrow ()
+      :render (vui-flex :width 12 :spacing 1
+                (vui-component 'rdc-mcell)
+                (vui-flex-item :grow 1
+                  (lambda (width) (vui-text (make-string width ?-))))))
+    (vui-mount (vui-component 'rdc-mrow) "*rdc-mrow*")
+    (unwind-protect
+        (with-current-buffer "*rdc-mrow*"
+          (vui-defcomponent rdc-mcell ()
+            :render (vui-text (vui-use-memo () "abcdef")))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "abcdef -----"))
+      (kill-buffer "*rdc-mrow*")))
+
+  (it "measures a redefined cell with the state variables it adds"
+    (vui-defcomponent rdc-scell () :render (vui-text "ab"))
+    (vui-defcomponent rdc-srow ()
+      :render (vui-flex :width 12 :spacing 1
+                (vui-component 'rdc-scell)
+                (vui-flex-item :grow 1
+                  (lambda (width) (vui-text (make-string width ?-))))))
+    (vui-mount (vui-component 'rdc-srow) "*rdc-srow*")
+    (unwind-protect
+        (with-current-buffer "*rdc-srow*"
+          (vui-defcomponent rdc-scell ()
+            :state ((label "abcdef"))
+            :render (vui-text label))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "abcdef -----"))
+      (kill-buffer "*rdc-srow*")))
+
+  (it "adds the new state variables once their initial value stops signalling"
+    (defvar rdc-init-ok nil)
+    (setq rdc-init-ok nil)
+    (vui-defcomponent rdc-init () :render (vui-text "old"))
+    (vui-mount (vui-component 'rdc-init) "*rdc-init*")
+    (unwind-protect
+        (with-current-buffer "*rdc-init*"
+          (vui-defcomponent rdc-init ()
+            :state ((x (if rdc-init-ok 1 (error "Not yet"))))
+            :render (vui-text (format "x=%S" x)))
+          (expect (vui-flush-sync) :to-throw 'error)
+          (setq rdc-init-ok t)
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "x=1"))
+      (kill-buffer "*rdc-init*")))
+
+  (it "renders a redefined child under a root whose should-update says no"
+    (vui-defcomponent rdc-skip-child () :render (vui-text "Original"))
+    (vui-defcomponent rdc-skip-root () :should-update (ignore)
+      :render (vui-component 'rdc-skip-child))
+    (vui-mount (vui-component 'rdc-skip-root) "*rdc-skip*")
+    (unwind-protect
+        (with-current-buffer "*rdc-skip*"
+          (vui-flush-sync)
+          (vui-flush-sync)
+          (vui-defcomponent rdc-skip-child () :render (vui-text "Modified"))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "Modified"))
+      (kill-buffer "*rdc-skip*")))
+
+  (it "renders a redefined child under a list child that would bail out"
+    (let ((vui-incremental-render t))
+      (vui-defcomponent rdc-deep () :render (vui-text "Original"))
+      (vui-defcomponent rdc-mid () :should-update (ignore)
+        :render (vui-component 'rdc-deep))
+      (vui-defcomponent rdc-deep-list ()
+        :render (vui-vstack (vui-component 'rdc-other) (vui-component 'rdc-mid)))
+      (vui-defcomponent rdc-other () :render (vui-text "other"))
+      (vui-mount (vui-component 'rdc-deep-list) "*rdc-deep*")
+      (unwind-protect
+          (with-current-buffer "*rdc-deep*"
+            (vui-flush-sync)
+            (vui-defcomponent rdc-deep () :render (vui-text "Modified"))
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "other\nModified"))
+        (kill-buffer "*rdc-deep*"))))
+
+  (it "gives a state variable the new definition adds its initial value"
+    (vui-defcomponent rdc-sv-child ()
+      :render (vui-text "child"))
+    (vui-defcomponent rdc-sv-root ()
+      :state ((open 'root))
+      :render (vui-fragment (vui-text (format "%s " open))
+                            (vui-component 'rdc-sv-child)))
+    (vui-mount (vui-component 'rdc-sv-root) "*rdc-sv*")
+    (unwind-protect
+        (with-current-buffer "*rdc-sv*"
+          (vui-defcomponent rdc-sv-child ()
+            :state ((open 'closed) (count 3))
+            :render (vui-hstack
+                     (vui-text (format "%s %s" open count))
+                     (vui-button "open" :on-click (lambda () (vui-set-state :open 'yes)))))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "root closed 3 [open]")
+          (push-button (progn (goto-char (point-min)) (search-forward "[open")))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "root yes 3 [open]"))
+      (kill-buffer "*rdc-sv*")))
+
+  (it "lets the new definition's should-update count after one render"
+    (let ((renders 0))
+      (vui-defcomponent rdc-once () :should-update (ignore)
+        :render (vui-text "Original"))
+      (vui-defcomponent rdc-once-app () :render (vui-component 'rdc-once))
+      (vui-mount (vui-component 'rdc-once-app) "*rdc-once*")
+      (unwind-protect
+          (with-current-buffer "*rdc-once*"
+            (vui-defcomponent rdc-once () :should-update (ignore)
+              :render (progn (cl-incf renders) (vui-text "Modified")))
+            (vui-flush-sync)
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "Modified")
+            (expect renders :to-equal 1))
+        (kill-buffer "*rdc-once*"))))
+
+  (it "measures the new body in a flex row"
+    (dolist (should-update '(t (ignore)))
+      (eval `(vui-defcomponent rdc-cell () :should-update ,should-update
+               :render (vui-text "ab"))
+            t)
+      (vui-defcomponent rdc-row ()
+        :render (vui-flex :width 12 :spacing 1
+                  (vui-component 'rdc-cell)
+                  (vui-flex-item :grow 1
+                    (lambda (width) (vui-text (make-string width ?-))))))
+      (vui-mount (vui-component 'rdc-row) "*rdc-row*")
+      (unwind-protect
+          (with-current-buffer "*rdc-row*"
+            (expect (buffer-string) :to-equal "ab ---------")
+            (eval `(vui-defcomponent rdc-cell () :should-update ,should-update
+                     :render (vui-text "abcdef"))
+                  t)
+            (vui-flush-sync)
+            (expect (buffer-string) :to-equal "abcdef -----"))
+        (kill-buffer "*rdc-row*"))))
+
+  (it "renders the new body of a memo component"
+    (vui-defcomponent rdc-pure (label) :memo t :render (vui-text label))
+    (vui-defcomponent rdc-pure-app ()
+      :render (vui-component 'rdc-pure :label "a"))
+    (vui-mount (vui-component 'rdc-pure-app) "*rdc-pure*")
+    (unwind-protect
+        (with-current-buffer "*rdc-pure*"
+          (vui-defcomponent rdc-pure (label) :memo t
+            :render (vui-text (upcase label)))
+          (vui-flush-sync)
+          (expect (buffer-string) :to-equal "A"))
+      (kill-buffer "*rdc-pure*"))))
+
 ;;; vui-component-test.el ends here

@@ -888,6 +888,7 @@ Maps boundary keys to caught errors.  Lazily initialized by
   cached-vtree  ; Last rendered vtree (for should-update optimization)
   mounted-p   ; t once mounted, `unmounted' after the unmount, else nil
   mount-cleanup ; Cleanup function returned from on-mount, called during unmount
+  def-generation ; `vui--def-generation' at the last render
   effects     ; Alist of (effect-id . (deps . cleanup-fn)) for vui-use-effect
   refs        ; Hash table of ref-id -> (value . nil) for vui-use-ref
   callbacks   ; Hash table of callback-id -> (deps . fn) for vui-use-callback
@@ -1186,9 +1187,38 @@ buffer whose remappings to use.")
 
 (add-hook 'after-setting-font-hook #'vui--reset-text-pixel-cache)
 
+(defvar vui--def-generation 0
+  "Count of component redefinitions.
+An instance that last rendered under another count renders in full
+once: no should-update skips it and no bailout keeps its text, so a
+redefined component below it renders its new body.")
+
 (defun vui--register-component (def)
   "Register component definition DEF in the registry."
+  (let ((old (gethash (vui-component-def-name def) vui--component-registry)))
+    (when (and old (not (eq old def)))
+      (cl-incf vui--def-generation)))
   (puthash (vui-component-def-name def) def vui--component-registry))
+
+(defun vui--current-def (instance)
+  "Return the definition INSTANCE renders with now.
+That is the one registered under its component's name, so a component
+redefined after INSTANCE was made renders its new body.  INSTANCE's own
+definition is returned for a name the registry does not hold."
+  (let ((def (vui-instance-def instance)))
+    (or (gethash (vui-component-def-name def) vui--component-registry)
+        def)))
+
+(defun vui--redefined-state (instance def props)
+  "Return INSTANCE's state with the state variables DEF adds.
+DEF is the component's new definition and PROPS the props it renders
+with.  A variable INSTANCE's state lacks gets its initial value."
+  (let ((state (vui-instance-state instance)))
+    (when-let* ((init-fn (vui-component-def-initial-state-fn def)))
+      (cl-loop for (k v) on (funcall init-fn props) by #'cddr
+               unless (plist-member state k)
+               do (setq state (append state (list k v)))))
+    state))
 
 (defun vui--get-component (name)
   "Get component definition by NAME."
@@ -1232,6 +1262,14 @@ keyword sections:
 All forms have access to props as variables, state variables,
 and `children' for nested content.  on-update and should-update
 have access to `prev-props' and `prev-state'.
+
+Evaluating the form again redefines NAME: mounted instances render
+the new body on their next render, keeping their state, even when
+:memo or :should-update would skip it.  In that render, memos and
+callbacks are computed again, effects run again, and state variables
+the new definition adds get their initial values.  Every evaluation
+counts as a redefinition, and after one every component renders in
+full once, so define components at top level.
 
 Example:
   (vui-defcomponent greeting (name)
@@ -2574,6 +2612,11 @@ Examples:
     (list ,@deps)
     (lambda () ,@body)))
 
+(defvar vui--redefined-instance nil
+  "The instance rendering for the first time since its component changed.
+Its effects run again whatever their deps say, as the code that set
+them up changed (see `vui--current-def').")
+
 (defun vui--register-effect (deps effect-fn)
   "Register an effect with DEPS and EFFECT-FN to run after commit.
 Called from within a component's render function."
@@ -2588,7 +2631,8 @@ Called from within a component's render function."
     (cl-incf vui--effect-index)
     ;; Check if deps changed (or first run)
     (when (or (null prev-entry)
-              (not (equal prev-deps deps)))
+              (not (equal prev-deps deps))
+              (eq instance vui--redefined-instance))
       ;; Schedule effect to run after commit
       (push (list instance effect-id deps effect-fn (cddr prev-entry))
             vui--pending-effects))))
@@ -6128,10 +6172,33 @@ its tree renders with it.  See `vui--render-component'."
          ;; O(S) not O(S^2).  Nil when there is nothing to reuse.
          (vui--reconcile-lookup (and old-children
                                      (vui--build-reconcile-lookup instance old-children)))
-         (def (vui-instance-def instance))
+         (current-def (vui--current-def instance))
+         (redefined (not (eq (vui-instance-def instance) current-def)))
+         ;; Computed before the new definition is adopted: when the
+         ;; initial values signal, the next render tries again
+         (redefined-state (and redefined
+                               (vui--redefined-state instance current-def
+                                                     (vui-instance-props instance))))
+         (def (setf (vui-instance-def instance) current-def))
+         ;; The new body's hooks: memos and callbacks are computed
+         ;; again, effects run again (refs keep their values)
+         (vui--redefined-instance (if redefined instance vui--redefined-instance))
+         (_ (when redefined
+              (when-let* ((memos (vui-instance-memos instance)))
+                (clrhash memos))
+              (when-let* ((callbacks (vui-instance-callbacks instance)))
+                (clrhash callbacks))
+              (setf (vui-instance-state instance) redefined-state)))
+         ;; Rendered under an older generation: render in full this once
+         (stale (not (eql (vui-instance-def-generation instance)
+                          vui--def-generation)))
+         (_ (setf (vui-instance-def-generation instance) vui--def-generation))
          (component-name (vui-component-def-name def))
          (render-fn (vui-component-def-render-fn def))
-         (should-update-fn (vui-component-def-should-update def))
+         ;; A redefined component renders its new body whatever the
+         ;; old cached render would say
+         (should-update-fn (and (not stale)
+                                (vui-component-def-should-update def)))
          (props (vui-instance-props instance))
          (state (vui-instance-state instance))
          (first-render-p (not (vui-instance-mounted-p instance)))
@@ -6864,10 +6931,16 @@ never touched."
         (maphash (lambda (key ref) (puthash key (cons (car ref) (cdr ref)) copy))
                  refs)
         (setf (vui-instance-refs shim) copy)))
-    (when-let* ((memos (vui-instance-memos instance)))
-      (setf (vui-instance-memos shim) (copy-hash-table memos)))
-    (when-let* ((callbacks (vui-instance-callbacks instance)))
-      (setf (vui-instance-callbacks shim) (copy-hash-table callbacks)))
+    ;; A redefined component computes its memos and callbacks again
+    ;; (see `vui--render-instance')
+    (if (eq (vui-instance-def instance) (vui--current-def instance))
+        (progn
+          (when-let* ((memos (vui-instance-memos instance)))
+            (setf (vui-instance-memos shim) (copy-hash-table memos)))
+          (when-let* ((callbacks (vui-instance-callbacks instance)))
+            (setf (vui-instance-callbacks shim) (copy-hash-table callbacks))))
+      (setf (vui-instance-memos shim) nil
+            (vui-instance-callbacks shim) nil))
     shim))
 
 (defun vui--measure-instance-vtree (instance vnode)
@@ -6885,15 +6958,19 @@ copy (see `vui--measure-shim-instance') so render-time ref, memo, and
 callback writes are discarded, and no cached vtree, children, prev
 props/state, or lifecycle are touched - the real render does all of
 that."
-  (let* ((def (vui-instance-def instance))
+  (let* ((def (vui--current-def instance))
          (render-fn (vui-component-def-render-fn def))
-         (should-update-fn (vui-component-def-should-update def))
+         (should-update-fn (and (eql (vui-instance-def-generation instance)
+                                     vui--def-generation)
+                                (vui-component-def-should-update def)))
          (props (vui-vnode-component-props vnode))
          (children (vui-vnode-component-children vnode))
          (props-wc (if children
                        (plist-put (copy-sequence props) :children children)
                      props))
-         (state (vui-instance-state instance)))
+         (state (if (eq def (vui-instance-def instance))
+                    (vui-instance-state instance)
+                  (vui--redefined-state instance def props-wc))))
     (if (and should-update-fn
              (not (funcall should-update-fn props-wc state
                            (vui-instance-prev-props instance)
@@ -8267,6 +8344,9 @@ structural bailout: skipping it leaves the instance's buffer region
   (let* ((def (vui-instance-def instance))
          (su (vui-component-def-should-update def)))
     (and (vui-instance-mounted-p instance)
+         ;; Not when a component was redefined since it rendered: one
+         ;; below it may render a new body
+         (eql (vui-instance-def-generation instance) vui--def-generation)
          su
          (vui-instance-r-len instance)
          ;; Not when a component below it changed its state

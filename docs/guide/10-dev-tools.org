@@ -300,20 +300,40 @@ vui-last-error
 
 ** Hot Reloading Components
 
-Re-define a component and it takes effect on next render:
+Re-define a component and it takes effect on the next render of
+every mounted instance. Their state is kept:
 
 #+begin_src elisp
 ;; Original
 (vui-defcomponent my-comp ()
   :render (vui-text "Original"))
 
+(vui-mount (vui-component 'my-comp) "*my-app*")
+
 ;; Modify and re-evaluate
 (vui-defcomponent my-comp ()
   :render (vui-text "Modified"))
 
-;; Trigger re-render to see changes
-(vui-flush-sync)
+;; Re-render the app to see the change
+(with-current-buffer "*my-app*"
+  (vui-flush-sync))
 #+end_src
+
+=vui-flush-sync= re-renders the tree of the current buffer, so call it
+in the app's buffer (or pass the root instance to =vui-rerender=). A
+redefined component renders its new body even when its =:memo= or
+=:should-update= would skip the render. In that render its
+=vui-use-memo= and =vui-use-callback= values are computed again and its
+effects run again (after the old cleanups), whatever their deps say;
+refs and =vui-use-async= results are kept. A state variable that the
+new definition adds starts at its initial value.
+
+After a redefinition, every component renders in full once on its
+next render (a component whose =:should-update= would skip it renders
+too), so a redefined component deep in a tree is reached. Each
+evaluation of =vui-defcomponent= counts as a redefinition, so define
+components at top level, not inside a render or a function that runs
+often.
 
 ** REPL Inspection
 
