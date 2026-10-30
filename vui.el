@@ -6219,7 +6219,12 @@ its tree renders with it.  See `vui--render-component'."
                                       component-name first-render-p)
                       (let ((new-vtree (vui--with-timing 'render component-name
                                          (vui--with-debug-indent
-                                          (funcall render-fn props state)))))
+                                          ;; The commit writes at point.  A
+                                          ;; render that selects a window on
+                                          ;; the buffer moves point to the
+                                          ;; window's point.
+                                          (save-excursion
+                                            (funcall render-fn props state))))))
                         (setf (vui-instance-cached-vtree instance) new-vtree)
                         new-vtree))
                   ;; Use cached vtree

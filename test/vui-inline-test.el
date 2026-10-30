@@ -270,6 +270,19 @@ fields."
         (vui-update instance '(:wide t))
         (expect (char-after) :to-equal ?A))))
 
+  (it "writes in its region when its render moves point"
+    ;; As a render that selects a window on the buffer does
+    (with-temp-buffer
+      (insert "HEAD\nTAIL")
+      (vui-defcomponent inline-render-point-mover (label)
+        :render (progn (goto-char (point-min))
+                       (vui-text label)))
+      (let ((instance (vui-mount-inline
+                       (vui-component 'inline-render-point-mover :label "[a]") 6)))
+        (vui-update instance '(:label "[bb]"))
+        (expect (buffer-string) :to-equal "HEAD\n[bb]TAIL")
+        (expect (vui-inline-test--bounds instance) :to-equal '(6 . 10)))))
+
   (it "keeps point inside a field across re-renders"
     (with-temp-buffer
       (insert "HOST\n")
