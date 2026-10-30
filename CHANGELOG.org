@@ -97,6 +97,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component whose render function moves point re-renders in its own
+  place. The new text was written at the point the render left, so a
+  render that selected a window on its buffer wrote at that window's
+  point: an inline region wrote into the text before it, deleted text
+  there, and left its own place empty. The render function now runs
+  with point kept, as lifecycle hooks already did.
+
 - A component without a key no longer takes over the instance of a keyed
   sibling. A list of components without keys followed by a keyed one
   gave the new list item the keyed component's instance and state when
