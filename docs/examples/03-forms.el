@@ -125,17 +125,27 @@
           (errors '()))
 
   :render
-  ;; Field validation is defined once in :validate lambdas.
-  ;; valid-p checks: fields have values, no errors, and checkbox agreed.
+  ;; Field validation is defined once in :validate lambdas.  A field's
+  ;; :validate runs only on that field's own input, so the check that
+  ;; spans two fields (the confirmation matches the password) is made
+  ;; here, from state, on every render.  The password state holds only
+  ;; a valid password, so while the password field shows its own error
+  ;; there is nothing to compare with.
+  ;; valid-p checks: fields have values, no errors, the passwords match
+  ;; and checkbox agreed.
   (let* ((set-error (lambda (key err)
                       (vui-set-state :errors
                                      (if err
                                          (cons key (remove key errors))
                                        (remove key errors)))))
+         (mismatch (and (not (string-empty-p confirm))
+                        (not (memq 'password errors))
+                        (not (string= confirm password))))
          (valid-p (and (not (string-empty-p username))
                        (not (string-empty-p email))
                        (not (string-empty-p password))
                        (not (string-empty-p confirm))
+                       (not mismatch)
                        agree
                        (null errors)))
          (submit (lambda ()
@@ -194,7 +204,7 @@
        :on-change (lambda (v) (vui-set-state :password v))
        :on-error (lambda (err _) (funcall set-error 'password err))))
 
-     ;; Confirm Password - must match password
+     ;; Confirm Password - must match password (checked in valid-p)
      (vui-hstack
       (vui-text "Confirm:  ")
       (vui-typed-field
@@ -203,12 +213,11 @@
        :size 20
        :secret t
        :required t
-       :validate (lambda (v)
-                   (unless (string= v password)
-                     "Passwords don't match"))
        :show-error 'inline
        :on-change (lambda (v) (vui-set-state :confirm v))
-       :on-error (lambda (err _) (funcall set-error 'confirm err))))
+       :on-error (lambda (err _) (funcall set-error 'confirm err)))
+      (when mismatch
+        (vui-error "Passwords don't match")))
 
      ;; Terms checkbox
      (vui-newline)

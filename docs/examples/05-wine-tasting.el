@@ -76,9 +76,13 @@ Always returns a fixed-width string for consistent table alignment."
 
 (vui-defcomponent summary-table (scores wines)
   :render
+  ;; Each participant's scores are a plist (WINE-ID SCORE ...): take
+  ;; the scores, not the ids
   (let* ((all-scores (seq-mapcat
                       (lambda (participant-scores)
-                        (seq-filter #'numberp (cdr participant-scores)))
+                        (cl-loop for (_id score) on (cdr participant-scores)
+                                 by #'cddr
+                                 when (numberp score) collect score))
                       scores))
          (rms (vui-example--rms all-scores))
          (avg (vui-example--avg all-scores)))

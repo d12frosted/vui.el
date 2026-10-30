@@ -166,68 +166,66 @@
     :face 'font-lock-comment-face))
 
 
+;;; Loading a Directory
+
+(defun vui-example--file-browser-path ()
+  "Return the path of the context, expanded, without a trailing slash.
+Reads the context, so call it in a render or a lifecycle hook.
+The breadcrumb gives paths with a slash and entries without, so the
+same directory compares equal however it was opened."
+  (directory-file-name (expand-file-name (use-file-browser-path))))
+
+(defun vui-example--file-browser-entries (path)
+  "Return the entries of directory PATH, without . and ..
+Each entry is a plist with :name, :type and :size.  Signals an error
+when PATH cannot be read."
+  (mapcar (lambda (f)
+            (list :name (car f)
+                  :type (if (file-directory-p (expand-file-name (car f) path))
+                            'directory 'file)
+                  :size (file-attribute-size (cdr f))))
+          (seq-remove (lambda (f) (member (car f) '("." "..")))
+                      (directory-files-and-attributes path nil nil t))))
+
+(defun vui-example--file-browser-load (path)
+  "Load the entries of PATH into the state of the current component.
+Records PATH as :last-path, and an :error when PATH cannot be read."
+  (condition-case err
+      (let ((entries (vui-example--file-browser-entries path)))
+        (vui-batch
+         (vui-set-state :last-path path)
+         (vui-set-state :entries entries)
+         (vui-set-state :error nil)
+         (vui-set-state :loading nil)))
+    (error
+     (vui-batch
+      (vui-set-state :last-path path)
+      (vui-set-state :entries nil)
+      (vui-set-state :error (error-message-string err))
+      (vui-set-state :loading nil)))))
+
+
 ;;; Main File Browser Component
 
 (vui-defcomponent file-browser-main ()
   :state ((entries nil)
           (loading t)
           (error nil)
+          ;; The path ENTRIES were loaded from
+          (last-path nil)
           (sort-by 'name)
           (sort-asc t)
           (filter ""))
 
   :on-mount
-  (let ((path (expand-file-name (use-file-browser-path))))
-    (condition-case err
-        (let ((files (directory-files-and-attributes path nil nil t)))
-          (vui-batch
-           (vui-set-state :entries
-                          (mapcar (lambda (f)
-                                    (list :name (car f)
-                                          :type (if (file-directory-p
-                                                     (expand-file-name (car f) path))
-                                                    'directory 'file)
-                                          :size (file-attribute-size (cdr f))))
-                                  ;; Skip . and ..
-                                  (seq-filter (lambda (f)
-                                                (not (member (car f) '("." ".."))))
-                                              files)))
-           (vui-set-state :loading nil)))
-      (error
-       (vui-batch
-        (vui-set-state :error (error-message-string err))
-        (vui-set-state :loading nil)))))
+  (vui-example--file-browser-load (vui-example--file-browser-path))
 
   :on-update
   ;; Reload when path changes
-  (let ((path (expand-file-name (use-file-browser-path))))
-    (when (not (equal path (plist-get prev-state :last-path)))
-      ;; Set last-path immediately to prevent re-triggering on next update
-      (vui-batch
-       (vui-set-state :last-path path)
-       (vui-set-state :loading t)
-       (vui-set-state :entries nil)
-       (vui-set-state :error nil)
-       (vui-set-state :filter ""))
-      ;; Load new directory
-      (condition-case err
-          (let ((files (directory-files-and-attributes path nil nil t)))
-            (vui-batch
-             (vui-set-state :entries
-                            (mapcar (lambda (f)
-                                      (list :name (car f)
-                                            :type (if (file-directory-p
-                                                       (expand-file-name (car f) path))
-                                                      'directory 'file)
-                                            :size (file-attribute-size (cdr f))))
-                                    (seq-filter (lambda (f)
-                                                  (not (member (car f) '("." ".."))))
-                                                files)))
-             (vui-set-state :loading nil)))
-        (error
-         (vui-batch
-          (vui-set-state :error (error-message-string err))
-          (vui-set-state :loading nil))))))
+  (let ((path (vui-example--file-browser-path)))
+    (unless (equal path last-path)
+      (vui-set-state :filter "")
+      (vui-example--file-browser-load path)))
 
   :render
   (let ((path (use-file-browser-path))
@@ -264,8 +262,8 @@
         (vui-text (format "Error: %s" error) :face 'error)
         (vui-button "Retry"
           :on-click (lambda ()
-                      (vui-set-state :loading t)
-                      (vui-set-state :error nil)))))
+                      (vui-example--file-browser-load (directory-file-name
+                                           (expand-file-name path)))))))
       (t
        (vui-component 'file-list
          :entries entries
@@ -295,11 +293,8 @@
 ;;; Root App with Context Provider
 
 (vui-defcomponent file-browser (initial-path)
-  :state ((path nil))
-
-  :on-mount
-  (unless path
-    (vui-set-state :path (or initial-path (expand-file-name "~"))))
+  ;; Starts at INITIAL-PATH, so the first render already reads it
+  :state ((path initial-path))
 
   :render
   (file-browser-path-provider
@@ -327,38 +322,33 @@ Optional PATH specifies starting directory."
   :state ((path (expand-file-name "~"))
           (entries nil)
           (selected nil)
-          (filter ""))
+          (filter "")
+          ;; Why the last directory could not be opened, if it could not
+          (error nil))
 
   :on-mount
-  (let ((files (directory-files-and-attributes path nil nil t)))
-    (vui-set-state
-     :entries
-     (mapcar (lambda (f)
-               (list :name (car f)
-                     :type (if (file-directory-p
-                                (expand-file-name (car f) path))
-                               'directory 'file)))
-             (seq-filter (lambda (f)
-                           (not (member (car f) '("." ".."))))
-                         files))))
+  (condition-case err
+      (vui-set-state :entries (vui-example--file-browser-entries path))
+    (error (vui-set-state :error (error-message-string err))))
 
   :render
   (let ((go-to (lambda (dir)
-                 (let ((new-path (expand-file-name dir path)))
-                   (vui-batch
-                    (vui-set-state :path new-path)
-                    (vui-set-state :selected nil)
-                    (vui-set-state :filter "")
-                    (vui-set-state :entries
-                                   (mapcar (lambda (f)
-                                             (list :name (car f)
-                                                   :type (if (file-directory-p
-                                                              (expand-file-name (car f) new-path))
-                                                             'directory 'file)))
-                                           (seq-filter
-                                            (lambda (f)
-                                              (not (member (car f) '("." ".."))))
-                                            (directory-files-and-attributes new-path nil nil t))))))))
+                 ;; Stay where we are when DIR cannot be read
+                 (let ((new-path (if (equal dir "..")
+                                     ;; the parent; that of / is /
+                                     (file-name-directory
+                                      (directory-file-name path))
+                                   (expand-file-name dir path))))
+                   (condition-case err
+                       (let ((new-entries (vui-example--file-browser-entries new-path)))
+                         (vui-batch
+                          (vui-set-state :path new-path)
+                          (vui-set-state :selected nil)
+                          (vui-set-state :filter "")
+                          (vui-set-state :error nil)
+                          (vui-set-state :entries new-entries)))
+                     (error
+                      (vui-set-state :error (error-message-string err)))))))
         (filtered (seq-filter
                    (lambda (e)
                      (or (string-empty-p filter)
@@ -370,6 +360,8 @@ Optional PATH specifies starting directory."
      :spacing 1
      (vui-text "Select a File" :face 'bold)
      (vui-text path :face 'font-lock-comment-face)
+     (when error
+       (vui-text (format "Error: %s" error) :face 'error))
      (vui-text (make-string 40 ?-))
 
      ;; Filter
