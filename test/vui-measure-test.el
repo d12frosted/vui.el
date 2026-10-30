@@ -109,6 +109,48 @@
                         :to-be t)))
           (kill-buffer "*measure-id*"))))))
 
+;; A keyed sibling before the stateful child: the child keeps its place
+;; among the unkeyed children, so the measure finds it.
+(vui-defcomponent vui-measure-test-keyed-first ()
+  :render (vui-flex :width 22
+            (vui-component 'vui-measure-test-child :key 'k :label "kk")
+            (vui-component 'vui-measure-test-child :label "bb")
+            (vui-flex-item :grow 1 (vui-text "R"))))
+
+;; The same, one component level down, so the measure matches the
+;; wrapper's children rather than those of the component it renders in.
+(vui-defcomponent vui-measure-test-keyed-wrap ()
+  :render (vui-hstack :spacing 0
+            (vui-component 'vui-measure-test-child :key 'k :label "kk")
+            (vui-component 'vui-measure-test-child :label "bb")))
+
+(vui-defcomponent vui-measure-test-keyed-nested ()
+  :render (vui-flex :width 22
+            (vui-component 'vui-measure-test-keyed-wrap)
+            (vui-flex-item :grow 1 (vui-text "R"))))
+
+(describe "measuring unkeyed components after a keyed sibling"
+  (it "measures the unkeyed one at its current state"
+    (let ((vui-render-delay nil))
+      (vui-mount (vui-component 'vui-measure-test-keyed-first) "*measure-keyed*")
+      (unwind-protect
+          (with-current-buffer "*measure-keyed*"
+            (expect (buffer-string) :to-equal "[kk] [bb] R           ")
+            (vui-measure-test--click "[bb")
+            (expect (buffer-string) :to-equal "[kk] [bbbbbbbb] R     "))
+        (kill-buffer "*measure-keyed*"))))
+
+  (it "measures it at its current state inside another component"
+    (let ((vui-render-delay nil))
+      (vui-mount (vui-component 'vui-measure-test-keyed-nested)
+                 "*measure-keyed-nested*")
+      (unwind-protect
+          (with-current-buffer "*measure-keyed-nested*"
+            (expect (buffer-string) :to-equal "[kk][bb] R            ")
+            (vui-measure-test--click "[bb")
+            (expect (buffer-string) :to-equal "[kk][bbbbbbbb] R      "))
+        (kill-buffer "*measure-keyed-nested*")))))
+
 ;; A component whose should-update always says "skip": after the first
 ;; render, the real render always commits the cached vtree.
 (vui-defcomponent vui-measure-test-frozen ()

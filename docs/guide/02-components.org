@@ -306,6 +306,28 @@ When rendering lists of components, use =:key= to help vui.el track them:
 
 Keys should be stable, unique identifiers (not array indices).
 
+A component with a key keeps its instance (and its state) as long as a
+sibling of the same type has that key, wherever it moves. A component
+without a key is matched by its place among the siblings without a key,
+so keyed siblings around it can come and go without moving it. A keyed
+component and one without a key never share an instance.
+
+That is why the footer here keeps its state when the list above it
+grows or shrinks:
+
+#+begin_src elisp
+(vui-fragment
+ (cl-loop for todo in todos
+          collect (vui-component 'todo-item
+                                 :key (plist-get todo :id)
+                                 :todo todo))
+ (vui-component 'todo-footer :todos todos))
+#+end_src
+
+Components without keys in a list that changes shift with it: when an
+item is added before them, each one takes over the state of the one that
+was there. Give list items keys.
+
 * Component Composition
 
 Components can use other components:

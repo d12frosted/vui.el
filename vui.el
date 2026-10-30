@@ -922,7 +922,10 @@ Maps boundary keys to caught errors.  Lazily initialized by
   "Counter for generating unique instance IDs.")
 
 (defvar vui--child-index 0
-  "Index counter for child components during render (for keyless reconciliation).")
+  "Index counter for unkeyed child components during render.
+A component without a key matches the old child at its index among the
+unkeyed children (see `vui--find-matching-child'), so keyed children do
+not count: a keyed list that grows or shrinks moves no unkeyed sibling.")
 
 (defvar vui--consumed-contexts nil
   "Accumulator for contexts read during the current instance's own render.
@@ -1138,7 +1141,7 @@ loaders are not started, so the measurement has no side effects.")
 A cons (PARENT . INDEX) bound by a layout container around the
 measurement of its children, where PARENT is the live instance whose
 children the measured vnodes will reconcile against and INDEX the
-`vui--child-index' the next component vnode would receive.  Measure
+`vui--child-index' the next unkeyed component vnode would receive.  Measure
 passes advance INDEX exactly as the real render will, so a component
 measured mid-sequence still matches its own live instance.  Nil (the
 default) measures with throwaway instances only, as before.")
@@ -6425,22 +6428,29 @@ requests for this tree become no-ops."
 (defun vui--build-reconcile-lookup (parent children)
   "Build an O(1) reconciliation lookup over PARENT's existing CHILDREN.
 Returns a plist with :parent (for validation), :vec (a vector of the
-children for positional/index reuse) and :by-key (a hash from (TYPE . KEY)
-to the FIRST child with that type and key, matching the first-match
-semantics of the previous linear `cl-find-if').  Built once per parent
+unkeyed children, for reuse by position among them) and :by-key (a
+hash from (TYPE . KEY) to the FIRST child with that type and key,
+matching the first-match semantics of the previous linear
+`cl-find-if').  Built once per parent
 render, so per-child lookup in `vui--find-matching-child' is O(1)."
-  (let ((by-key (make-hash-table :test 'equal)))
+  (let ((by-key (make-hash-table :test 'equal))
+        (unkeyed nil))
     (dolist (child children)
       (let ((key (vui-vnode-key (vui-instance-vnode child))))
-        (when key
-          (let ((hk (cons (vui-component-def-name (vui-instance-def child)) key)))
-            ;; first wins: keep the earliest child for a (type . key)
-            (unless (gethash hk by-key)
-              (puthash hk child by-key))))))
-    (list :parent parent :vec (vconcat children) :by-key by-key)))
+        (if key
+            (let ((hk (cons (vui-component-def-name (vui-instance-def child)) key)))
+              ;; first wins: keep the earliest child for a (type . key)
+              (unless (gethash hk by-key)
+                (puthash hk child by-key)))
+          (push child unkeyed))))
+    (list :parent parent :vec (vconcat (nreverse unkeyed)) :by-key by-key)))
 
 (defun vui--find-matching-child (parent type key index)
   "Find a child of PARENT matching TYPE and KEY or INDEX.
+A keyed vnode matches the child with the same type and key.  An unkeyed
+one matches the unkeyed child at INDEX among the unkeyed children, of
+the same type: a keyed child is never reused for an unkeyed vnode, nor
+the other way round.
 Uses `vui--reconcile-lookup' for O(1) matching when it was built for
 PARENT; otherwise falls back to a linear scan (identical semantics)."
   (when parent
@@ -6450,7 +6460,8 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
         (if key
             ;; Key-based: child with same type AND key (first match).
             (gethash (cons type key) (plist-get vui--reconcile-lookup :by-key))
-          ;; Index-based: child at same global position with same type.
+          ;; Index-based: unkeyed child at the same position among the
+          ;; unkeyed children, with the same type.
           (let* ((vec (plist-get vui--reconcile-lookup :vec))
                  (child (and (< index (length vec)) (aref vec index))))
             (when (and child
@@ -6463,7 +6474,11 @@ PARENT; otherwise falls back to a linear scan (identical semantics)."
                           (and (eq (vui-component-def-name (vui-instance-def child)) type)
                                (equal (vui-vnode-key (vui-instance-vnode child)) key)))
                         children)
-          (let ((child-at-index (nth index children)))
+          (let ((child-at-index
+                 (nth index (cl-remove-if
+                             (lambda (child)
+                               (vui-vnode-key (vui-instance-vnode child)))
+                             children))))
             (when (and child-at-index
                        (eq (vui-component-def-name (vui-instance-def child-at-index)) type))
               child-at-index)))))))
@@ -6528,7 +6543,8 @@ goes on after it: the error of the hook is only shown as a message."
          (props-with-children (if children
                                   (plist-put (copy-sequence props) :children children)
                                 props)))
-    (cl-incf vui--child-index)
+    (unless key
+      (cl-incf vui--child-index))
     (if existing
         ;; Reuse existing instance, update props
         (progn
@@ -8407,12 +8423,14 @@ INSTANCE.  See `vui-instance-r-streams'."
 (defun vui--patch-component-list (instance vtree)
   "Patch INSTANCE's buffer (a list of component children) to match VTREE.
 Point starts at the list's beginning.  Walks the new component vnodes
-against the existing child instances by position, reusing instances by
-key, skipping those that bail out (leaving their buffer region intact),
-re-rendering changed ones in place, inserting new children, and deleting
-removed ones.  Pushes the resulting child instances onto
-`vui--new-children' in order so the caller's reconcile tail finalizes
-the children list and unmounts whatever was removed.
+against the existing child instances by position, reusing instances as
+a wholesale render does (by key, or by place among the unkeyed
+children; see `vui--find-matching-child'), skipping those that bail
+out (leaving their buffer region intact), re-rendering changed ones in
+place, inserting new children, and deleting removed ones.  Pushes the
+resulting child instances onto `vui--new-children' in order so the
+caller's reconcile tail finalizes the children list and unmounts
+whatever was removed.
 
 A child renders under the step VTREE gives it in `vui--render-path' (see
 `vui--component-path-steps'), as in a wholesale render: widgets and
@@ -8451,6 +8469,11 @@ text takes in what is written there."
          (steps (vui--component-path-steps vtree))
          (old-steps (vui--component-path-steps
                      (plist-get (vui-instance-render-record instance) :vnode)))
+         ;; The old unkeyed children, used up in order by the new
+         ;; unkeyed vnodes, as `vui--child-index' counts them
+         (old-unkeyed (cl-remove-if (lambda (c)
+                                      (vui-vnode-key (vui-instance-vnode c)))
+                                    old-children))
          (i 0))
     (goto-char (point-min))
     (dolist (vnode new-vnodes)
@@ -8462,29 +8485,37 @@ text takes in what is written there."
                            (plist-put (copy-sequence props) :children children)
                          props))
              (old-at-i (nth i old-children))
-             (same-pos (and old-at-i
-                            (eq type (vui-component-def-name
-                                      (vui-instance-def old-at-i)))
+             (chosen
+              (if key
+                  (if (and old-at-i
+                           (eq type (vui-component-def-name
+                                     (vui-instance-def old-at-i)))
+                           (equal key (vui-vnode-key
+                                       (vui-instance-vnode old-at-i))))
+                      old-at-i
+                    ;; key match elsewhere: reuse the instance (preserve
+                    ;; its state) even though it moved
+                    (cl-find-if
+                     (lambda (c)
+                       (and (eq type (vui-component-def-name
+                                      (vui-instance-def c)))
                             (equal key (vui-vnode-key
-                                        (vui-instance-vnode old-at-i)))))
+                                        (vui-instance-vnode c)))))
+                     old-children))
+                ;; unkeyed: the old unkeyed child at the same place
+                ;; among the unkeyed children, wherever it was
+                (let ((old (pop old-unkeyed)))
+                  (and old
+                       (eq type (vui-component-def-name
+                                 (vui-instance-def old)))
+                       old))))
+             ;; The instance chosen is the one whose text is here
+             (same-pos (and old-at-i (eq chosen old-at-i)))
              (old-len (or (pop old-lens) 0))
              (old-sep (pop old-seps))
              (old-seg-len (+ (if old-sep sep-len 0) old-len))
              (step (pop steps))
-             (old-step (pop old-steps))
-             (chosen (cond
-                      (same-pos old-at-i)
-                      ;; key match elsewhere: reuse the instance (preserve
-                      ;; its state) even though it moved
-                      ((and key
-                            (cl-find-if
-                             (lambda (c)
-                               (and (eq type (vui-component-def-name
-                                              (vui-instance-def c)))
-                                    (equal key (vui-vnode-key
-                                                (vui-instance-vnode c)))))
-                             old-children)))
-                      (t nil))))
+             (old-step (pop old-steps)))
         ;; reconcile props onto the chosen instance, or create a new one
         (if chosen
             (progn (setf (vui-instance-props chosen) props-wc)
@@ -11520,7 +11551,8 @@ renders the tree as it is."
         ;; rebinds the live parent so nested components match the
         ;; instance's own children the same way.
         (progn
-          (cl-incf vui--child-index)
+          (unless (vui-vnode-key vnode)
+            (cl-incf vui--child-index))
           (let ((vtree (vui--measure-instance-vtree live vnode)))
             (let ((vui--measure-live-parent live)
                   (vui--child-index 0))

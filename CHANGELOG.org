@@ -97,6 +97,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A component without a key no longer takes over the instance of a keyed
+  sibling. A list of components without keys followed by a keyed one
+  gave the new list item the keyed component's instance and state when
+  the list grew, and warned about a duplicate key. Components without a
+  key are now matched by their place among the siblings without a key,
+  so a keyed list before an unkeyed component no longer moves it: the
+  component keeps its state when the list grows or shrinks.
+
 - A redefined component renders its new body in trees that are already
   mounted, as the debugging guide says. Before, every instance kept
   the definition it was made with, so only new instances saw the
