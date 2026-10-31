@@ -15,6 +15,9 @@
 (require '03-forms)
 (require '04-file-browser)
 (require '05-wine-tasting)
+(require '07-semantic-text)
+(require '08-typed-fields)
+(require '10-pomodoro)
 
 (defun vui-examples-test--type (label text)
   "Type TEXT into the field right after LABEL."
@@ -23,6 +26,20 @@
   (let ((field (widget-field-at (1+ (point)))))
     (goto-char (widget-field-start field))
     (insert text))
+  (vui-flush-sync))
+
+(defun vui-examples-test--set (label text)
+  "Replace the text of the first field after LABEL with TEXT."
+  (goto-char (point-min))
+  (search-forward label)
+  (while (not (widget-field-at (point)))
+    (forward-char))
+  (goto-char (widget-field-start (widget-field-at (point))))
+  ;; Type the new text before deleting the old one, so the field never
+  ;; holds an empty value in between.  Each edit can re-render the
+  ;; field, so look it up again after the insert.
+  (insert text)
+  (delete-region (point) (widget-field-text-end (widget-field-at (point))))
   (vui-flush-sync))
 
 (defun vui-examples-test--click (needle)
@@ -204,6 +221,174 @@
             (expect (vui-examples-test--text) :to-match "| RMS +| 4\\.3580 |")
             (expect (vui-examples-test--text) :to-match "| AVG +| 4\\.3535 |"))
         (vui-examples-test--kill "*vui-wine-tasting*")))))
+
+(describe "example 07: semantic text"
+  (it "keeps inline code in its sentence"
+    (let ((vui-render-delay nil))
+      (vui-example-semantic-text)
+      (unwind-protect
+          (with-current-buffer "*vui-semantic-text*"
+            (expect (vui-examples-test--text)
+                    :to-match "Use vui-code for inline code snippets\\.")
+            (expect (vui-examples-test--text)
+                    :to-match "Call (vui-mount component buffer) to render\\."))
+        (vui-examples-test--kill "*vui-semantic-text*")))))
+
+(describe "example 08: typed fields"
+  (it "hides the age while the birth year is invalid"
+    (let ((vui-render-delay nil))
+      (vui-example-age-calculator)
+      (unwind-protect
+          (with-current-buffer "*vui-age-calculator*"
+            (vui-examples-test--set "Birth Year: " "1990")
+            (expect (vui-examples-test--text) :to-match "Your age: ")
+            (vui-examples-test--set "Birth Year: " "1800")
+            (expect (vui-examples-test--text) :to-match "Must be at least 1900")
+            (expect (vui-examples-test--text) :not :to-match "Your age: "))
+        (vui-examples-test--kill "*vui-age-calculator*"))))
+
+  (it "hides the description while a temperature is invalid"
+    (let ((vui-render-delay nil))
+      (vui-example-temperature)
+      (unwind-protect
+          (with-current-buffer "*vui-temperature*"
+            (vui-examples-test--set "Celsius:    " "25")
+            (expect (vui-examples-test--text) :to-match "Warm")
+            (vui-examples-test--set "Celsius:    " "-300")
+            (expect (vui-examples-test--text) :to-match "Must be at least")
+            (expect (vui-examples-test--text) :not :to-match "Warm")
+            ;; the other field no longer shows the old conversion
+            (expect (vui-examples-test--text) :not :to-match "77"))
+        (vui-examples-test--kill "*vui-temperature*"))))
+
+  (it "shows the description again once a temperature is valid"
+    (let ((vui-render-delay nil))
+      (vui-example-temperature)
+      (unwind-protect
+          (with-current-buffer "*vui-temperature*"
+            (vui-examples-test--set "Celsius:    " "-300")
+            (vui-examples-test--set "Celsius:    " "25")
+            (expect (vui-examples-test--text) :to-match "Warm")
+            (vui-examples-test--set "Fahrenheit: " "-500")
+            (expect (vui-examples-test--text) :not :to-match "Warm")
+            (expect (vui-examples-test--text) :not :to-match "25")
+            (vui-examples-test--set "Fahrenheit: " "77")
+            (expect (vui-examples-test--text) :to-match "Warm"))
+        (vui-examples-test--kill "*vui-temperature*"))))
+
+  (it "hides the BMI while the weight is invalid"
+    (let ((vui-render-delay nil))
+      (vui-example-bmi)
+      (unwind-protect
+          (with-current-buffer "*vui-bmi*"
+            (vui-examples-test--set "Weight: " "70")
+            (vui-examples-test--set "Height: " "175")
+            (expect (vui-examples-test--text) :to-match "Your BMI: ")
+            (vui-examples-test--set "Weight: " "5")
+            (expect (vui-examples-test--text) :to-match "Must be at least 20")
+            (expect (vui-examples-test--text) :not :to-match "Your BMI: "))
+        (vui-examples-test--kill "*vui-bmi*"))))
+
+  (it "keeps the cart's starting items when it opens again"
+    (let ((vui-render-delay nil))
+      (vui-example-shopping-cart)
+      (with-current-buffer "*vui-cart*"
+        (vui-examples-test--set "Widget" "7")
+        (expect (vui-examples-test--text) :to-match "\\$69\\.93"))
+      (vui-examples-test--kill "*vui-cart*")
+      (vui-example-shopping-cart)
+      (unwind-protect
+          (with-current-buffer "*vui-cart*"
+            (expect (vui-examples-test--text) :to-match "\\$19\\.98")
+            (expect (vui-examples-test--text) :to-match "\\$59\\.94"))
+        (vui-examples-test--kill "*vui-cart*"))))
+
+  (it "does not check out a cart with an invalid quantity"
+    (let ((vui-render-delay nil))
+      (vui-example-shopping-cart)
+      (unwind-protect
+          (with-current-buffer "*vui-cart*"
+            (vui-examples-test--set "Widget" "0")
+            (expect (vui-examples-test--text) :to-match "Must be at least 1")
+            (expect (vui-examples-test--text) :not :to-match "\\$19\\.98")
+            (expect (vui-examples-test--text) :not :to-match "\\$59\\.94")
+            (spy-on 'message)
+            (vui-examples-test--click "Checkout")
+            (expect 'message :not :to-have-been-called))
+        (vui-examples-test--kill "*vui-cart*"))))
+
+  (it "keeps each quantity error with its item when a row is removed"
+    (let ((vui-render-delay nil))
+      (vui-example-shopping-cart)
+      (unwind-protect
+          (with-current-buffer "*vui-cart*"
+            ;; an invalid row taking the removed row's place
+            (vui-examples-test--set "Gadget" "0")
+            (vui-examples-test--click "Remove")
+            (expect (vui-examples-test--text) :to-match "Must be at least 1")
+            (vui-examples-test--set "Gadget" "2")
+            (expect (vui-examples-test--text) :to-match "\\$64\\.95")
+            ;; the removed row was the invalid one
+            (vui-examples-test--set "Gadget" "0")
+            (vui-examples-test--click "Remove")
+            (expect (vui-examples-test--text) :not :to-match "Must be at least 1")
+            (expect (vui-examples-test--text) :to-match "Total: \\$14\\.97"))
+        (vui-examples-test--kill "*vui-cart*"))))
+
+  (it "says a cleared product name is required"
+    (let ((vui-render-delay nil))
+      (vui-example-product-form)
+      (unwind-protect
+          (with-current-buffer "*vui-product*"
+            (expect (vui-examples-test--text) :not :to-match "Required")
+            (vui-examples-test--set "Name:" "Lamp")
+            (vui-examples-test--set "Name:" "")
+            (expect (vui-examples-test--text) :to-match "Required"))
+        (vui-examples-test--kill "*vui-product*"))))
+
+  (it "does not create a product while the price is invalid"
+    (let ((vui-render-delay nil))
+      (vui-example-product-form)
+      (unwind-protect
+          (with-current-buffer "*vui-product*"
+            (vui-examples-test--set "Name:" "Lamp")
+            (vui-examples-test--set "Price:" "5")
+            (vui-examples-test--set "Stock:" "3")
+            (vui-examples-test--set "SKU:" "L-1")
+            (vui-examples-test--set "Price:" "0")
+            (expect (vui-examples-test--text) :to-match "Must be at least 0.01")
+            (spy-on 'message)
+            (vui-examples-test--click "Create Product")
+            (expect 'message :not :to-have-been-called))
+        (vui-examples-test--kill "*vui-product*")))))
+
+(describe "example 10: pomodoro"
+  (it "starts the next session when Skip is pressed while paused"
+    (let ((vui-render-delay nil))
+      (spy-on 'ding)
+      (spy-on 'message)
+      (vui-example-pomodoro)
+      (unwind-protect
+          (with-current-buffer "*vui-pomodoro*"
+            (vui-examples-test--click "Skip")
+            (expect (vui-examples-test--text) :to-match "Break\n05:00")
+            ;; still paused
+            (expect (vui-examples-test--text) :to-match "\\[Start\\]")
+            (expect (vui-examples-test--text) :to-match "Completed pomodoros: 1"))
+        (vui-examples-test--kill "*vui-pomodoro*"))))
+
+  (it "keeps running when Skip is pressed while running"
+    (let ((vui-render-delay nil))
+      (spy-on 'ding)
+      (spy-on 'message)
+      (vui-example-pomodoro)
+      (unwind-protect
+          (with-current-buffer "*vui-pomodoro*"
+            (vui-examples-test--click "Start")
+            (vui-examples-test--click "Skip")
+            (expect (vui-examples-test--text) :to-match "Break\n05:00")
+            (expect (vui-examples-test--text) :to-match "\\[Pause\\]"))
+        (vui-examples-test--kill "*vui-pomodoro*")))))
 
 (provide 'vui-examples-test)
 ;;; vui-examples-test.el ends here

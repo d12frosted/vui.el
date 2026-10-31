@@ -1318,6 +1318,18 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   directory it cannot read instead of moving into it with the old
   entries, and Up from =/= stays at =/=. The summary of
   =05-wine-tasting.el= averaged the wine ids along with the scores.
+- Fixed bugs in three more examples. In =07-semantic-text.el= the
+  inline code samples sat on their own lines; they are now in a
+  fragment with the sentence around them. The typed field examples of
+  =08-typed-fields.el= showed results for the last valid input next to
+  a field's error (an age for a birth year of 1800, a "Create Product"
+  that still worked with a price of 0); they now track field errors
+  with =:on-error= and hide results or disable the button while a
+  field is invalid. Its shopping cart changed the plists of its quoted
+  starting state, so the next cart opened with the old quantities, and
+  the "Required" next to the product name could never show. In
+  =10-pomodoro.el= Skip while paused left the clock at 00:00; it now
+  moves to the next session and stays paused.
 
 - The layout guide's nesting example puts its two columns in a
   =vui-flex :wrap t= instead of a =vui-hstack=. An hstack is inline

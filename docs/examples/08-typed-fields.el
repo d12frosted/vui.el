@@ -12,18 +12,34 @@
 (require 'vui)
 (require 'vui-components)
 
+;;; Tracking field errors
+;; A typed field calls :on-change only for valid input.  While the input
+;; is invalid the parent still holds the last valid value, so results
+;; computed from it would sit next to the field's error.  Each example
+;; below records which fields are invalid (from :on-error, which also
+;; reports nil once the input is valid again) and hides its results
+;; while any are.
+
+(defun vui-example-typed--note-error (key err)
+  "Return a state updater that records whether field KEY has error ERR."
+  (lambda (errors)
+    (cond ((not err) (remove key errors))
+          ((member key errors) errors)
+          (t (cons key errors)))))
+
 ;;; Example 1: Age Calculator
 ;; Demonstrates integer fields with min/max validation
 
 (vui-defcomponent age-calculator ()
   "Calculate age-related statistics."
   :state ((birth-year nil)
-          (current-year (decoded-time-year (decode-time))))
+          (current-year (decoded-time-year (decode-time)))
+          (errors nil))
 
   :render
   (let* ((age (when (and birth-year current-year)
                 (- current-year birth-year)))
-         (valid-age (and age (>= age 0) (<= age 150))))
+         (valid-age (and age (null errors) (>= age 0) (<= age 150))))
     (vui-vstack
      :spacing 1
      (vui-text "Age Calculator" :face 'bold)
@@ -39,6 +55,9 @@
        :max current-year
        :required t
        :show-error 'inline
+       :on-error (lambda (err _)
+                   (vui-set-state :errors (vui-example-typed--note-error
+                                           'birth-year err)))
        :on-change (lambda (n) (vui-set-state :birth-year n))))
 
      ;; Current year field
@@ -50,6 +69,9 @@
        :min 2000
        :max 2100
        :show-error 'inline
+       :on-error (lambda (err _)
+                   (vui-set-state :errors (vui-example-typed--note-error
+                                           'current-year err)))
        :on-change (lambda (n) (vui-set-state :current-year n))))
 
      ;; Results
@@ -78,7 +100,9 @@
 (vui-defcomponent temperature-converter ()
   "Convert between Celsius and Fahrenheit."
   :state ((celsius nil)
-          (fahrenheit nil))
+          (fahrenheit nil)
+          ;; Non-nil while the field being edited holds invalid input
+          (invalid nil))
 
   :render
   (vui-vstack
@@ -94,8 +118,16 @@
      :size 10
      :min -273.15  ; Absolute zero
      :show-error 'inline
+     ;; Invalid input: clear the other field, it no longer shows a
+     ;; conversion of what is typed here
+     :on-error (lambda (err _)
+                 (when err
+                   (vui-batch
+                    (vui-set-state :invalid t)
+                    (vui-set-state :fahrenheit nil))))
      :on-change (lambda (c)
                   (vui-batch
+                   (vui-set-state :invalid nil)
                    (vui-set-state :celsius c)
                    (vui-set-state :fahrenheit (when c (+ (* c 1.8) 32))))))
     (vui-text " °C"))
@@ -108,15 +140,21 @@
      :size 10
      :min -459.67  ; Absolute zero in F
      :show-error 'inline
+     :on-error (lambda (err _)
+                 (when err
+                   (vui-batch
+                    (vui-set-state :invalid t)
+                    (vui-set-state :celsius nil))))
      :on-change (lambda (f)
                   (vui-batch
+                   (vui-set-state :invalid nil)
                    (vui-set-state :fahrenheit f)
                    (vui-set-state :celsius (when f (/ (- f 32) 1.8))))))
     (vui-text " °F"))
 
    ;; Temperature description
    (vui-newline)
-   (when celsius
+   (when (and celsius (not invalid))
      (vui-text
          (cond
           ((< celsius 0) "Freezing! Bundle up!")
@@ -143,17 +181,32 @@
   "Shopping cart with quantity fields in a table."
   :state ((items '((:name "Widget" :price 9.99 :qty 2)
                    (:name "Gadget" :price 24.99 :qty 1)
-                   (:name "Gizmo" :price 4.99 :qty 3))))
+                   (:name "Gizmo" :price 4.99 :qty 3)))
+          ;; Names of the items whose quantity field is invalid
+          (errors nil))
 
   :render
   (let* ((update-qty (lambda (idx new-qty)
-                       (let ((new-items (copy-sequence items)))
-                         (setf (plist-get (nth idx new-items) :qty) new-qty)
-                         (vui-set-state :items new-items))))
+                       ;; Build new item plists: the quoted list above is
+                       ;; the starting state of every cart, so changing
+                       ;; its plists in place would change it for the
+                       ;; next cart too
+                       (vui-set-state
+                        :items
+                        (seq-map-indexed
+                         (lambda (item i)
+                           (if (= i idx)
+                               (plist-put (copy-sequence item) :qty new-qty)
+                             item))
+                         items))))
          (remove-item (lambda (idx)
-                        (vui-set-state :items
-                                       (append (seq-take items idx)
-                                               (seq-drop items (1+ idx))))))
+                        (vui-batch
+                         (vui-set-state :errors
+                                        (vui-example-typed--note-error
+                                         (plist-get (nth idx items) :name) nil))
+                         (vui-set-state :items
+                                        (append (seq-take items idx)
+                                                (seq-drop items (1+ idx)))))))
          (total (seq-reduce (lambda (acc item)
                               (let ((qty (plist-get item :qty)))
                                 (+ acc (if qty (* (plist-get item :price) qty) 0))))
@@ -176,18 +229,26 @@
                     (let* ((name (plist-get item :name))
                            (price (plist-get item :price))
                            (qty (plist-get item :qty))
-                           (subtotal (if qty (* price qty) 0)))
+                           (subtotal (if qty (* price qty) 0))
+                           (invalid (member name errors)))
                       (list
                        (vui-text name)
                        (vui-text (format "$%.2f" price))
                        (vui-natnum-field
+                        ;; Keyed by item, so when a row is removed the
+                        ;; next one keeps its own field (and its error)
+                        :key name
                         :value qty
                         :size 4
                         :min 1
                         :max 99
                         :show-error 'inline
+                        :on-error (lambda (err _)
+                                    (vui-set-state
+                                     :errors
+                                     (vui-example-typed--note-error name err)))
                         :on-change (lambda (q) (funcall update-qty idx q)))
-                       (vui-text (format "$%.2f" subtotal))
+                       (vui-text (if invalid "-" (format "$%.2f" subtotal)))
                        (vui-button "Remove"
                          :on-click (lambda () (funcall remove-item idx))))))
                   items)
@@ -196,14 +257,15 @@
                   :separator
                   (list "" "" ""
                         (vui-text "Total:" :face 'bold)
-                        (vui-text (format "$%.2f" total) :face 'bold))))
+                        (vui-text (if errors "-" (format "$%.2f" total))
+                          :face 'bold))))
           :border nil)
        (vui-text "Your cart is empty." :face 'shadow))
 
      ;; Checkout button
      (vui-newline)
      (vui-button "Checkout"
-       :disabled (null items)
+       :disabled (or (null items) errors)
        :on-click (lambda ()
                    (message "Order placed! Total: $%.2f" total))))))
 
@@ -326,13 +388,18 @@
           (price nil)
           (stock nil)
           (sku "")
-          (sku-error nil))
+          (sku-error nil)
+          ;; Set on the first edit, so a new form does not open with
+          ;; "Required" next to the name
+          (name-touched nil)
+          (errors nil))
 
   :render
   (let* ((name-error (when (string-empty-p name) "Required"))
          (sku-valid-p (and (not (string-empty-p sku))
                            (string-match-p "^[A-Z0-9-]+$" sku)))
          (valid-p (and (not (string-empty-p name))
+                       (null errors)
                        price (> price 0)
                        stock (>= stock 0)
                        sku-valid-p)))
@@ -345,8 +412,11 @@
      (vui-hstack
       (vui-box (vui-text "Name:") :width 8)
       (vui-field :value name :size 15
-                 :on-change (lambda (v) (vui-set-state :name v)))
-      (when (and name-error (not (string-empty-p name)))
+                 :on-change (lambda (v)
+                              (vui-batch
+                               (vui-set-state :name-touched t)
+                               (vui-set-state :name v))))
+      (when (and name-error name-touched)
         (vui-text (concat " " name-error) :face 'vui-error)))
 
      ;; Price - using typed field
@@ -355,6 +425,10 @@
       (vui-text "$")
       (vui-float-field :value price :size 13
                        :min 0.01 :required t :show-error 'inline
+                       :on-error (lambda (err _)
+                                   (vui-set-state :errors
+                                                  (vui-example-typed--note-error
+                                                   'price err)))
                        :on-change (lambda (n) (vui-set-state :price n))))
 
      ;; Stock - using typed field
@@ -362,6 +436,10 @@
       (vui-box (vui-text "Stock:") :width 8)
       (vui-natnum-field :value stock :size 15
                         :required t :show-error 'inline
+                        :on-error (lambda (err _)
+                                    (vui-set-state :errors
+                                                   (vui-example-typed--note-error
+                                                    'stock err)))
                         :on-change (lambda (n) (vui-set-state :stock n))))
 
      ;; SKU - string with pattern validation
@@ -400,11 +478,12 @@
   "Calculate Body Mass Index."
   :state ((weight nil)  ; kg
           (height nil)  ; cm
-          (unit 'metric))
+          (unit 'metric)
+          (errors nil))
 
   :render
   (let* ((height-m (when height (/ height 100.0)))
-         (bmi (when (and weight height-m (> height-m 0))
+         (bmi (when (and weight height-m (> height-m 0) (null errors))
                 (/ weight (* height-m height-m))))
          (category (when bmi
                      (cond
@@ -427,6 +506,9 @@
        :max 500
        :required t
        :show-error t
+       :on-error (lambda (err _)
+                   (vui-set-state :errors (vui-example-typed--note-error
+                                           'weight err)))
        :on-change (lambda (n) (vui-set-state :weight n)))
       (vui-text " kg"))
 
@@ -440,6 +522,9 @@
        :max 300
        :required t
        :show-error t
+       :on-error (lambda (err _)
+                   (vui-set-state :errors (vui-example-typed--note-error
+                                           'height err)))
        :on-change (lambda (n) (vui-set-state :height n)))
       (vui-text " cm"))
 

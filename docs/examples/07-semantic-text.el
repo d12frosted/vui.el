@@ -41,9 +41,12 @@
     (vui-italic "italic, ")
     (vui-muted "muted"))
    (vui-newline)
-   (vui-text "Use ")
-   (vui-code "vui-code")
-   (vui-text " for inline code snippets.")))
+   ;; A fragment keeps inline pieces on one line; in the vstack each
+   ;; would get its own.
+   (vui-fragment
+    (vui-text "Use ")
+    (vui-code "vui-code")
+    (vui-text " for inline code snippets."))))
 
 
 ;;; Status Messages Demo
@@ -93,9 +96,10 @@
    (vui-newline)
 
    (vui-heading-2 "Code Example")
-   (vui-text "Call ")
-   (vui-code "(vui-mount component buffer)")
-   (vui-text " to render.")
+   (vui-fragment
+    (vui-text "Call ")
+    (vui-code "(vui-mount component buffer)")
+    (vui-text " to render."))
    (vui-newline)
 
    (vui-heading-2 "Status")

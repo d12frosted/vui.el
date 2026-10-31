@@ -91,18 +91,21 @@ full second before ticking down."
 
       ;; Transition: when the countdown hits zero, switch sessions.  This is
       ;; derived from `remaining', so it stays correct no matter what drove
-      ;; the countdown to zero (a tick or the Skip button).
+      ;; the countdown to zero (a tick or the Skip button).  The next
+      ;; session runs only if this one was running: Skip while paused
+      ;; moves on and stays paused.
       (vui-use-effect (remaining)
-        (when (and running (zerop remaining))
+        (when (zerop remaining)
           (let* ((next-mode (if (eq mode 'work) 'break 'work))
                  (next-seconds (vui-example-pomodoro--duration next-mode)))
-            (message "Pomodoro: %s session over -> starting %s"
-                     mode next-mode)
+            (message "Pomodoro: %s session over -> %s %s"
+                     mode (if running "starting" "next is") next-mode)
             (when (fboundp 'ding) (ding))
             (vui-batch
              (vui-set-state :mode next-mode)
              (vui-set-state :remaining next-seconds)
-             (vui-set-state :deadline (+ (float-time) next-seconds))
+             (vui-set-state :deadline (and running
+                                           (+ (float-time) next-seconds)))
              (when (eq mode 'work)
                (vui-set-state :completed #'1+))))))
 
