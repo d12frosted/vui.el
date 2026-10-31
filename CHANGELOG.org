@@ -1330,6 +1330,19 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   the "Required" next to the product name could never show. In
   =10-pomodoro.el= Skip while paused left the clock at 00:00; it now
   moves to the next session and stays paused.
+- Fixed bugs in four more examples. The run detail of
+  =15-ci-dashboard.el= fetched the log again each time it was shown,
+  so after "hide log" the stream held it twice. The log is fetched
+  once and the button, now "show log", shows it again; after a failed
+  fetch it fetches again. The blank line between the
+  two tables of =16-sticky-table.el= was a =(vui-text "")=, which
+  renders nothing; it is a =vui-newline= now. =18-variable-pitch.el=
+  set =vui-width-mode= to =pixel= before its mount noted the mode to
+  put back, so closing it left =pixel= on; the mount notes the mode
+  and then switches. The expanded incidents of
+  =19-responsive-dashboard.el= sized their cards to the descriptions
+  and ran past the width picked (87 columns at 72); the cards fill
+  their grid track and wrap the description to it.
 
 - The layout guide's nesting example puts its two columns in a
   =vui-flex :wrap t= instead of a =vui-hstack=. An hstack is inline

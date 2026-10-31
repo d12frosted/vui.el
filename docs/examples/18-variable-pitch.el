@@ -164,8 +164,12 @@ Restored on unmount so the demo does not leave a global setting behind.")
        (vui-text "|")))))
 
 (vui-defcomponent variable-pitch-demo ()
+  ;; Note the mode before switching to pixel, here and not in the demo
+  ;; function: opening the demo again unmounts the running one first,
+  ;; which puts the noted mode back before this notes it again
   :on-mount
-  (setq vui-example-vp--original-mode vui-width-mode)
+  (setq vui-example-vp--original-mode vui-width-mode
+        vui-width-mode 'pixel)
   :on-unmount
   (setq vui-width-mode vui-example-vp--original-mode)
   :render
@@ -180,12 +184,13 @@ Restored on unmount so the demo does not leave a global setting behind.")
 (defun vui-example-variable-pitch ()
   "Run the proportional-font pixel layout example."
   (interactive)
-  (setq vui-width-mode 'pixel)
   (let ((buf "*vui-variable-pitch*"))
     (vui-mount (vui-component 'variable-pitch-demo) buf)
     (with-current-buffer buf
       ;; After the mount: the first render enables `vui-mode', which
-      ;; resets buffer-local variables, and the remap has to survive
+      ;; resets buffer-local variables, and the remap has to survive.
+      ;; The re-render also lays the demo out in the pixel mode its
+      ;; mount switched to.
       (variable-pitch-mode 1)
       (vui-rerender (vui-get-instance)))))
 

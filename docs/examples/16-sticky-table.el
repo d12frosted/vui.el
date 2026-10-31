@@ -97,7 +97,7 @@
      ;; Content between the two tables: while this part of the buffer
      ;; is at the top of the window, the header line shows neither
      ;; table's header.
-     (vui-text "")
+     (vui-newline)
      (vui-text "Activity log" :face 'bold)
      (vui-text "Scroll on: the pinned header switches to this table's columns.")
      (vui-table

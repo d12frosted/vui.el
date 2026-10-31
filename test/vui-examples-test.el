@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'buttercup)
+(require 'cl-lib)
 (require 'vui)
 (require '03-forms)
 (require '04-file-browser)
@@ -18,6 +19,10 @@
 (require '07-semantic-text)
 (require '08-typed-fields)
 (require '10-pomodoro)
+(require '15-ci-dashboard)
+(require '16-sticky-table)
+(require '18-variable-pitch)
+(require '19-responsive-dashboard)
 
 (defun vui-examples-test--type (label text)
   "Type TEXT into the field right after LABEL."
@@ -389,6 +394,141 @@
             (expect (vui-examples-test--text) :to-match "Break\n05:00")
             (expect (vui-examples-test--text) :to-match "\\[Pause\\]"))
         (vui-examples-test--kill "*vui-pomodoro*")))))
+
+(defvar vui-examples-test--processes nil
+  "Processes the fake gh of the example 15 specs started.")
+
+(defun vui-examples-test--fake-gh (make-process args command)
+  "Call MAKE-PROCESS with ARGS but COMMAND, and note the process."
+  (let ((process (apply make-process (plist-put args :command command))))
+    (push process vui-examples-test--processes)
+    process))
+
+(defun vui-examples-test--wait-processes ()
+  "Wait for the processes the fake gh started, then flush renders."
+  (with-timeout (5 (error "Processes still running"))
+    (while (cl-some #'process-live-p vui-examples-test--processes)
+      (accept-process-output nil 0.02)))
+  ;; let sentinels that ran last finish their renders
+  (accept-process-output nil 0.02)
+  (vui-flush-sync))
+
+(describe "example 15: CI dashboard"
+  :var (make-process-orig)
+  (before-each
+    (setq make-process-orig (symbol-function 'make-process)
+          vui-examples-test--processes nil)
+    ;; Run a stand-in for gh: the log is one line, run details are a
+    ;; finished run with no jobs
+    (spy-on 'make-process :and-call-fake
+            (lambda (&rest args)
+              (vui-examples-test--fake-gh
+               make-process-orig args
+               (if (member "--log" (plist-get args :command))
+                   '("printf" "log line\\n")
+                 '("printf" "{\"jobs\":[],\"status\":\"completed\",\"conclusion\":\"success\"}"))))))
+
+  (it "shows the log once after it is hidden and shown again"
+    (let ((vui-render-delay nil))
+      (vui-mount (vui-component 'vui-ci-run-detail
+                                :repo "o/r" :run-id 1 :on-back #'ignore)
+                 "*vui-ci-detail*")
+      (unwind-protect
+          (with-current-buffer "*vui-ci-detail*"
+            (vui-examples-test--wait-processes)
+            (vui-examples-test--click "stream log")
+            (vui-examples-test--wait-processes)
+            (expect (vui-examples-test--text) :to-match "log line")
+            (vui-examples-test--click "hide log")
+            (vui-examples-test--click "show log")
+            (vui-examples-test--wait-processes)
+            (expect (with-temp-buffer
+                      (insert (with-current-buffer "*vui-ci-detail*"
+                                (vui-examples-test--text)))
+                      (how-many "log line" (point-min) (point-max)))
+                    :to-equal 1))
+        (vui-examples-test--kill "*vui-ci-detail*"))))
+
+  (it "fetches the log again after a fetch failed"
+    (let ((vui-render-delay nil)
+          (log-ready nil))
+      ;; the log fails until it is ready
+      (spy-on 'make-process :and-call-fake
+              (lambda (&rest args)
+                (vui-examples-test--fake-gh
+                 make-process-orig args
+                 (cond ((not (member "--log" (plist-get args :command)))
+                        '("printf" "{\"jobs\":[]}"))
+                       (log-ready '("printf" "log line\\n"))
+                       (t '("sh" "-c" "exit 1"))))))
+      (vui-mount (vui-component 'vui-ci-run-detail
+                                :repo "o/r" :run-id 1 :on-back #'ignore)
+                 "*vui-ci-detail*")
+      (unwind-protect
+          (with-current-buffer "*vui-ci-detail*"
+            (vui-examples-test--wait-processes)
+            (vui-examples-test--click "stream log")
+            (vui-examples-test--wait-processes)
+            (expect (vui-examples-test--text) :to-match "log not available")
+            (setq log-ready t)
+            (vui-examples-test--click "hide log")
+            (vui-examples-test--click "stream log")
+            (vui-examples-test--wait-processes)
+            (expect (vui-examples-test--text) :to-match "log line"))
+        (vui-examples-test--kill "*vui-ci-detail*")))))
+
+(describe "example 16: sticky table"
+  (it "leaves a blank line before the activity log"
+    (let ((vui-render-delay nil))
+      (vui-example-sticky-table)
+      (unwind-protect
+          (with-current-buffer "*vui-sticky-table*"
+            (expect (vui-examples-test--text)
+                    :to-match "packages\n\nActivity log"))
+        (vui-examples-test--kill "*vui-sticky-table*")))))
+
+(describe "example 18: variable pitch"
+  ;; The demo measures text in pixel mode; drop those widths so later
+  ;; specs that mock `string-pixel-width' do not read them
+  (after-each
+    (vui--reset-text-pixel-cache))
+
+  (it "puts the width mode back when it is closed"
+    (let ((vui-render-delay nil)
+          (vui-width-mode 'char))
+      (vui-example-variable-pitch)
+      (unwind-protect
+          (expect vui-width-mode :to-be 'pixel)
+        (vui-examples-test--kill "*vui-variable-pitch*"))
+      (expect vui-width-mode :to-be 'char)))
+
+  (it "keeps the width mode to put back when it is opened twice"
+    (let ((vui-render-delay nil)
+          (vui-width-mode 'char))
+      (vui-example-variable-pitch)
+      (vui-example-variable-pitch)
+      (unwind-protect
+          (expect vui-width-mode :to-be 'pixel)
+        (vui-examples-test--kill "*vui-variable-pitch*"))
+      (expect vui-width-mode :to-be 'char))))
+
+(describe "example 19: responsive dashboard"
+  (it "fits the expanded incidents in the width picked"
+    (let ((vui-render-delay nil))
+      (vui-example-responsive-dashboard)
+      (unwind-protect
+          (with-current-buffer "*vui-responsive*"
+            (dolist (width '("72" "48"))
+              (vui-examples-test--click (concat "[" width "]"))
+              (unless (string-match-p "- Incidents"
+                                      (vui-examples-test--text))
+                (vui-examples-test--click "+ Incidents"))
+              (expect (vui-examples-test--text) :to-match "OOM loop")
+              (expect (apply #'max (mapcar #'string-width
+                                           (split-string
+                                            (vui-examples-test--text) "\n")))
+                      :not :to-be-greater-than (string-to-number width))))
+        (vui-examples-test--kill "*vui-responsive*")))))
 
 (provide 'vui-examples-test)
 ;;; vui-examples-test.el ends here

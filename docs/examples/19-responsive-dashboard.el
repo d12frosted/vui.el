@@ -63,8 +63,10 @@
 ;;; Cards
 ;;
 ;; A card is a one-column bordered table: the title is the header, the
-;; body lines are rows.  Cards size themselves to their content, and as
-;; multi-line blocks they flow through `vui-grid' and `vui-flex' :wrap.
+;; body lines are rows.  A card sizes itself to its content, or pads
+;; out to a given width, and as multi-line blocks cards flow through
+;; `vui-grid' and `vui-flex' :wrap.  The stat and incident cards are
+;; grid function cells that take the width of their track.
 
 (defun vui-example-responsive--card (title rows &optional content-width)
   "A bordered card titled TITLE with ROWS (strings or vnodes) below.
@@ -87,6 +89,20 @@ The grid calls it with the track width and the card fills the track."
        (list (propertize value 'face 'bold)
              (propertize delta 'face face))
        (max (string-width label) (- track 4))))))
+
+(defun vui-example-responsive--incident-card (incident)
+  "One incident card from INCIDENT, as a grid function cell.
+The card fills the track and the description wraps to it.  The title
+and the status line do not wrap, so a track narrower than those is
+overflowed."
+  (pcase-let ((`(,title ,status ,description) incident))
+    (lambda (track)
+      (let ((width (max (string-width title) (- track 4))))
+        (vui-example-responsive--card
+         title
+         (cons (propertize status 'face 'shadow)
+               (split-string (string-fill description width) "\n"))
+         width)))))
 
 (defun vui-example-responsive--services-panel ()
   "The bordered service table; sits beside the activity card when wide."
@@ -133,11 +149,7 @@ expanded body goes through the grid."
      :on-click (lambda () (vui-set-state :expanded (not expanded))))
    (when expanded
      (apply #'vui-grid :width total :columns 2 :min-column-width 30
-            (mapcar (pcase-lambda (`(,title ,status ,description))
-                      (vui-example-responsive--card
-                       title
-                       (list (propertize status 'face 'shadow)
-                             description)))
+            (mapcar #'vui-example-responsive--incident-card
                     vui-example-responsive--incidents)))))
 
 (vui-defcomponent responsive-dashboard ()

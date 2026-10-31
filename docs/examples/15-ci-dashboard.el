@@ -119,7 +119,10 @@ when it touches component state.  Returns the process."
 
 (vui-defcomponent vui-ci-run-detail (repo run-id on-back)
   "Detail view for RUN-ID in REPO: jobs, steps, and an on-demand log."
-  :state ((detail nil) (loading t) (showing-log nil))
+  ;; log-fetched: the log is in the stream, so showing it again does
+  ;; not fetch it again (the stream keeps its items while hidden).  A
+  ;; failed fetch clears it, so the next click tries again.
+  :state ((detail nil) (loading t) (showing-log nil) (log-fetched nil))
   :render
   (let* ((stream (vui-use-stream))
          (apply-detail
@@ -134,7 +137,9 @@ when it touches component state.  Returns the process."
                         apply-detail)))
          (stream-log
           (lambda ()
-            (vui-set-state :showing-log t)
+            (vui-batch
+             (vui-set-state :showing-log t)
+             (vui-set-state :log-fetched t))
             (vui-stream-append stream (vui-text "fetching log..." :face 'shadow))
             ;; Stream `gh run view --log' line by line into the stream.
             (let* ((line-buf "")
@@ -157,6 +162,7 @@ when it touches component state.  Returns the process."
                                (vui-stream-append
                                 stream (vui-text (ansi-color-filter-apply line-buf))))
                              (when (/= 0 (process-exit-status proc))
+                               (vui-set-state :log-fetched nil)
                                (vui-stream-append
                                 stream (vui-text "(log not available - the run may still be in progress)"
                                          :face 'shadow))))))))))
@@ -193,7 +199,11 @@ when it touches component state.  Returns the process."
       (vui-button "← back" :on-click (lambda () (funcall on-back)))
       (if showing-log
           (vui-button "hide log" :on-click (lambda () (vui-set-state :showing-log nil)))
-        (vui-button "stream log" :on-click (lambda () (funcall stream-log))))))))
+        (vui-button (if log-fetched "show log" "stream log")
+          :on-click (lambda ()
+                      (if log-fetched
+                          (vui-set-state :showing-log t)
+                        (funcall stream-log)))))))))
 
 ;;; The dashboard
 
