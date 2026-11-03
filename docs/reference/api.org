@@ -684,7 +684,9 @@ indented.
 (vui-box CHILD &rest PROPS) -> vnode
 #+end_src
 
-Fixed-width container for CHILD.
+Fixed-width container for CHILD.  A CHILD of several lines is aligned as
+one block: its widest line sets the offset every line gets, and the last
+line is padded out to the box width.
 
 | Property         | Type    | Default | Description                                 |
 |------------------+---------+---------+---------------------------------------------|

@@ -97,6 +97,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-box= aligns a child of several lines, such as a vstack or a
+  table, as one block. It aligned the child as if it were one long
+  line: =:right= and =:center= moved only the first line, so a table
+  in a right-aligned box lost its shape. Now every line starts at the
+  column the widest line sets, and the last line is padded out to the
+  box width, so what follows the box on that line starts at its right
+  edge (the padding came from the widest line, so a shorter last line
+  ended short). New items of a stream in the box start at the same
+  column.
+
 - A =vui-table= =:header= that is not a string, such as a vnode,
   signals an error that names the column. It crashed while the column
   widths were measured, with a =wrong-type-argument= that said nothing

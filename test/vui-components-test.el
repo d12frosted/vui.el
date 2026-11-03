@@ -567,10 +567,10 @@
         (ignore instance)
         (unwind-protect
             (with-current-buffer "*test-collapsible-16d*"
-              ;; One column of alignment padding in the box: its widest
-              ;; line is 7 wide
+              ;; The last line of the box, "  deep", is padded out to
+              ;; its width of 8
               (expect (substring-no-properties (buffer-string))
-                      :to-equal "▼ Outer\n  ▼ Inner\n    deep "))
+                      :to-equal "▼ Outer\n  ▼ Inner\n    deep  "))
           (kill-buffer "*test-collapsible-16d*"))))
 
     (it "indents a collapsible inside a table once"

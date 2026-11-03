@@ -209,15 +209,15 @@
       (expect (vsx--text buffer) :to-equal "start\nrow dim 1 [bump]\n[dim]")))
 
   (it "see them in a row a box measures"
-    ;; The box pads the stream on the left by 20 less the width it
-    ;; measured: 3 for "row dark 0 [bump]", 2 for "row light 0 [bump]"
+    ;; The box starts each line of the stream 20 less the width it
+    ;; measured in: 3 for "row dark 0 [bump]", 2 for "row light 0 [bump]"
     (let ((vui-render-delay nil))
       (let ((root (vui-mount (vui-component 'vsx-app :log log :boxed t)
                              buffer)))
         (vui-stream-append log (vui-component 'vsx-row))
         (vui-rerender root)
         (expect (vsx--text buffer)
-                :to-equal "   start\nrow dark 0 [bump]\n[dim]"))))
+                :to-equal "   start\n   row dark 0 [bump]\n[dim]"))))
 
   (it "leave an inline mount that is not a row with no provider"
     (let ((vui-render-delay nil)

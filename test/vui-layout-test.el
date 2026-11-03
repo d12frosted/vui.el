@@ -268,24 +268,80 @@
     (with-temp-buffer
       (vui-render (vui-box (vui-vstack (vui-text "a") (vui-text "bbb") (vui-text "c"))
                            :width 5))
-      (expect (buffer-string) :to-equal "a\nbbb\nc  "))
+      ;; The last line is padded out to the box width
+      (expect (buffer-string) :to-equal "a\nbbb\nc    "))
     (with-temp-buffer
       (vui-render (vui-box (vui-vstack (vui-text "bbb") (vui-text "a"))
                            :width 5 :align :right))
-      (expect (buffer-string) :to-equal "  bbb\na")))
+      (expect (buffer-string) :to-equal "  bbb\n  a  ")))
+
+  (it "aligns multiline content as one block"
+    (dolist (case '((:left . "ab\ncdef\ngh        ")
+                    (:right . "      ab\n      cdef\n      gh  ")
+                    (:center . "   ab\n   cdef\n   gh     ")))
+      (with-temp-buffer
+        (vui-render (vui-box (vui-vstack (vui-text "ab") (vui-text "cdef")
+                                         (vui-text "gh"))
+                             :width 10 :align (car case)))
+        (expect (buffer-string) :to-equal (cdr case)))))
+
+  (it "centers multiline content with the odd column on the right"
+    (with-temp-buffer
+      ;; 5 columns to share: 2 before each line, 3 after the last
+      (vui-render (vui-box (vui-vstack (vui-text "ab") (vui-text "cdef"))
+                           :width 9 :align :center))
+      (expect (buffer-string) :to-equal "  ab\n  cdef   ")))
+
+  (it "keeps a table in a right-aligned box in one piece"
+    (with-temp-buffer
+      (vui-render (vui-box (vui-table :border :ascii :columns '((:header "A"))
+                                      :rows '(("x")))
+                           :width 9 :align :right))
+      (expect (buffer-string)
+              :to-equal "    +---+\n    | A |\n    +---+\n    | x |\n    +---+")))
+
+  (it "aligns the block inside its padding"
+    (with-temp-buffer
+      (vui-render (vui-box (vui-vstack (vui-text "ab") (vui-text "c"))
+                           :width 8 :align :right :padding-left 1 :padding-right 1))
+      ;; inner width 6, block 2 wide: 4 columns before each line
+      (expect (buffer-string) :to-equal "     ab\n     c  ")))
+
+  (it "writes a stream's new items at the block's column"
+    (let ((vui-render-delay nil)
+          (log (vui-make-stream)))
+      (vui-defcomponent vui-layout-test-boxed-stream (log)
+        :render (vui-vstack (vui-box (vui-stream log) :width 12 :align :right)
+                            (vui-text "after")))
+      (vui-mount (vui-component 'vui-layout-test-boxed-stream :log log)
+                 "*vui-boxed-stream*")
+      (unwind-protect
+          (progn
+            (vui-stream-append log (vui-text "one"))
+            (vui-stream-append log (vui-text "two"))
+            (expect (with-current-buffer "*vui-boxed-stream*" (buffer-string))
+                    :to-equal "         one\n         two\nafter"))
+        (kill-buffer "*vui-boxed-stream*"))))
+
+  (it "writes what follows it at the box width after its last line"
+    (with-temp-buffer
+      (vui-render (vui-hstack :spacing 0
+                    (vui-box (vui-vstack (vui-text "abc") (vui-text "d"))
+                             :width 5 :align :center)
+                    (vui-text "|")))
+      (expect (buffer-string) :to-equal " abc\n d   |")))
 
   (it "applies padding-left after a newline that ends the content"
     (with-temp-buffer
-      ;; No alignment padding after the newline: the content is as wide
-      ;; as the box has room for
+      ;; The empty last line is padded out to the box like any last line
       (vui-render (vui-box (vui-text "a\nb\n") :width 3 :padding-left 2))
-      (expect (buffer-string) :to-equal "  a\n  b\n  ")))
+      (expect (buffer-string) :to-equal "  a\n  b\n   ")))
 
   (it "writes what follows it after the padding of its last line"
     (with-temp-buffer
       (vui-render (vui-vstack (vui-box (vui-text "a\n") :width 3 :padding-left 2)
                               (vui-text "z")))
-      (expect (buffer-string) :to-equal "  a\n  \nz")))
+      (expect (buffer-string) :to-equal "  a\n   \nz")))
 
   (it "gets the indent of a vstack on each of its lines"
     (with-temp-buffer

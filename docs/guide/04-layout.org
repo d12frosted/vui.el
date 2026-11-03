@@ -169,6 +169,22 @@ Left
                Right
 #+end_example
 
+A child of several lines, such as a vstack or a table, is aligned as one
+block: every line starts at the same column, set by the widest line, so
+the child keeps its shape. The last line is padded out to the box width,
+so what follows the box on that line starts at its right edge.
+
+#+begin_src elisp
+(vui-box (vui-vstack (vui-text "ab") (vui-text "cdef"))
+  :width 10 :align :right)
+#+end_src
+
+Output:
+#+begin_example
+      ab
+      cdef
+#+end_example
+
 ** Padding
 
 Add padding inside the box:
