@@ -7156,12 +7156,17 @@ more than it: its cells are cut, or overflow, at the width it has
                                     :vui--cut-width (elt widths i))
                        col))))
 
-(defun vui--table-check-widths (columns)
-  "Signal an error for a bad :width or :min-width of COLUMNS.
-Each is a whole number of characters: a non-negative integer."
+(defun vui--table-check-columns (columns)
+  "Signal an error for a bad :header, :width or :min-width of COLUMNS.
+A header is a string.  A width is a whole number of characters: a
+non-negative integer."
   (cl-loop for col in columns
            for i from 0
-           do (dolist (option '(:width :min-width))
+           do (let ((header (plist-get col :header)))
+                (unless (or (null header) (stringp header))
+                  (error "vui-table: :header of column %d is %S, not a string"
+                         i header)))
+              (dolist (option '(:width :min-width))
                 (let ((width (plist-get col option)))
                   (unless (or (null width) (natnump width))
                     (error "vui-table: %s of column %d is %S, not a non-negative integer"
@@ -7218,7 +7223,7 @@ Width calculation:
   - :width W :grow t     -> column width = W (enforced minimum)
   - :width W :grow nil   -> column width = max(content) if all fit, else W
   The header of the column counts as content."
-  (vui--table-check-widths columns)
+  (vui--table-check-columns columns)
   (let* ((header-face (or header-face 'vui-table-header))
          (col-count (length columns))
          (widths (make-vector col-count 0)))

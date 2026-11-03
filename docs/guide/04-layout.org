@@ -299,7 +299,7 @@ Output:
 
 | Property       | Description                                        |
 |----------------+----------------------------------------------------|
-| =:header=      | Column header text                                 |
+| =:header=      | Column header text, a string                       |
 | =:header-span= | The header goes over this and the next N-1 columns |
 | =:width=       | Target width for cell content                      |
 | =:min-width=   | Minimum width, expands as needed                   |
@@ -309,7 +309,8 @@ Output:
 
 =:width= and =:min-width= are whole numbers of characters, 0 or more
 (also in =pixel= =vui-width-mode=). Any other value, such as =2.5= or
-="5"=, signals an error that names the column, counting from 0.
+="5"=, signals an error that names the column, counting from 0. So
+does a =:header= that is not a string, such as a vnode.
 
 A header can go over several columns: =:header-span N= on a column
 puts its header over it and the N-1 columns after it, which have no

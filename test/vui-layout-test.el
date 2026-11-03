@@ -1170,6 +1170,38 @@
                              :rows '(("abc" "d"))))
       (expect (buffer-string) :to-equal " d"))))
 
+(describe "vui-table headers that are not strings"
+  (it "signals an error naming the column"
+    (dolist (header (list (vui-text "Hdr" :face 'bold) 'name 42))
+      (expect (with-temp-buffer
+                (vui-render (vui-table :columns (list '(:header "A")
+                                                      (list :header header))
+                                       :rows '(("a" "b")))))
+              :to-throw 'error
+              (list (format "vui-table: :header of column 1 is %S, not a string"
+                            header)))))
+
+  (it "signals for a header over several columns"
+    (expect (with-temp-buffer
+              (vui-render (vui-table :columns '((:header 42 :header-span 2) ())
+                                     :rows '(("a" "b")))))
+            :to-throw 'error
+            '("vui-table: :header of column 0 is 42, not a string")))
+
+  (it "signals for a sticky table"
+    (expect (with-temp-buffer
+              (vui-render (vui-table :sticky-header t :border :unicode
+                                     :columns '((:header 42))
+                                     :rows '(("a")))))
+            :to-throw 'error
+            '("vui-table: :header of column 0 is 42, not a string")))
+
+  (it "takes columns without a header"
+    (with-temp-buffer
+      (vui-render (vui-table :columns '((:header nil) ())
+                             :rows '(("a" "b"))))
+      (expect (buffer-string) :to-equal "a b"))))
+
 (describe "vui-table"
   (it "creates a table vnode"
     (let ((node (vui-table
