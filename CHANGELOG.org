@@ -97,6 +97,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-table= =:header= that is not a string, such as a vnode,
+  signals an error that names the column. It crashed while the column
+  widths were measured, with a =wrong-type-argument= that said nothing
+  about the table.
+
 - A component whose render function moves point re-renders in its own
   place. The new text was written at the point the render left, so a
   render that selected a window on its buffer wrote at that window's
