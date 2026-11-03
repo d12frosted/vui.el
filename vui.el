@@ -1648,7 +1648,10 @@ Usage: (vui-vstack child1 child2 child3)
   "Create a fixed-width box containing CHILD.
 PROPS is a plist accepting:
   :width N - width in characters (default 20)
-  :align ALIGN - :left, :center, or :right (default :left)
+  :align ALIGN - :left, :center, or :right (default :left).  A
+                 CHILD of several lines is aligned as one block: its
+                 widest line sets the offset every line gets, and the
+                 last line is padded out to the box width
   :padding-left N - left padding (default 0)
   :padding-right N - right padding (default 0)
   :face FACE - applied beneath the child's own faces, covering the
@@ -12042,44 +12045,46 @@ is written."
            ;; rebindings, a component inside the box would be reconciled
            ;; twice per render (duplicate child entries, shifted indexes
            ;; for keyless siblings) and would mount inside the temp buffer.
-           (content-width (let ((vui--measure-buffer (vui--measure-buffer)))
-                            (with-temp-buffer
-                              (let ((vui--current-instance nil)
-                                    (vui--root-instance nil)
-                                    (vui--new-children nil)
-                                    (vui--child-index 0)
-                                    (vui--measuring-p t)
-                                    (vui--pending-effects nil))
-                                (vui--render-vnode child))
-                              (vui--text-width (buffer-string) t))))
+           ;; (WIDTH . LAST-LINE-WIDTH): the block is as wide as its
+           ;; widest line, and the last line is padded out to the box
+           (measured (let ((vui--measure-buffer (vui--measure-buffer)))
+                       (with-temp-buffer
+                         (let ((vui--current-instance nil)
+                               (vui--root-instance nil)
+                               (vui--new-children nil)
+                               (vui--child-index 0)
+                               (vui--measuring-p t)
+                               (vui--pending-effects nil))
+                           (vui--render-vnode child))
+                         (cons (vui--text-width (buffer-string) t)
+                               (vui--text-width
+                                (buffer-substring
+                                 (save-excursion (goto-char (point-max))
+                                                 (line-beginning-position))
+                                 (point-max)))))))
+           (content-width (car measured))
            (inner-width (- width pad-left pad-right))
-           (padding (max 0 (- inner-width content-width))))
-      ;; Insert left padding
-      (insert pad-left-str)
+           (padding (max 0 (- inner-width content-width)))
+           ;; Multiline content is aligned as one block: every line
+           ;; starts this far in, so a table or a column keeps its shape
+           (offset (pcase align
+                     (:right padding)
+                     (:center (car (vui--split-padding padding)))
+                     (_ 0)))
+           (line-start (concat pad-left-str (vui--pad offset))))
+      (insert line-start)
       ;; Record start position for post-processing newlines.  A marker:
       ;; the hooks of the components in the box can write or delete text
       ;; above it.
       (let ((content-start (vui--start-marker)))
-        ;; Render content with alignment (render properly to get widgets)
-        (pcase align
-          (:left
-           (vui--render-vnode child)
-           (insert (vui--pad padding)))
-          (:right
-           (insert (vui--pad padding))
-           (vui--render-vnode child))
-          (:center
-           (let* ((split (vui--split-padding padding))
-                  (left-pad (car split))
-                  (right-pad (cdr split)))
-             (insert (vui--pad left-pad))
-             (vui--render-vnode child)
-             (insert (vui--pad right-pad)))))
-        ;; Add left padding after each newline for block indentation
-        (when (> pad-left 0)
-          (vui--indent-lines content-start (point) pad-left-str))
+        (vui--render-vnode child)
+        ;; Start each further line of the block at the same column
+        (when (> (+ pad-left offset) 0)
+          (vui--indent-lines content-start (point) line-start))
         (set-marker content-start nil))
-      ;; Insert right padding
+      ;; Pad the last line out to the box, so what follows the box on
+      ;; that line starts at its right edge
+      (insert (vui--pad (max 0 (- inner-width offset (cdr measured)))))
       (insert (vui--pad pad-right))
       (vui--finish-container box-start
                              (vui-vnode-box-face vnode)
