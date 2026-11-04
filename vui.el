@@ -2755,6 +2755,78 @@ Called from within a component's render function."
           (puthash ref-id ref refs)
           ref))))
 
+;;; Intervals
+
+(defmacro vui-use-interval (deps seconds &rest body)
+  "Run BODY every SECONDS seconds while the component is mounted.
+
+BODY runs in the component's context, so it can call `vui-set-state'.
+Each tick runs BODY as the latest render wrote it, so it sees the
+current state and props without listing them in DEPS.  A tick that
+comes before the change of the last one has rendered still sees the
+old state, so when SECONDS can be as short as `vui-render-delay',
+update state with a function, as in (vui-set-state :n #\\='1+).
+
+SECONDS is a positive number, or nil for no timer, so an interval
+that runs only some of the time needs no separate flag.  The timer
+starts after the render, like `vui-use-effect', and starts again when
+DEPS or SECONDS change, also after a `:stop'.  So a BODY that changes
+what DEPS lists starts a new timer each time: list in DEPS only what
+should start the timer again, such as a deadline.
+
+The timer stops on unmount, when BODY returns `:stop', and when BODY
+signals; the error is then reported once through
+`vui-event-error-handler'.  Any other value BODY returns, nil
+included, keeps the timer going.
+
+Example:
+  (vui-defcomponent countdown ()
+    :state ((left 10))
+    :render
+    (progn
+      (vui-use-interval () (and (> left 0) 1)
+        (vui-set-state :left (1- left))
+        (when (= left 1) :stop))
+      (vui-text (format \"%d\" left))))"
+  (declare (indent 2) (debug (sexp form body)))
+  (let ((secs (make-symbol "secs"))
+        (body-ref (make-symbol "body-ref")))
+    `(let ((,secs ,seconds)
+           (,body-ref (vui-use-ref nil)))
+       (unless (or (null ,secs) (and (numberp ,secs) (> ,secs 0)))
+         (signal 'wrong-type-argument (list "positive number or nil" ,secs)))
+       (setcar ,body-ref (lambda () ,@body))
+       (vui-use-effect (,@deps ,secs)
+         (vui--start-interval ,secs ,body-ref)))))
+
+(defun vui--start-interval (seconds body-ref)
+  "Start the timer of a `vui-use-interval' that ticks every SECONDS.
+Each tick calls the function in the car of BODY-REF.  Return a function
+that stops the timer, or nil when SECONDS is nil.  Called from the
+effect, in the context of the component the interval belongs to."
+  (when seconds
+    (let ((instance vui--current-instance)
+          (buf (current-buffer))
+          (timer nil))
+      (setq timer
+            (run-with-timer
+             seconds seconds
+             (lambda ()
+               (if (or (not (buffer-live-p buf))
+                       (eq (vui-instance-mounted-p instance) 'unmounted))
+                   (cancel-timer timer)
+                 (with-current-buffer buf
+                   (let ((vui--current-instance instance)
+                         (vui--root-instance (vui--find-root instance)))
+                     (condition-case err
+                         (when (eq (funcall (car body-ref)) :stop)
+                           (cancel-timer timer))
+                       (error
+                        (cancel-timer timer)
+                        (vui--handle-error 'event "vui-use-interval"
+                                           err instance)))))))))
+      (lambda () (cancel-timer timer)))))
+
 ;;; Context API
 
 (defmacro vui-defcontext (name &optional default-value docstring)

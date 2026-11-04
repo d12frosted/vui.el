@@ -28,7 +28,8 @@
 ;; The components are intentionally prop-driven (the transcript is a
 ;; `:messages' prop) so tests and benchmarks can drive growth with
 ;; `vui-update'.  `vui-agent-chat-demo' wraps them with internal state
-;; and a timer to simulate async agent output for interactive use.
+;; and a `vui-use-interval' to simulate async agent output for
+;; interactive use.
 
 ;;; Code:
 
@@ -136,21 +137,16 @@ grows.  INTERVAL defaults to 0.5."
   :state ((messages nil) (queue 0) (status "idle"))
   :render
   (progn
-    ;; Append one message per tick.  Functional `vui-set-state' updates
-    ;; avoid capturing stale state in the timer closure.
-    (vui-use-effect ()
-      (let ((timer (run-with-timer
-                    (or interval 0.5) (or interval 0.5)
-                    (vui-with-async-context
-                     (vui-set-state
-                      :messages
-                      (lambda (old)
-                        (let ((n (1+ (length old))))
-                          (append old
-                                  (list (list :id n
-                                              :role (vui-agent-chat--roles n)
-                                              :text (format "streamed message %d" n)))))))))))
-        (lambda () (cancel-timer timer))))
+    ;; Append one message per tick.
+    (vui-use-interval () (or interval 0.5)
+      (vui-set-state
+       :messages
+       (lambda (old)
+         (let ((n (1+ (length old))))
+           (append old
+                   (list (list :id n
+                               :role (vui-agent-chat--roles n)
+                               :text (format "streamed message %d" n))))))))
     (vui-component 'vui-agent-chat
       :messages messages :queue queue :status status)))
 
@@ -170,42 +166,41 @@ box below never re-render during this - only the last line changes.
 INTERVAL defaults to 0.25."
   :state ((queue 0) (status "idle"))
   :render
-  (let ((stream (vui-use-stream)))
-    (vui-use-effect ()
-      ;; Mutable cursor over the script, captured by the timer.  wi = 0
-      ;; means "start the next message"; later words grow it in place.
-      (let ((mi 0) (wi 0)
-            (script vui-agent-chat--script))
-        (let ((timer
-               (run-with-timer
-                (or interval 0.25) (or interval 0.25)
-                (vui-with-async-context
-                 (when (< mi (length script))
-                   (let* ((msg (nth mi script))
-                          (role (car msg))
-                          (words (split-string (cdr msg) " ")))
-                     (cond
-                      ;; A tool call lands as a collapsible component ROW
-                      ;; (one tick); click it later to expand its output.
-                      ((eq role 'tool)
-                       (vui-stream-append
-                        stream (vui-component 'vui-chat-tool-card
-                                 :name (cdr msg) :output "ok - exit 0"))
-                       (setq mi (1+ mi) wi 0))
-                      ;; Text messages type out word by word, in place.
-                      ((= wi 0)
-                       (vui-stream-append
-                        stream (vui-chat-message-vnode role (car words)))
-                       (setq wi (1+ wi))
-                       (when (>= wi (length words)) (setq mi (1+ mi) wi 0)))
-                      (t
-                       (vui-stream-update-last
-                        stream
-                        (vui-chat-message-vnode
-                         role (string-join (cl-subseq words 0 (1+ wi)) " ")))
-                       (setq wi (1+ wi))
-                       (when (>= wi (length words)) (setq mi (1+ mi) wi 0))))))))))
-          (lambda () (cancel-timer timer)))))
+  (let ((stream (vui-use-stream))
+        ;; Cursor over the script as (MESSAGE . WORD).  WORD = 0 means
+        ;; "start the next message"; later words grow it in place.
+        (cursor (vui-use-ref '(0 . 0))))
+    ;; One step per tick, until the script runs out.
+    (vui-use-interval () (or interval 0.25)
+      (let* ((script vui-agent-chat--script)
+             (mi (car (car cursor)))
+             (wi (cdr (car cursor)))
+             (msg (nth mi script))
+             (role (car msg))
+             (words (split-string (cdr msg) " ")))
+        (cond
+         ;; A tool call lands as a collapsible component ROW (one
+         ;; tick); click it later to expand its output.
+         ((eq role 'tool)
+          (vui-stream-append
+           stream (vui-component 'vui-chat-tool-card
+                    :name (cdr msg) :output "ok - exit 0"))
+          (setq mi (1+ mi) wi 0))
+         ;; Text messages type out word by word, in place.
+         ((= wi 0)
+          (vui-stream-append
+           stream (vui-chat-message-vnode role (car words)))
+          (setq wi (1+ wi)))
+         (t
+          (vui-stream-update-last
+           stream
+           (vui-chat-message-vnode
+            role (string-join (cl-subseq words 0 (1+ wi)) " ")))
+          (setq wi (1+ wi))))
+        (when (and (not (eq role 'tool)) (>= wi (length words)))
+          (setq mi (1+ mi) wi 0))
+        (setcar cursor (cons mi wi))
+        (when (>= mi (length script)) :stop)))
     (vui-component 'vui-agent-chat-stream
       :stream stream :queue queue :status status)))
 
