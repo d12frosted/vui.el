@@ -7,9 +7,8 @@
 ;;   status colors and the summary counts
 ;; - State + reducers: jobs are immutable; every change is a functional
 ;;   `vui-set-state' update that returns a fresh list
-;; - Effects: a `run-with-timer' inside `vui-use-effect' advances running
-;;   jobs, with `vui-with-async-context' to restore context in the callback
-;;   and cleanup that cancels the timer on pause / unmount
+;; - Intervals: `vui-use-interval' advances running jobs; a nil SECONDS
+;;   while paused means no timer, and unmount stops it
 ;; - Derived behavior: a second effect stops the clock once every job has
 ;;   settled, and a concurrency limit staggers how jobs start
 
@@ -93,13 +92,8 @@
   :render
   (progn
     ;; Tick: while running, advance the pipeline every half second.
-    (vui-use-effect (running)
-      (when running
-        (let ((timer (run-with-timer
-                      0.5 0.5
-                      (vui-with-async-context
-                       (vui-set-state :jobs #'vui-example-dashboard--tick)))))
-          (lambda () (cancel-timer timer)))))
+    (vui-use-interval () (and running 0.5)
+      (vui-set-state :jobs #'vui-example-dashboard--tick))
 
     ;; Stop the clock once every job has settled.
     (vui-use-effect (jobs)

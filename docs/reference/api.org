@@ -1286,6 +1286,40 @@ Modifying a ref does NOT trigger re-render.
     (lambda () (cancel-timer (car timer-ref)))))
 #+end_src
 
+** use-interval
+
+#+begin_src elisp
+(vui-use-interval (DEPS...) SECONDS BODY...)
+#+end_src
+
+Run BODY every SECONDS seconds while the component is mounted.
+
+- BODY runs in the component's context, so it can call =vui-set-state=.
+- Each tick runs BODY as the latest render wrote it, so it sees the
+  current state and props. DEPS is only for "start the timer again
+  when this changes".
+- SECONDS is a positive number, or nil for no timer.
+- The timer starts again when DEPS or SECONDS change, also after a
+  =:stop=. List in DEPS only what should start it again, not the state
+  BODY changes.
+- A tick that comes before the last one rendered sees the old state.
+  When SECONDS can be as short as =vui-render-delay=, update with a
+  function: =(vui-set-state :n #'1+)=.
+- The timer stops on unmount, when BODY returns =:stop=, or when BODY
+  signals. The error is reported once through =vui-event-error-handler=.
+  Any other return value, nil included, keeps it going.
+
+#+begin_src elisp
+(vui-defcomponent countdown ()
+  :state ((left 10))
+  :render
+  (progn
+    (vui-use-interval () (and (> left 0) 1)
+      (vui-set-state :left (1- left))
+      (when (= left 1) :stop))
+    (vui-text (format "%d" left))))
+#+end_src
+
 ** use-callback
 
 #+begin_src elisp

@@ -168,9 +168,9 @@ when it touches component state.  Returns the process."
                                          :face 'shadow))))))))))
     ;; Fetch on open and poll every 4s (so in-progress steps update live).
     (vui-use-effect (run-id)
-      (funcall fetch)
-      (let ((timer (run-with-timer 4 4 (vui-with-async-context (funcall fetch)))))
-        (lambda () (cancel-timer timer))))
+      (funcall fetch))
+    (vui-use-interval (run-id) 4
+      (funcall fetch))
 
     (vui-vstack
      (if showing-log
@@ -237,8 +237,9 @@ when it touches component state.  Returns the process."
     ;; Poll runs every 6s (immediately on mount); fetch workflows once.
     (vui-use-effect ()
       (vui-ci--gh repo '("workflow" "list" "--json" "name,id,state") apply-workflows)
-      (let ((timer (run-with-timer 0 6 (vui-with-async-context (funcall refresh)))))
-        (lambda () (cancel-timer timer))))
+      (funcall refresh))
+    (vui-use-interval () 6
+      (funcall refresh))
 
     (if selected
         ;; Drill-down: the detail manages its own fetching/polling.

@@ -351,6 +351,7 @@ Customize faces to fit your theme:
 |--------------------+--------------------------------------------|
 | =vui-use-effect=   | Side effects with cleanup                  |
 | =vui-use-ref=      | Mutable reference (no re-render on change) |
+| =vui-use-interval= | Repeating timer tied to the component      |
 | =vui-use-callback= | Stable callback reference                  |
 | =vui-use-memo=     | Cached computed value                      |
 | =vui-use-async=    | Async data loading with cache              |
@@ -380,6 +381,7 @@ Define aliases in your init file:
 (defalias 'defcontext 'vui-defcontext)
 (defalias 'use-effect 'vui-use-effect)
 (defalias 'use-ref 'vui-use-ref)
+(defalias 'use-interval 'vui-use-interval)
 (defalias 'use-callback 'vui-use-callback)
 (defalias 'use-memo 'vui-use-memo)
 (defalias 'use-async 'vui-use-async)

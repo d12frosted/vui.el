@@ -4,7 +4,8 @@
 
 ;;; Commentary:
 
-;; Tests for vui.el hooks: use-effect, use-memo, use-ref, use-callback, use-async.
+;; Tests for vui.el hooks: use-effect, use-memo, use-ref, use-callback, use-async,
+;; use-interval.
 
 ;;; Code:
 
@@ -1029,5 +1030,159 @@
             (kill-buffer "*test-toggle*")))))))
 
 
+(describe "use-interval"
+  (it "runs BODY in the component, from the latest render, until it returns :stop"
+    (let ((vui-render-delay nil)
+          (ticks 0))
+      (vui-defcomponent interval-count ()
+        :state ((n 0))
+        :render (progn
+                  (vui-use-interval () 0.01
+                    (setq ticks (1+ ticks))
+                    (vui-set-state :n (1+ n))
+                    (when (>= (1+ n) 3) :stop))
+                  (vui-text (number-to-string n))))
+      (vui-mount (vui-component 'interval-count) "*test-interval-count*")
+      (unwind-protect
+          (with-current-buffer "*test-interval-count*"
+            (vui-test--wait-until (equal (buffer-string) "3"))
+            (expect (buffer-string) :to-equal "3")
+            (expect ticks :to-equal 3)
+            (vui-test--wait-for-timers 0.05)
+            (expect ticks :to-equal 3))
+        (kill-buffer "*test-interval-count*"))))
+
+  (it "reaches :stop when SECONDS is below the render delay"
+    (let ((vui-render-delay 0.03))
+      (vui-defcomponent interval-slow-render ()
+        :state ((n 0))
+        :render (progn
+                  (vui-use-interval () 0.01
+                    (vui-set-state :n (1+ n))
+                    (when (>= (1+ n) 3) :stop))
+                  (vui-text (number-to-string n))))
+      (vui-mount (vui-component 'interval-slow-render) "*test-interval-slow*")
+      (unwind-protect
+          (with-current-buffer "*test-interval-slow*"
+            (vui-test--wait-until (equal (buffer-string) "3"))
+            (expect (buffer-string) :to-equal "3"))
+        (kill-buffer "*test-interval-slow*"))))
+
+  (it "keeps ticking while BODY returns nil"
+    (let ((vui-render-delay nil)
+          (ticks 0))
+      (vui-defcomponent interval-nil ()
+        :render (progn
+                  (vui-use-interval () 0.01
+                    (setq ticks (1+ ticks))
+                    nil)
+                  (vui-text "x")))
+      (vui-mount (vui-component 'interval-nil) "*test-interval-nil*")
+      (unwind-protect
+          (progn
+            (vui-test--wait-until (>= ticks 3))
+            (expect ticks :to-be-greater-than 2))
+        (kill-buffer "*test-interval-nil*"))))
+
+  (it "starts no timer while SECONDS is nil, and starts one when it is a number"
+    (let ((vui-render-delay nil)
+          (ticks 0)
+          (set-secs nil))
+      (vui-defcomponent interval-toggle ()
+        :state ((secs nil))
+        :render (progn
+                  (setq set-secs (vui-async-callback (v) (vui-set-state :secs v)))
+                  (vui-use-interval () secs
+                    (setq ticks (1+ ticks)))
+                  (vui-text "x")))
+      (vui-mount (vui-component 'interval-toggle) "*test-interval-toggle*")
+      (unwind-protect
+          (progn
+            (vui-test--wait-for-timers 0.05)
+            (expect ticks :to-equal 0)
+            (funcall set-secs 0.01)
+            (vui-test--wait-until (>= ticks 2))
+            (expect ticks :to-be-greater-than 1)
+            ;; Back to nil stops it
+            (funcall set-secs nil)
+            (let ((seen ticks))
+              (vui-test--wait-for-timers 0.05)
+              (expect ticks :to-equal seen)))
+        (kill-buffer "*test-interval-toggle*"))))
+
+  (it "starts again when DEPS change after a :stop"
+    (let ((vui-render-delay nil)
+          (ticks 0)
+          (set-round nil))
+      (vui-defcomponent interval-deps ()
+        :state ((round 0))
+        :render (progn
+                  (setq set-round (vui-async-callback (v) (vui-set-state :round v)))
+                  (vui-use-interval (round) 0.01
+                    (setq ticks (1+ ticks))
+                    :stop)
+                  (vui-text "x")))
+      (vui-mount (vui-component 'interval-deps) "*test-interval-deps*")
+      (unwind-protect
+          (progn
+            (vui-test--wait-until (= ticks 1))
+            (vui-test--wait-for-timers 0.05)
+            (expect ticks :to-equal 1)
+            (funcall set-round 1)
+            (vui-test--wait-until (= ticks 2))
+            (vui-test--wait-for-timers 0.05)
+            (expect ticks :to-equal 2))
+        (kill-buffer "*test-interval-deps*"))))
+
+  (it "stops on unmount"
+    (let ((vui-render-delay nil)
+          (ticks 0))
+      (vui-defcomponent interval-unmount ()
+        :render (progn
+                  (vui-use-interval () 0.01
+                    (setq ticks (1+ ticks)))
+                  (vui-text "x")))
+      (vui-mount (vui-component 'interval-unmount) "*test-interval-unmount*")
+      (unwind-protect
+          (progn
+            (vui-test--wait-until (>= ticks 1))
+            (vui-unmount "*test-interval-unmount*")
+            (let ((seen ticks))
+              (vui-test--wait-for-timers 0.05)
+              (expect ticks :to-equal seen)))
+        (kill-buffer "*test-interval-unmount*"))))
+
+  (it "signals at render when SECONDS is not a positive number"
+    (vui-defcomponent interval-zero ()
+      :render (progn
+                (vui-use-interval () 0 nil)
+                (vui-text "x")))
+    (unwind-protect
+        (expect (vui-mount (vui-component 'interval-zero) "*test-interval-zero*")
+                :to-throw 'wrong-type-argument)
+      (kill-buffer "*test-interval-zero*")))
+
+  (it "stops and reports once when BODY signals"
+    (let* ((vui-render-delay nil)
+           (ticks 0)
+           (reports nil)
+           (vui-event-error-handler
+            (lambda (hook err _instance) (push (list hook err) reports))))
+      (vui-defcomponent interval-error ()
+        :render (progn
+                  (vui-use-interval () 0.01
+                    (setq ticks (1+ ticks))
+                    (error "Tick failed"))
+                  (vui-text "x")))
+      (vui-mount (vui-component 'interval-error) "*test-interval-error*")
+      (unwind-protect
+          (progn
+            (vui-test--wait-until (>= ticks 1))
+            (vui-test--wait-for-timers 0.05)
+            (expect ticks :to-equal 1)
+            (expect (length reports) :to-equal 1)
+            (expect (car (car reports)) :to-equal "vui-use-interval")
+            (expect (cadr (car reports)) :to-equal '(error "Tick failed")))
+        (kill-buffer "*test-interval-error*")))))
 
 ;;; vui-hooks-test.el ends here

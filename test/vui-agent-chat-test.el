@@ -25,6 +25,7 @@
 (require 'buttercup)
 (require 'vui)
 (require 'cl-lib)
+(require 'vui-test-helpers)
 
 ;; The example app lives under docs/examples, which the Eldev file puts
 ;; on `load-path' for every eldev command.
@@ -188,6 +189,23 @@ that any incremental path must reproduce byte-for-byte."
               (expect (buffer-string) :to-match "status: idle")
               (expect (buffer-string) :to-match "queue: 0 pending")
               (expect widget-field-list :not :to-be nil)))
+        (vui-agent--kill buf)))))
+
+(describe "agent-chat: the word-by-word stream demo"
+  (it "types out the whole script and then stops its timer"
+    (let* ((vui-render-delay nil)
+           (buf "*vui-agent-stream-demo*")
+           (before (copy-sequence timer-list)))
+      (vui-mount (vui-component 'vui-agent-chat-stream-demo :interval 0.005) buf)
+      (unwind-protect
+          (let ((last (cdr (car (last vui-agent-chat--script)))))
+            (vui-test--wait-until
+             (string-search last (with-current-buffer buf (buffer-string))))
+            (let ((text (with-current-buffer buf (buffer-string))))
+              (expect text :to-match (regexp-quote last))
+              (vui-test--wait-for-timers 0.05)
+              (expect (with-current-buffer buf (buffer-string)) :to-equal text)
+              (expect (cl-set-difference timer-list before) :to-be nil)))
         (vui-agent--kill buf)))))
 
 (provide 'vui-agent-chat-test)

@@ -1,15 +1,14 @@
 ;;; 10-pomodoro.el --- Pomodoro Timer -*- lexical-binding: t -*-
 
 ;; This file demonstrates a Pomodoro timer, focusing on:
-;; - A countdown driven by `run-with-timer' inside `vui-use-effect'
+;; - A countdown driven by `vui-use-interval'
 ;; - Timing from the wall clock (a stored deadline) rather than by counting
 ;;   timer ticks: `run-with-timer' fires late when Emacs is busy and even
 ;;   drops missed repeats, so decrementing once per tick loses time.  We keep
 ;;   a deadline and recompute the remaining seconds, so the clock stays
 ;;   accurate no matter how the timer behaves.
-;; - Restoring component context in timer callbacks with
-;;   `vui-with-async-context'
-;; - Effect cleanup that cancels the timer on pause and unmount
+;; - An interval that runs only while the clock does: a nil SECONDS
+;;   means no timer, and the timer stops by itself on unmount
 ;; - Deriving session transitions (work <-> break) from state changes
 
 ;;; Code:
@@ -75,19 +74,12 @@ full second before ticking down."
       ;; Tick: while running, refresh `remaining' from the wall clock.  The
       ;; timer only drives the refresh rate; the value comes from `deadline',
       ;; so a late or dropped tick changes how smoothly the clock updates,
-      ;; not how much time it reports.  The callback runs asynchronously, so
-      ;; wrap it in `vui-with-async-context'.  The effect re-runs whenever
-      ;; `deadline' changes (start, pause, transition); its cleanup cancels
-      ;; the timer.
-      (vui-use-effect (deadline)
-        (when deadline
-          (let ((timer (run-with-timer
-                        1 1
-                        (vui-with-async-context
-                         (vui-set-state
-                          :remaining
-                          (vui-example-pomodoro--remaining-until deadline))))))
-            (lambda () (cancel-timer timer)))))
+      ;; not how much time it reports.  There is no timer while paused
+      ;; (SECONDS is nil then), and the timer starts again whenever
+      ;; `deadline' changes (start, pause, transition).
+      (vui-use-interval (deadline) (and deadline 1)
+        (vui-set-state
+         :remaining (vui-example-pomodoro--remaining-until deadline)))
 
       ;; Transition: when the countdown hits zero, switch sessions.  This is
       ;; derived from `remaining', so it stays correct no matter what drove

@@ -200,6 +200,54 @@ Cleanup runs:
     (vui-text (format "Count: %d" count))))
 #+end_src
 
+* Repeating Timers - =vui-use-interval=
+
+=vui-use-interval= runs its body every few seconds while the component
+is mounted. It is the timer from the effect cleanup example, with the
+bookkeeping done for you:
+
+#+begin_src elisp
+(vui-defcomponent stopwatch ()
+  :state ((elapsed 0) (running t))
+  :render
+  (progn
+    (vui-use-interval () (and running 1)
+      (vui-set-state :elapsed (1+ elapsed)))
+    (vui-hstack
+     (vui-text (format "Elapsed: %d seconds" elapsed))
+     (vui-button (if running "Pause" "Resume")
+       :on-click (lambda () (vui-set-state :running (not running)))))))
+#+end_src
+
+The form is =(vui-use-interval (DEPS...) SECONDS BODY...)=:
+
+- BODY runs in the component's context, so =vui-set-state= works there
+  without =vui-with-async-context=.
+- Each tick runs BODY as the latest render wrote it. =elapsed= above is
+  the current value, not the one from the render that started the
+  timer, so =(1+ elapsed)= is fine here. A tick that comes before the
+  last one rendered still sees the old value, though: when SECONDS can
+  be as short as =vui-render-delay=, write =(vui-set-state :elapsed #'1+)=.
+- SECONDS is a positive number, or nil for no timer. That is how the
+  stopwatch pauses.
+- The timer starts again when DEPS or SECONDS change, also after a
+  =:stop=. Since BODY always sees the latest state, DEPS is only for
+  "restart when this changes", for example a new deadline. Don't list
+  the state BODY changes there, or every tick starts a new timer.
+- The timer stops on unmount, and when BODY returns =:stop=:
+
+#+begin_src elisp
+(vui-use-interval () 0.05
+  (vui-set-state :shown (1+ shown))
+  (when (>= (1+ shown) total) :stop))
+#+end_src
+
+  Only =:stop= stops it. Any other value, nil included, keeps it going:
+  BODY often ends with =vui-set-state=, whose return value means
+  nothing.
+- When BODY signals, the timer stops and the error is reported once
+  through =vui-event-error-handler=.
+
 * Memoized Callbacks - =vui-use-callback=
 
 =vui-use-callback= returns a stable function reference that only changes when dependencies change.
@@ -595,6 +643,10 @@ When the returned function is called, it:
 
 *** Timers
 
+For a timer that repeats, like this clock, =vui-use-interval= does all
+of this for you. The macro is still what a one-off timer, or one you
+start from a callback, needs.
+
 #+begin_src elisp
 (vui-defcomponent clock ()
   :state ((time (current-time-string)))
@@ -820,6 +872,7 @@ Include all values used in the effect/callback:
 |--------------------------+-------------------------------------|
 | =vui-use-effect=             | Run side effects after render       |
 | =vui-use-ref=                | Mutable value without re-render     |
+| =vui-use-interval=           | Repeating timer, stops on unmount   |
 | =vui-use-callback=           | Stable function reference           |
 | =vui-use-memo=               | Cache expensive computations        |
 | =vui-use-async=              | Load data asynchronously with cache |

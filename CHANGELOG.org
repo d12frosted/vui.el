@@ -9,6 +9,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-use-interval= runs its body every SECONDS seconds while the
+  component is mounted (#292). The body runs in the component, as the
+  latest render wrote it, so it sees current state and props. The timer
+  starts again when DEPS or SECONDS change, a nil SECONDS means no
+  timer, and it stops on unmount, when the body returns =:stop=, or
+  when the body signals (reported once through
+  =vui-event-error-handler=). Examples 10, 11, 13 and 15 use it; the
+  word-by-word demo in example 13 now stops at the end of its script
+  instead of ticking forever.
+
 - Public functions for editable fields and keyed elements (#291), so
   code that works inside a field needs no =widget.el=:
   - =vui-field-at= returns the field at a position, or nil. It never
