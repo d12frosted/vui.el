@@ -210,7 +210,8 @@ is a full program built this way: it polls the =gh= CLI with
 
 Note that separate =vui-set-state= calls do not each cost a render.
 =vui-render-delay= defaults to 0.01, so updates landing within 10ms
-coalesce into one re-render. You rarely need to batch fetch results
+of the first one coalesce into one re-render, and a stream of updates
+renders every 10ms. You rarely need to batch fetch results
 yourself just to avoid redundant renders.
 
 * The Window Does Not Have to Be Selected

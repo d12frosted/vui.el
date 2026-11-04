@@ -2240,7 +2240,9 @@ request of each root.")
 (defcustom vui-render-delay 0.01
   "Seconds to wait before rendering when using deferred rendering.
 This delay allows multiple state changes to be batched into a single
-re-render for better performance.  Set to nil to render immediately.
+re-render for better performance.  The delay counts from the first
+change since the last render, so changes that keep coming still
+render once per delay.  Set to nil to render immediately.
 
 Known issue with nil: when a field's :on-change sets state, a
 command that edits the field inside `save-excursion' leaves point at
@@ -2528,8 +2530,13 @@ Otherwise, render immediately or after delay based on config."
 Uses a regular timer so the render fires reliably regardless of
 whether Emacs is idle.  The timer is stored on ROOT itself, so each
 mounted root has its own schedule and re-scheduling one root never
-cancels another root's pending render."
-  (when root
+cancels another root's pending render.
+
+When ROOT already has a render pending, that one stays: starting the
+delay again on every change would put the render off for as long as
+changes come faster than `vui-render-delay'."
+  (when (and root
+             (not (memq (vui-instance-render-timer root) timer-list)))
     (vui--cancel-render-timer root)
     (setf (vui-instance-render-timer root)
           (run-with-timer

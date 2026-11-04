@@ -190,7 +190,10 @@ Event handlers are automatically batched:
 
 * Deferred Rendering
 
-By default, renders are deferred briefly to allow batching. Configure with =vui-render-delay=:
+By default, renders are deferred briefly to allow batching. The delay
+counts from the first state change since the last render, so changes
+that keep coming (a fast timer, a busy process filter) still render
+once per delay. Configure with =vui-render-delay=:
 
 #+begin_src elisp
 ;; Immediate rendering (might feel more responsive)
