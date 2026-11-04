@@ -129,15 +129,10 @@ inherits `bold'."
 Resets the pixel cache before and after so mocked measurements never
 leak into other specs (the cache is global).
 
-`truncate-string-pixelwise' (Emacs 31) is a C function that measures
-with `window-text-pixel-size' directly and cannot see the mock, so it
-is unbound here and vui's own fallback (`vui--pixel-binary-search')
-runs instead.  On Emacs 31 that is the only coverage the fallback
-gets; the built-in is exercised for real, with real metrics, by every
-other truncation spec in the suite."
+Truncation is measured with `string-pixel-width' too, so the mock
+covers it: vui never calls the built-in `truncate-string-pixelwise'."
   (declare (indent 0))
-  `(cl-letf (((symbol-function 'string-pixel-width) #'vui-test--px)
-             ((symbol-function 'truncate-string-pixelwise) nil))
+  `(cl-letf (((symbol-function 'string-pixel-width) #'vui-test--px))
      (vui--reset-text-pixel-cache)
      (unwind-protect
          (let ((vui-width-mode 'pixel))
@@ -208,19 +203,20 @@ VNODE-THUNK builds the vnode fresh per render (vnodes may be consumed)."
       ;; wide glyphs: "你好世界" is 44px; budget 30px, no ellipsis -> "你好" (22px)
       (expect (vui--truncate-string "你好世界" 30) :to-equal "你好")))
 
-  (it "vui--truncate-string prefers the built-in truncate-string-pixelwise when present"
-    ;; The mock unbinds the built-in (it cannot see mocked metrics), so
-    ;; the specs above cover vui's fallback.  This one pins the dispatch:
-    ;; when a truncate-string-pixelwise exists, pixel mode calls it.
+  (it "vui--truncate-string measures with vui's own widths, not the built-in"
+    ;; The built-in truncate-string-pixelwise measures in a work buffer of
+    ;; its own, with no face remapping unless handed a buffer, so it cuts
+    ;; by other widths than the ones vui lays out with.  Pixel mode must
+    ;; not call it.
     (let ((called nil))
       (cl-letf (((symbol-function 'string-pixel-width) #'vui-test--px)
                 ((symbol-function 'truncate-string-pixelwise)
                  (lambda (s &rest _) (setq called t) s)))
         (vui--reset-text-pixel-cache)
         (let ((vui-width-mode 'pixel))
-          (vui--truncate-string "abcdef" 35 "..."))
+          (expect (vui--truncate-string "abcdef" 35 "...") :to-equal "ab..."))
         (vui--reset-text-pixel-cache))
-      (expect called :to-be t)))
+      (expect called :to-be nil)))
 
   (it "a frame font change (reset) also drops the memoized space width"
     ;; Same face context, new frame font: only `after-setting-font-hook'
@@ -919,6 +915,68 @@ bites; the tests just have to respect it."
         (let ((widths (mapcar (lambda (l) (vui-test--px l (current-buffer)))
                               (split-string (buffer-string) "\n"))))
           (expect (length (seq-uniq widths)) :to-equal 1)))))
+
+  (it "truncates a bold header by that font's widths, ellipsis included"
+    ;; The header is cut to the column, the bold "..." counted at its
+    ;; bold width: measured in the frame's default font, or with a plain
+    ;; ellipsis, the header row would come out wider than the others
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Wonderful Header" :width 8 :truncate t)
+                                          (:header "Q"))
+                               :rows '(("a" "1") ("bb" "2"))))
+        (let* ((lines (split-string (buffer-string) "\n"))
+               (header (seq-find (lambda (w) (string-match-p "\\.\\.\\." w))
+                                 (split-string (nth 1 lines) " " t))))
+          (expect header :to-be-truthy)
+          ;; The cut text itself fits the 8 columns (32px): the border
+          ;; rounds the column up to whole rule glyphs, which would hide
+          ;; a few pixels of overflow from the row widths
+          (expect (vui-test--px header (current-buffer)) :not :to-be-greater-than 32)
+          (expect (length (seq-uniq (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                                            lines)))
+                  :to-equal 1)))))
+
+  (it "truncates a button cell by that font's widths"
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-table :border :unicode
+                               :columns '((:header "Act" :width 8 :truncate t)
+                                          (:header "Q"))
+                               :rows (list (list (vui-button "Wonderful Wide Button"
+                                                             :on-click #'ignore)
+                                                 "1")
+                                           (list "x" "2"))))
+        (let ((lines (split-string (buffer-string) "\n")))
+          (expect (nth 3 lines) :to-match "\\.\\.\\.\\]")
+          (expect (length (seq-uniq (mapcar (lambda (l) (vui-test--px l (current-buffer)))
+                                            lines)))
+                  :to-equal 1)))))
+
+  (it "truncates a button label with the face the button wears"
+    ;; A bold button is cut by its bold width, so it fits its :max-width
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-button "Wonderful Wide Button" :face 'bold
+                                :max-width 8 :on-click #'ignore))
+        (expect (buffer-string) :to-match "\\.\\.\\.\\]$")
+        ;; 8 columns of a 4px space
+        (expect (vui-test--px (buffer-string) (current-buffer))
+                :to-be-less-than 33)
+        ;; At 7 columns (28px) the bold brackets leave no room for a
+        ;; glyph; with plain brackets "[W...]" would be cut, at 30px
+        (let ((inhibit-read-only t)) (erase-buffer))
+        (vui-render (vui-button "Wonderful Wide Button" :face 'bold
+                                :max-width 7 :on-click #'ignore))
+        (expect (vui-test--px (buffer-string) (current-buffer))
+                :not :to-be-greater-than 28))))
 
   (it "keeps char mode byte-identical with a bold header"
     (vui-test--parity
