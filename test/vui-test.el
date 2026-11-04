@@ -429,7 +429,7 @@
                    (vui-newline)
                    (vui-button "two" :on-click #'ignore)))
       (let* ((all (vui--collect-widgets))
-             (first-end (cdr (vui--widget-bounds (car all)))))
+             (first-end (cdr (vui-element-bounds (car all)))))
         (expect (length all) :to-equal 2)
         ;; Bounded to the first line: only the first button
         (expect (length (vui--collect-widgets (point-min) first-end))

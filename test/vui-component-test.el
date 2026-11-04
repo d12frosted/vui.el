@@ -675,7 +675,7 @@
                 ;; The element at that path is now the checkbox: a text
                 ;; button (not a widget) rendering [ ]
                 (expect (widgetp widget-after) :to-be nil)
-                (let ((bounds (vui--widget-bounds widget-after)))
+                (let ((bounds (vui-element-bounds widget-after)))
                   (expect (buffer-substring-no-properties
                            (car bounds) (cdr bounds))
                           :to-equal "[ ]")))))
@@ -695,7 +695,7 @@
             ;; Position cursor deep in the field (offset ~15 from start)
             (goto-char (point-min))
             (let* ((widget-before (vui--elt-at (point)))
-                   (bounds-before (vui--widget-bounds widget-before))
+                   (bounds-before (vui-element-bounds widget-before))
                    (field-start (car bounds-before)))
               (expect widget-before :to-be-truthy)
               ;; Move to offset 15 within the field
@@ -708,7 +708,7 @@
               (vui-flush-sync)
               ;; Cursor should be on the (smaller) field, capped to its bounds
               (let* ((widget-after (vui--elt-at (point)))
-                     (bounds-after (vui--widget-bounds widget-after))
+                     (bounds-after (vui-element-bounds widget-after))
                      (new-start (car bounds-after))
                      (new-end (cdr bounds-after)))
                 (expect widget-after :to-be-truthy)

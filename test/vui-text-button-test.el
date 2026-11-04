@@ -52,7 +52,7 @@
     (with-temp-buffer
       (vui-render (vui-button "hello" :on-click #'ignore) (current-buffer))
       (let* ((b (vui--elt-at (point-min)))
-             (bounds (vui--widget-bounds b)))
+             (bounds (vui-element-bounds b)))
         (expect (car bounds) :to-equal (point-min))
         (expect (buffer-substring-no-properties (car bounds) (cdr bounds))
                 :to-equal "[hello]"))))
