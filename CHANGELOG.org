@@ -97,6 +97,17 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- In pixel mode, truncated text fits its width in a
+  =variable-pitch-mode= or =text-scale-mode= buffer. Truncation used
+  the built-in =truncate-string-pixelwise=, which measured in the
+  frame's default font while the layout used the buffer's font, so a
+  =:truncate= cell or header could come out wider than its column and
+  push that row's separators to the right (by 27px for a header in 22px
+  Helvetica). Truncation now measures with the same widths as the
+  layout. A truncated header also counts its "..." in the header face,
+  and a button with =:max-width= measures its label in the face it is
+  shown with, so a bold button fits too.
+
 - A =vui-box= aligns a child of several lines, such as a vstack or a
   table, as one block. It aligned the child as if it were one long
   line: =:right= and =:center= moved only the first line, so a table

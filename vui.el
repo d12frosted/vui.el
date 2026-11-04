@@ -6690,35 +6690,42 @@ according to the current vui-width-mode."
       ""
     (substring str 0 (vui--index-of str width))))
 
-(defun vui--truncate-string-pixelwise (string max-pixels &optional buffer ellipsis ellipsis-pixels)
+(defun vui--truncate-string-pixelwise (string max-pixels &optional ellipsis ellipsis-pixels)
   "Truncate STRING to a maximum width of MAX-PIXELS.
-If the built-in truncate-string-pixelwise is available, it is used for
-the truncation. Otherwise, if the pixel width of STRING exceeds
-MAX-PIXELS, it is clipped and ELLIPSIS is appended."
-  (if (fboundp 'truncate-string-pixelwise)
-      (truncate-string-pixelwise string max-pixels buffer ellipsis ellipsis-pixels)
-    (if (<= (vui--string-pixel-width string) max-pixels)
-        string
-      (let* ((ellipsis (or ellipsis ""))
-             (ellipsis-pixels (or ellipsis-pixels (vui--string-pixel-width ellipsis))))
-        (concat (vui--clip-string string (- max-pixels ellipsis-pixels))
-                ellipsis)))))
+If the pixel width of STRING exceeds MAX-PIXELS, it is clipped and
+ELLIPSIS (ELLIPSIS-PIXELS wide) is appended.  Measured with
+`vui--text-width', the widths every layout is computed from, in the
+face context of `vui--measure-buffer' and with STRING's own faces.  The
+built-in `truncate-string-pixelwise' is not used: it measures in a work
+buffer that has no face remapping unless handed one, so in a
+`variable-pitch-mode' buffer it cut text by the frame's default font."
+  (if (<= (vui--text-width string) max-pixels)
+      string
+    (let* ((ellipsis (or ellipsis ""))
+           (ellipsis-pixels (or ellipsis-pixels (vui--text-width ellipsis))))
+      (concat (vui--clip-string string (- max-pixels ellipsis-pixels))
+              ellipsis))))
 
-(defun vui--button-text (label max-width no-decoration)
+(defun vui--button-text (label max-width no-decoration &optional face)
   "Return the text of a button with LABEL, at most MAX-WIDTH wide.
 The label is in brackets unless NO-DECORATION.  A label that does not
 fit is truncated with \"...\" (see `vui--truncate-string').  The
 brackets stay when some of the label fits between them; otherwise the
-label goes without them.  No MAX-WIDTH means no limit."
+label goes without them.  No MAX-WIDTH means no limit.  FACE is the
+face the button is inserted with: the text is measured wearing it, so
+a bold button fits MAX-WIDTH too."
   (let ((decorated (if no-decoration label (concat "[" label "]"))))
-    (if (or (null max-width) (<= (vui--text-width decorated) max-width))
+    (if (or (null max-width)
+            (<= (vui--text-width (vui--faced decorated face)) max-width))
         decorated
-      (let* ((room (- max-width (if no-decoration 0 (vui--text-width "[]"))))
+      (let* ((room (- max-width (if no-decoration 0
+                                  (vui--text-width (vui--faced "[]" face)))))
+             (ellipsis (vui--faced "..." face))
              (inside (and (not no-decoration) (> room 0)
-                          (vui--truncate-string label room "..."))))
+                          (vui--truncate-string (vui--faced label face) room ellipsis))))
         (if (and inside (not (string-empty-p inside)))
             (concat "[" inside "]")
-          (vui--truncate-string label (max 0 max-width) "..."))))))
+          (vui--truncate-string (vui--faced label face) (max 0 max-width) ellipsis))))))
 
 (defun vui--truncate-string (str width &optional ellipsis)
   "Truncate STR to the specified WIDTH, optionally appending ELLIPSIS. The
@@ -6731,8 +6738,8 @@ WIDTH is left out, and STR is clipped to WIDTH without it."
     (pcase vui-width-mode
       ('char (truncate-string-to-width str width nil nil ellipsis))
       ('pixel (vui--truncate-string-pixelwise
-               str width nil ellipsis
-               (and ellipsis (vui--string-pixel-width ellipsis)))))))
+               str width ellipsis
+               (and ellipsis (vui--text-width ellipsis)))))))
 
 ;; Render Pixel Width
 
@@ -7628,7 +7635,8 @@ Handles :truncate and overflow:
                            (vui--table-truncated-button cell declared-width)))
                          ;; Truncate if content exceeds width and :truncate is set
                          ((and truncate-p declared-width (> content-width declared-width))
-                          (vui--truncate-string content declared-width "..."))
+                          (vui--truncate-string content declared-width
+                                                (vui--faced "..." face)))
                          ;; Overflow: show content up to width
                          (has-overflow
                           (vui--truncate-string content declared-width))
@@ -11825,12 +11833,13 @@ is written."
            (on-click (vui-vnode-button-on-click vnode))
            (face (vui-vnode-button-face vnode))
            (disabled (vui-vnode-button-disabled-p vnode))
+           (shown-face (if disabled 'widget-inactive (or face 'link)))
            (max-width (vui--width (vui-vnode-button-max-width vnode)))
            (no-decoration (vui-vnode-button-no-decoration vnode))
            (help-echo (vui-vnode-button-help-echo vnode))
            (tab-order (vui-vnode-button-tab-order vnode))
            (keymap (vui-vnode-button-keymap vnode))
-           (text (vui--button-text label max-width no-decoration))
+           (text (vui--button-text label max-width no-decoration shown-face))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
@@ -11845,7 +11854,7 @@ is written."
                  (let ((vui--current-instance captured-instance)
                        (vui--root-instance captured-root))
                    (funcall wrapped-click))))
-             'face (if disabled 'widget-inactive (or face 'link))
+             'face shown-face
              ;; A disabled button should not advertise clickability: no hover
              ;; highlight and no follow-link cursor (it is inert)
              'mouse-face (unless disabled 'highlight)
