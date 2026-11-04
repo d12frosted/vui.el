@@ -466,10 +466,12 @@ as a fragment of their own.
 
 Create a clickable button. By default, buttons render with brackets: =LABEL= becomes =[LABEL]=.
 
+The button's face (=link= unless =:face= says otherwise) goes beneath the faces the label already has, so a label built from propertized parts keeps them: in =(concat (propertize "#42" 'face 'warning) " Fix")= the number shows as =(warning link)= and the rest as =link=. A disabled button draws =widget-inactive= over them instead, so it still looks disabled. The same goes for a =vui-select= label and a =vui-collapsible= title.
+
 | Property         | Type        | Description                                |
 |------------------+-------------+--------------------------------------------|
 | =:on-click=      | function    | Click handler                              |
-| =:face=          | symbol      | Button face                                |
+| =:face=          | face        | Applied beneath the label's own faces      |
 | =:disabled=      | boolean     | Disable button                             |
 | =:max-width=     | integer     | Max width including brackets (truncates)   |
 | =:no-decoration= | boolean     | Render without brackets                    |
