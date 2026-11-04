@@ -1457,6 +1457,9 @@ When :max-width is set, the button will truncate its label to fit:
 the ellipsis is left out when it does not fit, and the brackets when
 they leave no room for the label.
 When :no-decoration is t, the button renders without [ ] brackets.
+:face (default `link') goes beneath the faces LABEL already has, so a
+label built from propertized parts keeps them.  A disabled button
+draws `widget-inactive' over them instead.
 When :help-echo is nil, tooltip is disabled (improves performance).
 When :help-echo is a string, that string is used as tooltip.
 When :tab-order is -1, button is not reachable via TAB.
@@ -6601,6 +6604,16 @@ literal.  Used so a string is measured with the same face it is
 inserted with."
   (if face (propertize str 'face face) str))
 
+(defun vui--add-face (str face &optional on-top)
+  "Return a copy of STR with FACE added to the faces its text has.
+FACE goes beneath them, so they keep showing and FACE fills in what
+they leave unset; with ON-TOP it goes over them instead.  Text with no
+face gets FACE alone.  STR itself is left as it is: it is often a
+caller's literal."
+  (let ((copy (copy-sequence str)))
+    (add-face-text-property 0 (length copy) face (not on-top) copy)
+    copy))
+
 (defun vui--text-width (text &optional multi-line-p)
   "Calculate the width of TEXT according to the value of vui-width-mode. If
 the mode is char, return the maximum width of all lines when
@@ -6706,26 +6719,33 @@ buffer that has no face remapping unless handed one, so in a
       (concat (vui--clip-string string (- max-pixels ellipsis-pixels))
               ellipsis))))
 
-(defun vui--button-text (label max-width no-decoration &optional face)
+(defun vui--button-text (label max-width no-decoration face &optional on-top)
   "Return the text of a button with LABEL, at most MAX-WIDTH wide.
 The label is in brackets unless NO-DECORATION.  A label that does not
 fit is truncated with \"...\" (see `vui--truncate-string').  The
 brackets stay when some of the label fits between them; otherwise the
-label goes without them.  No MAX-WIDTH means no limit.  FACE is the
-face the button is inserted with: the text is measured wearing it, so
-a bold button fits MAX-WIDTH too."
-  (let ((decorated (if no-decoration label (concat "[" label "]"))))
-    (if (or (null max-width)
-            (<= (vui--text-width (vui--faced decorated face)) max-width))
+label goes without them.  No MAX-WIDTH means no limit.
+
+The text comes back wearing FACE, added beneath the faces LABEL already
+has so they keep showing (over them with ON-TOP, see `vui--add-face').
+It is measured as it will be drawn, so a bold button, or a bold part of
+a label, fits MAX-WIDTH too."
+  (let* ((faced (lambda (str) (vui--add-face str face on-top)))
+         ;; One copy for the whole text: a button is rendered far more
+         ;; often than it is truncated
+         (decorated (funcall faced (if no-decoration label
+                                     (concat "[" label "]")))))
+    (if (or (null max-width) (<= (vui--text-width decorated) max-width))
         decorated
-      (let* ((room (- max-width (if no-decoration 0
-                                  (vui--text-width (vui--faced "[]" face)))))
-             (ellipsis (vui--faced "..." face))
+      (let* ((label (funcall faced label))
+             (room (- max-width (if no-decoration 0
+                                  (vui--text-width (funcall faced "[]")))))
+             (ellipsis (funcall faced "..."))
              (inside (and (not no-decoration) (> room 0)
-                          (vui--truncate-string (vui--faced label face) room ellipsis))))
+                          (vui--truncate-string label room ellipsis))))
         (if (and inside (not (string-empty-p inside)))
-            (concat "[" inside "]")
-          (vui--truncate-string (vui--faced label face) (max 0 max-width) ellipsis))))))
+            (concat (funcall faced "[") inside (funcall faced "]"))
+          (vui--truncate-string label (max 0 max-width) ellipsis))))))
 
 (defun vui--truncate-string (str width &optional ellipsis)
   "Truncate STR to the specified WIDTH, optionally appending ELLIPSIS. The
@@ -11839,7 +11859,11 @@ is written."
            (help-echo (vui-vnode-button-help-echo vnode))
            (tab-order (vui-vnode-button-tab-order vnode))
            (keymap (vui-vnode-button-keymap vnode))
-           (text (vui--button-text label max-width no-decoration shown-face))
+           ;; The text wears its face already: beneath the label's own
+           ;; faces, or over them for a disabled button so it still
+           ;; looks disabled (issue #290)
+           (text (vui--button-text label max-width no-decoration
+                                   shown-face disabled))
            ;; Capture instance context for callback
            (captured-instance vui--current-instance)
            (captured-root vui--root-instance)
@@ -11854,7 +11878,6 @@ is written."
                  (let ((vui--current-instance captured-instance)
                        (vui--root-instance captured-root))
                    (funcall wrapped-click))))
-             'face shown-face
              ;; A disabled button should not advertise clickability: no hover
              ;; highlight and no follow-link cursor (it is inert)
              'mouse-face (unless disabled 'highlight)
@@ -11931,7 +11954,9 @@ is written."
       ;; The label is bracketed like a button; :vui-tag keeps the bare
       ;; label so cursor identity is stable as the selection changes
       (let ((label (format "%s" (or current-label "Select..."))))
-        (apply #'vui--insert-text-button (concat "[" label "]")
+        (apply #'vui--insert-text-button
+               ;; The label keeps its own faces, link goes beneath them
+               (vui--add-face (concat "[" label "]") 'link)
                (lambda (_button)
                  (let* ((vui--current-instance captured-instance)
                         (vui--root-instance captured-root)
@@ -11943,7 +11968,6 @@ is written."
                    (when (and wrapped-change chosen)
                      ;; Pass the option's VALUE, not its label
                      (funcall wrapped-change (cdr chosen)))))
-               'face 'link
                :vui-path captured-path
                ;; The label reflects the current selection, so cursor
                ;; identity leans on :vui-key (see `vui--widget-identity')

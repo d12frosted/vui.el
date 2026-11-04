@@ -958,6 +958,32 @@ bites; the tests just have to respect it."
                                             lines)))
                   :to-equal 1)))))
 
+  (it "truncates a button label by the faces its own text has"
+    ;; The bold part is drawn bold (the button face goes beneath it), so
+    ;; it must be cut by its bold width: plain, "[WWW...]" would be 35px
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-button (concat (propertize "WWWWWW" 'face 'bold) " rest")
+                                :max-width 8 :on-click #'ignore))
+        (expect (buffer-string) :to-match "\\.\\.\\.\\]$")
+        (expect (vui-test--px (buffer-string) (current-buffer))
+                :not :to-be-greater-than 32))))
+
+  (it "cuts a label that fits only while its faces are ignored"
+    ;; "[WWWWWW]" is 32px plain, exactly the 8 columns, but 38px with the
+    ;; bold the label is drawn in, so it has to be cut
+    (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")
+    (vui-test--with-pixel-font
+      (with-temp-buffer
+        (vui-test--remap-variable-pitch (current-buffer))
+        (vui-render (vui-button (propertize "WWWWWW" 'face 'bold)
+                                :max-width 8 :on-click #'ignore))
+        (expect (buffer-string) :to-match "\\.\\.\\.\\]$")
+        (expect (vui-test--px (buffer-string) (current-buffer))
+                :not :to-be-greater-than 32))))
+
   (it "truncates a button label with the face the button wears"
     ;; A bold button is cut by its bold width, so it fits its :max-width
     (assume vui--string-pixel-width-takes-buffer "needs string-pixel-width BUFFER arg")

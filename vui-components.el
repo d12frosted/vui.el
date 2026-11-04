@@ -279,7 +279,7 @@ Options:
   :expanded BOOL - controlled mode state
   :on-toggle FN - called with new state on toggle
   :initially-expanded BOOL - initial state for uncontrolled mode
-  :title-face FACE - face for header
+  :title-face FACE - face for header, beneath the faces TITLE has
   :expanded-indicator STRING - shown when expanded (default \"▼\")
   :collapsed-indicator STRING - shown when collapsed (default \"▶\")
   :indent N - how far the content goes in from the header (default 2)

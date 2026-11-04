@@ -97,6 +97,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- A =vui-button= keeps the faces its label already has (#290). It drew
+  the whole label in =link= or its =:face=, so a label built from
+  propertized parts lost them, and so did a =vui-collapsible= title and
+  a =vui-select= label. The button's face now goes beneath the label's
+  own faces; a disabled button draws =widget-inactive= over them, so it
+  still looks disabled. A plain label looks as before, but a label
+  whose faces were ignored until now starts showing them. In pixel
+  mode a truncated label is measured with those faces.
+
 - In pixel mode, truncated text fits its width in a
   =variable-pitch-mode= or =text-scale-mode= buffer. Truncation used
   the built-in =truncate-string-pixelwise=, which measured in the

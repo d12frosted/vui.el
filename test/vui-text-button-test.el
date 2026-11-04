@@ -84,6 +84,88 @@
       (expect (get-text-property (point-min) 'mouse-face) :to-equal 'highlight)
       (expect (get-text-property (point-min) 'follow-link) :to-be t))))
 
+;; Issue #290: a label's own faces stay, the button's face goes beneath
+(defun vui-test--face-of (string)
+  "Return the face at the first occurrence of STRING in the buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward string)
+    (get-text-property (match-beginning 0) 'face)))
+
+(describe "button labels keep their own faces"
+  (it "puts link beneath the faces a label already has"
+    (with-temp-buffer
+      (vui-render (vui-button (concat (propertize "OPEN" 'face 'success) " "
+                                      (propertize "#42" 'face 'warning) " Fix")
+                    :on-click #'ignore)
+                  (current-buffer))
+      (expect (vui-test--face-of "OPEN") :to-equal '(success link))
+      (expect (vui-test--face-of "#42") :to-equal '(warning link))
+      ;; plain parts and the brackets get the button face alone
+      (expect (vui-test--face-of "Fix") :to-equal 'link)
+      (expect (vui-test--face-of "[") :to-equal 'link)
+      (expect (vui-test--face-of "]") :to-equal 'link)))
+
+  (it "puts a :face beneath them too"
+    (with-temp-buffer
+      (vui-render (vui-button (concat (propertize "#42" 'face 'warning) " Fix")
+                    :face 'bold :on-click #'ignore)
+                  (current-buffer))
+      (expect (vui-test--face-of "#42") :to-equal '(warning bold))
+      (expect (vui-test--face-of "Fix") :to-equal 'bold)))
+
+  (it "draws a disabled button's face over them, so it still looks disabled"
+    (with-temp-buffer
+      (vui-render (vui-button (concat (propertize "#42" 'face 'warning) " Fix")
+                    :disabled t :on-click #'ignore)
+                  (current-buffer))
+      (expect (vui-test--face-of "#42") :to-equal '(widget-inactive warning))
+      (expect (vui-test--face-of "Fix") :to-equal 'widget-inactive)))
+
+  (it "keeps a plain label exactly as before"
+    (with-temp-buffer
+      (vui-render (vui-button "go" :on-click #'ignore) (current-buffer))
+      (goto-char (point-min))
+      (while (not (eobp))
+        (expect (get-text-property (point) 'face) :to-equal 'link)
+        (forward-char 1))))
+
+  (it "keeps them in the part of a label that :max-width keeps"
+    (with-temp-buffer
+      (vui-render (vui-button (concat (propertize "OPEN" 'face 'success) " long title")
+                    :max-width 9 :on-click #'ignore)
+                  (current-buffer))
+      (expect (buffer-string) :to-equal "[OPEN...]")
+      (expect (vui-test--face-of "OPEN") :to-equal '(success link))
+      (expect (vui-test--face-of "...") :to-equal 'link)
+      (expect (vui-test--face-of "[") :to-equal 'link)
+      (expect (vui-test--face-of "]") :to-equal 'link)))
+
+  (it "does not change the label the caller passed"
+    (let ((label (concat (propertize "#42" 'face 'warning) " Fix")))
+      (with-temp-buffer
+        (vui-render (vui-button label :on-click #'ignore) (current-buffer)))
+      (expect (get-text-property 0 'face label) :to-equal 'warning)
+      (expect (get-text-property 3 'face label) :to-be nil)))
+
+  (it "keeps the faces of a vui-collapsible title"
+    (require 'vui-components)
+    (with-temp-buffer
+      (vui-render (vui-collapsible :title (concat (propertize "✓" 'face 'success) " build")
+                    (vui-text "body"))
+                  (current-buffer))
+      (expect (vui-test--face-of "✓") :to-equal '(success link))))
+
+  (it "keeps the faces of a vui-select label"
+    (with-temp-buffer
+      (vui-render (vui-select :value 'a
+                              :options (list (cons 'a (propertize "Alpha" 'face 'success)))
+                              :on-change #'ignore)
+                  (current-buffer))
+      (expect (buffer-string) :to-equal "[Alpha]")
+      (expect (vui-test--face-of "Alpha") :to-equal '(success link))
+      (expect (vui-test--face-of "[") :to-equal 'link))))
+
 (describe "unified navigation (vui-forward/backward)"
   (it "moves across text buttons"
     (with-temp-buffer
