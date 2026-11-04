@@ -458,6 +458,9 @@ When you bind your own key or command, you often need to know which VUI element 
 - =(vui-element-get ELEMENT PROP)= — a VUI property of ELEMENT: =:vui-key= (reconciliation key), =:vui-tag= (label), =:vui-path= (component-tree path), and so on.
 - =(vui-key-at &optional POS)= — convenience for the common case: the =:key= of the element at POS, or =nil=. Same as =(vui-element-get (vui-element-at POS) :vui-key)=.
 - =(vui-activate &optional POS)= — run the element's action: follow a button, toggle a checkbox, open a select, submit a field. Returns non-nil when an element was found.
+- =(vui-field-at &optional POS)= — the editable field at POS, or =nil=; never a button. The end of a full field counts as in it, since typing there still goes into the field.
+- =(vui-element-bounds ELEMENT)= — =(START . END)= of ELEMENT: a field's editable area (the padding after its value included), or a button's whole text.
+- =(vui-element-by-key KEY &optional START END)= — the first element, button or field, whose =:key= is KEY (compared with =equal=), or =nil=. =vui-goto-key= moves point onto it.
 
 #+begin_src elisp
 ;; A command that opens whatever keyed row the cursor is on.
@@ -465,6 +468,23 @@ When you bind your own key or command, you often need to know which VUI element 
   (interactive)
   (when-let* ((key (vui-key-at)))
     (my-open-note key)))
+#+end_src
+
+#+begin_src elisp
+;; Move into the search field, to the end of what is typed there.
+(defun my-edit-query ()
+  (interactive)
+  (if-let* ((field (vui-element-by-key :query)))
+      (goto-char (+ (car (vui-element-bounds field))
+                    (length (vui-field-value :query))))
+    (user-error "No query field")))
+
+;; RET starts typing in a field and does the usual thing elsewhere.
+(defun my-ret ()
+  (interactive)
+  (if (vui-field-at)
+      (evil-insert-state)
+    (call-interactively #'evil-ret)))
 #+end_src
 
 * Architecture

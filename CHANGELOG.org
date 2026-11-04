@@ -9,6 +9,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- Public functions for editable fields and keyed elements (#291), so
+  code that works inside a field needs no =widget.el=:
+  - =vui-field-at= returns the field at a position, or nil. It never
+    returns a button, and it counts the end of a full field, where
+    typing still goes into it (=vui-element-at= finds nothing there).
+  - =vui-element-bounds= returns the (START . END) of an element: a
+    field's editable area, padding included, or a button's whole text.
+  - =vui-element-by-key= returns the first element, button or field,
+    whose =:key= is KEY. =vui-goto-key= is built on it.
+
 - =vui-mount= takes an optional NO-DISPLAY argument. With it, the
   root renders into its buffer without showing that buffer, so a
   background buffer can be prepared without changing any window or

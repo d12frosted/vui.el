@@ -563,7 +563,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
             (with-current-buffer "*rr-ci*"
               (expect (buffer-string) :to-equal "[head]\n[target]")
               ;; Park point on the "target" button (collapsed path (1)).
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(1)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
@@ -587,7 +587,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
             (with-current-buffer "*rr-cr*"
               (expect (buffer-string) :to-equal "[head]\n[extra]\n[target]")
               ;; Park point on "target" (expanded path (2)).
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(2)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :expanded nil))
@@ -617,7 +617,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
             (with-current-buffer "*rr-csr*"
               (expect (buffer-string) :to-equal "[head]\n[t1]\n[t2]\n[tail]")
               ;; Park point on t2 (the second row that will be removed).
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(2)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "t2")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
@@ -643,7 +643,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
         (unwind-protect
             (with-current-buffer "*rr-clr*"
               (expect (buffer-string) :to-equal "[first]\n[second]\n[target]")
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(2)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "target")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
@@ -668,7 +668,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
         (unwind-protect
             (with-current-buffer "*rr-cmr*"
               (expect (buffer-string) :to-equal "[head]\n[mid]\n[tail]")
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(1)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "mid")
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
@@ -699,7 +699,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
             (with-current-buffer "*rr-cont*"
               (expect (buffer-string) :to-equal "[a1]\n[a2]\n[b1]\n[b2]")
               ;; Park on a2, the last leaf of the first group (path (0 1)).
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(0 1)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'a2)
               (let ((vui--current-instance inst)) (vui-set-state :show nil))
@@ -766,7 +766,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
         (unwind-protect
             (with-current-buffer "*rr-dk*"
               ;; Park on the SECOND "dup" (key b2, collapsed path (1)).
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(1)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'b2)
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
@@ -789,7 +789,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
         (unwind-protect
             (with-current-buffer "*rr-ck*"
               (expect (buffer-string) :to-equal "[count 5]")
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(0)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-key)
                       :to-equal 'counter)
@@ -812,7 +812,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
       (let ((inst (vui-mount (vui-component 'rr-cb-key) "*rr-cbk*")))
         (unwind-protect
             (with-current-buffer "*rr-cbk*"
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(0)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'agree)
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))
@@ -833,7 +833,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
       (let ((inst (vui-mount (vui-component 'rr-sel-key) "*rr-sk2*")))
         (unwind-protect
             (with-current-buffer "*rr-sk2*"
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(0)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-key) :to-equal 'sel)
               (let ((vui--current-instance inst)) (vui-set-state :val "b"))
@@ -858,7 +858,7 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
               (expect (buffer-string) :to-equal "[Apple]\n[Banana]")
               ;; Park on "Banana" (second list, path (1 0)); both buttons
               ;; carry key item-1.
-              (goto-char (car (vui--widget-bounds
+              (goto-char (car (vui-element-bounds
                                (vui--find-widget-by-path '(1 0)))))
               (expect (vui--elt-get (vui--elt-at (point)) :vui-tag) :to-equal "Banana")
               (let ((vui--current-instance inst)) (vui-set-state :expanded t))

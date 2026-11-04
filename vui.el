@@ -491,7 +491,7 @@ widget behaviour)."
   (sort (delq nil
               (mapcar (lambda (elt)
                         (unless (eql (vui--elt-get elt :vui-tab-order) -1)
-                          (car (vui--widget-bounds elt))))
+                          (car (vui-element-bounds elt))))
                       (vui--collect-widgets)))
         #'<))
 
@@ -541,9 +541,7 @@ into the field).  This one takes the field that ends at POS, which is
 the field typing goes into there, also when another field starts at
 POS.  EVENT is passed to the field's action."
   (interactive "@d")
-  (if-let* ((field (or (cl-find pos widget-field-list
-                                :key #'widget-field-end :test #'eql)
-                       (widget-field-at pos))))
+  (if-let* ((field (vui-field-at pos)))
       (widget-apply-action field event)
     (widget-field-activate pos event)))
 
@@ -5150,20 +5148,53 @@ action no-ops."
       (button-activate elt))
     t))
 
-(defun vui--widget-bounds (elt)
-  "Return (START . END) bounds of interactive element ELT, or nil.
-For an editable field, the editable text area (not decoration); for a
-text button, the button's extent.  ELT may be a text button or a
-widget (the name is kept for history)."
-  (if (widgetp elt)
-      (let ((field-start (widget-field-start elt))
-            (field-end (widget-field-end elt)))
-        (when (and field-start field-end)
-          (cons field-start field-end)))
-    (let ((start (button-start elt))
-          (end (button-end elt)))
+(defun vui-element-bounds (element)
+  "Return the (START . END) of vui interactive ELEMENT, or nil.
+ELEMENT is a handle from `vui-element-at', `vui-field-at' or
+`vui-element-by-key'.  For an editable field the bounds are its
+editable area, the padding after the value included: the value itself
+ends at START plus the length of its text (see `vui-field-value').  For
+a button, checkbox or select they cover its whole text, brackets
+included.  Nil when ELEMENT is nil or no longer in the buffer
+\(issue #291)."
+  (cond
+   ((null element) nil)
+   ((widgetp element)
+    (let ((field-start (widget-field-start element))
+          (field-end (widget-field-end element)))
+      (when (and field-start field-end)
+        (cons field-start field-end))))
+   (t
+    (let ((start (button-start element))
+          (end (button-end element)))
       (when (and start end)
-        (cons start end)))))
+        (cons start end))))))
+
+(defun vui-field-at (&optional pos)
+  "Return the vui editable field at POS, or nil.
+POS defaults to point.  Only a field vui rendered: never a button,
+checkbox or select, nor a field or `field' text that a host buffer has
+of its own.  The end of a field counts as in it, as typing there goes
+into the field, also when the field is full and other text follows.
+This is the field `vui-field-activate' (RET) submits at POS.  Read it
+with `vui-element-get' and `vui-element-bounds' (issue #291)."
+  (let* ((pos (or pos (point)))
+         (field (or (cl-find pos widget-field-list :key #'widget-field-end :test #'eql)
+                    (vui--field-at pos))))
+    ;; The fields of vui have a `:vui-path' (see `vui--host-fields-p')
+    (and field (plist-member (cdr field) :vui-path) field)))
+
+(defun vui-element-by-key (key &optional start end)
+  "Return the vui interactive element whose `:key' is KEY, or nil.
+Search the elements between START and END (default: the whole buffer)
+in the current buffer, buttons and fields alike, and return the first
+in buffer order.  Keys are compared with `equal', as in reconciliation.
+A nil KEY matches nothing: elements without a key carry a nil one.
+The element is a handle for `vui-element-get', `vui-element-bounds'
+and the like; `vui-goto-key' also moves point onto it (issue #291)."
+  (and key
+       (seq-find (lambda (elt) (equal (vui--elt-get elt :vui-key) key))
+                 (vui--collect-widgets start end))))
 
 (defun vui--insert-text-button (text action &rest props)
   "Insert a vui text button showing TEXT, running ACTION when pushed.
@@ -5221,7 +5252,7 @@ to END, so the cost depends on the region, not on where it is."
   (let* ((field (vui--field-ending-at (point) start))
          (elt (or field (vui--elt-at (point)))))
     (if elt
-        (let* ((bounds (vui--widget-bounds elt))
+        (let* ((bounds (vui-element-bounds elt))
                (elt-start (car bounds))
                (offset (if elt-start (- (point) elt-start) 0))
                (path (vui--elt-get elt :vui-path))
@@ -5399,7 +5430,7 @@ than the end of the new text, and AT-END means that end.  Spaces
 between TEXT and OFFSET were typed after it (the value drops them), so
 they stay after the new text, unless there is none: a cleared field
 has nothing to put them after."
-  (let* ((bounds (vui--widget-bounds widget))
+  (let* ((bounds (vui-element-bounds widget))
          (widget-start (car bounds))
          (widget-end (cdr bounds))
          (new-text (and text (widgetp widget) (vui--field-text widget))))
@@ -5553,10 +5584,8 @@ refreshing so cursor restoration has a stable anchor to return to.  A nil
 KEY matches nothing and returns nil: unkeyed widgets carry a nil
 `:vui-key', so treating nil as a wildcard would jump to the first of
 them."
-  (when-let* ((widget (and key
-                           (seq-find (lambda (w) (equal (vui--elt-get w :vui-key) key))
-                                     (vui--collect-widgets start end))))
-              (pos (car (vui--widget-bounds widget))))
+  (when-let* ((elt (vui-element-by-key key start end))
+              (pos (car (vui-element-bounds elt))))
     (goto-char pos)
     (dolist (win (get-buffer-window-list (current-buffer) nil t))
       (set-window-point win pos))

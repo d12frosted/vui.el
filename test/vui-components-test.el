@@ -722,7 +722,7 @@
           (unwind-protect
               (with-current-buffer "*cc-ts*"
                 (expect (buffer-string) :to-equal "▶ Details")
-                (goto-char (car (vui--widget-bounds
+                (goto-char (car (vui-element-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Details"))))
                 (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
@@ -754,7 +754,7 @@
                                 (lambda (w)
                                   (equal (vui--elt-get w :vui-tag) "▶ Item"))
                                 (vui--collect-widgets))))
-                  (goto-char (car (vui--widget-bounds (nth 1 toggles)))))
+                  (goto-char (car (vui-element-bounds (nth 1 toggles)))))
                 (let ((vui--current-instance inst)) (vui-set-state :open t))
                 ;; Banner shifts both toggles down and the second's indicator
                 ;; flips; without the caller's :key threaded to the toggle,
@@ -782,7 +782,7 @@
           (ignore inst)
           (unwind-protect
               (with-current-buffer "*cc-sib*"
-                (goto-char (car (vui--widget-bounds
+                (goto-char (car (vui-element-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Bar"))))
                 (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
@@ -850,7 +850,7 @@
           (unwind-protect
               (with-current-buffer "*cc-rich-toggle*"
                 (expect (buffer-string) :not :to-match "body")
-                (goto-char (car (vui--widget-bounds
+                (goto-char (car (vui-element-bounds
                                  (vui-components-test--widget-by-tag
                                   "▶ Schema"))))
                 (expect (vui--elt-get (vui--elt-at (point)) :vui-tag)
