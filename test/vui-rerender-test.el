@@ -429,7 +429,61 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
               (expect vui-rr-renders :to-equal 1)
               (expect (with-current-buffer "*rr-co*" (buffer-string))
                       :to-equal "3"))
-          (kill-buffer "*rr-co*"))))))
+          (kill-buffer "*rr-co*")))))
+
+  (it "keeps the pending render when state changes again"
+    (let ((vui-render-delay 0.02))
+      (vui-defcomponent rr-keep-timer ()
+        :state ((n 0))
+        :render (vui-text (format "%d" n)))
+      (let ((inst (vui-mount (vui-component 'rr-keep-timer) "*rr-keep*")))
+        (unwind-protect
+            (with-current-buffer "*rr-keep*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1)
+                (let ((timer (vui-instance-render-timer inst)))
+                  (expect timer :to-be-truthy)
+                  (vui-set-state :n 2)
+                  (expect (eq (vui-instance-render-timer inst) timer) :to-be-truthy)
+                  (vui-test--wait-for-render inst)
+                  (expect (buffer-string) :to-equal "2"))))
+          (kill-buffer "*rr-keep*")))))
+
+  (it "schedules a new render when the pending timer was cancelled"
+    (let ((vui-render-delay 0.02))
+      (vui-defcomponent rr-cancelled-timer ()
+        :state ((n 0))
+        :render (vui-text (format "%d" n)))
+      (let ((inst (vui-mount (vui-component 'rr-cancelled-timer) "*rr-cancel*")))
+        (unwind-protect
+            (with-current-buffer "*rr-cancel*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 1)
+                (cancel-timer (vui-instance-render-timer inst))
+                (vui-set-state :n 2)
+                (vui-test--wait-for-render inst)
+                (expect (buffer-string) :to-equal "2")))
+          (kill-buffer "*rr-cancel*")))))
+
+  (it "renders while state changes more often than the delay"
+    ;; Each change came before the delay ran out, so a delay that
+    ;; started again on every change never rendered
+    (let ((vui-render-delay 0.05)
+          (vui-rr-renders 0))
+      (vui-defcomponent rr-steady ()
+        :state ((n 0))
+        :render (progn (setq vui-rr-renders (1+ vui-rr-renders))
+                       (vui-text (format "%d" n))))
+      (let ((inst (vui-mount (vui-component 'rr-steady) "*rr-steady*")))
+        (unwind-protect
+            (with-current-buffer "*rr-steady*"
+              (setq vui-rr-renders 0)
+              (let ((vui--current-instance inst))
+                (dotimes (i 20)
+                  (vui-set-state :n (1+ i))
+                  (sleep-for 0.01)))
+              (expect vui-rr-renders :to-be-greater-than 0))
+          (kill-buffer "*rr-steady*"))))))
 
 (defvar vui-rr-waiting--renders 0
   "How many times `vui-rr-waiting' rendered.")

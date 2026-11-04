@@ -107,6 +107,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- State that changes more often than =vui-render-delay= renders again.
+  Every =vui-set-state= started the delay over, so a timer or a process
+  filter that set state faster than the delay put the render off until
+  it stopped, and a timer that waited for its own update never saw it
+  (reported in #292). The delay now counts from the first change since
+  the last render: changes still batch into one render, and steady
+  changes render once per delay.
+
 - A =vui-button= keeps the faces its label already has (#290). It drew
   the whole label in =link= or its =:face=, so a label built from
   propertized parts lost them, and so did a =vui-collapsible= title and
