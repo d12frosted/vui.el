@@ -140,8 +140,25 @@ Two things to know:
   pass the instance to =vui-set-state=:
   =(vui-set-state :marks nil (vui-get-instance "*my-panel*"))=.
 - =vui-get-instance= returns the *root* instance, so this reaches the
-  component you passed to =vui-mount=. To update something deeper, pass
-  the data down as props, or use Approach 1 from inside that component.
+  component you passed to =vui-mount=. To reach a keyed component
+  deeper in the tree, a row of a list say, use =vui-get-instance-by-key=.
+  With =vui-key-at=, a command acts on the row at point:
+
+  #+begin_src elisp
+  (defun my-list-toggle-mark ()
+    "Toggle the mark of the row at point."
+    (interactive)
+    (when-let* ((row (vui-get-instance-by-key (vui-key-at))))
+      (vui-set-state :marked (not (vui-get-state row :marked)) row)))
+  #+end_src
+
+  This works when the keys of the rows are unique in the buffer. When
+  two lists reuse the same keys, pass the list component as WHERE:
+  =(vui-get-instance-by-key key list-instance)=. On a keyed button in
+  a row, =vui-key-at= gives the key of the button, not of the row.
+
+  To update something deeper that has no key, pass the data down as
+  props, or use Approach 1 from inside that component.
 
 ** Props Do Not Re-seed State
 
