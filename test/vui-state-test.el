@@ -1336,4 +1336,130 @@
           (kill-buffer "*test-get-state-own*"))))))
 
 
+(describe "vui-set-state with an instance"
+  (it "sets state of the instance from a command and re-renders"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent set-inst-page ()
+        :state ((marks nil))
+        :render (vui-text (format "marks=%S" marks)))
+      (let ((inst (vui-mount (vui-component 'set-inst-page) "*test-set-inst*" t)))
+        (unwind-protect
+            (progn
+              ;; From another buffer, with no component around
+              (with-temp-buffer
+                (vui-set-state :marks '(3 7) inst)
+                (vui-set-state :marks (lambda (old) (cons 1 old)) inst))
+              (expect (vui-get-state inst :marks) :to-equal '(1 3 7))
+              (expect (with-current-buffer "*test-set-inst*" (buffer-string))
+                      :to-equal "marks=(1 3 7)"))
+          (kill-buffer "*test-set-inst*")))))
+
+  (it "sets the instance's own key, not a parent's, and warns"
+    (let ((vui-render-delay nil)
+          (child nil)
+          (warned nil))
+      (vui-defcomponent set-inst-child ()
+        :render (progn (setq child vui--current-instance) (vui-text "c")))
+      (vui-defcomponent set-inst-parent ()
+        :state ((marks '(1)))
+        :render (vui-component 'set-inst-child))
+      (let ((inst (vui-mount (vui-component 'set-inst-parent) "*test-set-inst-own*" t)))
+        (unwind-protect
+            (cl-letf (((symbol-function 'display-warning)
+                       (lambda (&rest _) (setq warned t))))
+              (vui-set-state :marks '(9) child)
+              (expect warned :to-be-truthy)
+              (expect (vui-get-state inst :marks) :to-equal '(1))
+              (expect (vui-get-state child :marks) :to-equal '(9)))
+          (kill-buffer "*test-set-inst-own*")))))
+
+  (it "re-renders a stream row, not the tree around it"
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream))
+          (row nil)
+          (renders 0))
+      (vui-defcomponent set-inst-row ()
+        :state ((n 0))
+        :render (progn (setq row vui--current-instance)
+                       (vui-text (format "row%d" n))))
+      (vui-defcomponent set-inst-feed ()
+        :render (progn (setq renders (1+ renders))
+                       (vui-stream stream)))
+      (vui-mount (vui-component 'set-inst-feed) "*test-set-inst-row*" t)
+      (unwind-protect
+          (with-current-buffer "*test-set-inst-row*"
+            (vui-stream-append stream (vui-component 'set-inst-row))
+            (setq renders 0)
+            (vui-set-state :n 5 row)
+            (expect (buffer-string) :to-equal "row5")
+            (expect renders :to-equal 0))
+        (kill-buffer "*test-set-inst-row*"))))
+
+  (it "batches with other changes"
+    (let ((vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent set-inst-batch ()
+        :state ((a 0) (b 0))
+        :render (progn (setq renders (1+ renders))
+                       (vui-text (format "%d %d" a b))))
+      (let ((inst (vui-mount (vui-component 'set-inst-batch) "*test-set-inst-batch*" t)))
+        (unwind-protect
+            (progn
+              (setq renders 0)
+              (vui-batch
+                (vui-set-state :a 1 inst)
+                (vui-set-state :b 2 inst))
+              (expect renders :to-equal 1)
+              (expect (with-current-buffer "*test-set-inst-batch*" (buffer-string))
+                      :to-equal "1 2"))
+          (kill-buffer "*test-set-inst-batch*")))))
+
+  (it "does nothing to a tree that is unmounted"
+    (let ((vui-render-delay nil)
+          (renders 0))
+      (vui-defcomponent set-inst-gone ()
+        :state ((n 0))
+        :render (progn (setq renders (1+ renders))
+                       (vui-text (number-to-string n))))
+      (let ((inst (vui-mount (vui-component 'set-inst-gone) "*test-set-inst-gone*" t)))
+        (unwind-protect
+            (progn
+              (vui-unmount "*test-set-inst-gone*")
+              (setq renders 0)
+              (expect (vui-set-state :n 1 inst) :not :to-throw)
+              (expect renders :to-equal 0)
+              (expect (with-current-buffer "*test-set-inst-gone*" (buffer-string))
+                      :to-equal ""))
+          (kill-buffer "*test-set-inst-gone*")))))
+
+  (it "leaves a child that the tree dropped as it is"
+    (let ((vui-render-delay nil)
+          (child nil)
+          (renders 0)
+          (set-show nil))
+      (vui-defcomponent set-inst-dropped ()
+        :state ((n 0))
+        :render (progn (setq child vui--current-instance)
+                       (vui-text (number-to-string n))))
+      (vui-defcomponent set-inst-holder ()
+        :state ((show t))
+        :render (progn (setq renders (1+ renders))
+                       (setq set-show (vui-async-callback (v) (vui-set-state :show v)))
+                       (if show (vui-component 'set-inst-dropped) (vui-text "none"))))
+      (vui-mount (vui-component 'set-inst-holder) "*test-set-inst-dropped*" t)
+      (unwind-protect
+          (let ((old child))
+            (funcall set-show nil)
+            (setq renders 0)
+            (vui-set-state :n 3 old)
+            (expect renders :to-equal 0)
+            (expect (vui-get-state old :n) :to-equal 0)
+            (expect (with-current-buffer "*test-set-inst-dropped*" (buffer-string))
+                    :to-equal "none"))
+        (kill-buffer "*test-set-inst-dropped*"))))
+
+  (it "still signals without an instance outside a component"
+    (expect (vui-set-state :n 1) :to-throw 'error)))
+
+
 ;;; vui-state-test.el ends here

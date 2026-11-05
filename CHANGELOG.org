@@ -9,6 +9,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-set-state= takes an optional INSTANCE, so a command can set
+  state with no component context around it:
+  =(vui-set-state :marks nil (vui-get-instance))=. It sets the state of
+  INSTANCE itself, not of its parents, the way =vui-get-state= reads it,
+  and the tree around INSTANCE renders as for a change in a handler. A
+  stream row renders on its own, and an unmounted instance is left as
+  it is.
+
 - =vui-key-at= works on rows of plain text. A keyed =vui-region= or
   keyed component marks its text with its key, and =vui-key-at= returns
   the innermost key around POS when there is no keyed element there, so
