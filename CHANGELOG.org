@@ -9,6 +9,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-set-props= changes some props of an instance and keeps the rest
+  (#296): =(vui-set-props (vui-get-instance) :query "is:closed")=. It
+  re-renders and keeps memos, like =vui-update-props=, which replaces
+  every prop.
+
 - =vui-use-interval= runs its body every SECONDS seconds while the
   component is mounted (#292). The body runs in the component, as the
   latest render wrote it, so it sees current state and props. The timer

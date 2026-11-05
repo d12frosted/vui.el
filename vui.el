@@ -5024,7 +5024,8 @@ This is useful when new data arrives and you want computed values to
 refresh while preserving UI state (like collapsed sections).
 
 NEW-PROPS completely replaces the instance's current props, so pass
-every prop the component needs, not only the changed ones.
+every prop the component needs, not only the changed ones.  To change
+some props and keep the rest, use `vui-set-props'.
 
 All memoized values in the instance tree are invalidated, forcing
 recomputation on the next render.  Component state is preserved
@@ -5054,12 +5055,33 @@ every prop the component needs, not only the changed ones.  As with
 re-seeded.
 
 Use `vui-update' instead when external data has changed and all cached
-computations should be discarded.
+computations should be discarded.  To change some props and keep the
+rest, use `vui-set-props'.
 
 Returns INSTANCE for chaining."
   (setf (vui-instance-props instance) new-props)
   (vui--rerender-instance instance)
   instance)
+
+(defun vui-set-props (instance &rest props)
+  "Set PROPS of INSTANCE, keep its other props, and re-render.
+PROPS alternates keys and values, as in
+
+  (vui-set-props (vui-get-instance) :query \"is:closed\")
+
+A prop the instance did not have is added, and a prop set to nil
+stays, with nil for its value.  Like `vui-update-props', memos whose
+dependencies did not change are kept, and state seeded from a prop is
+not seeded again.
+
+Returns INSTANCE for chaining."
+  (when (cl-oddp (length props))
+    (signal 'wrong-number-of-arguments
+            (list #'vui-set-props (1+ (length props)))))
+  (let ((new (copy-sequence (vui-instance-props instance))))
+    (while props
+      (setq new (plist-put new (pop props) (pop props))))
+    (vui-update-props instance new)))
 
 (defvar-local vui--resize-last-width nil
   "The window width this buffer's instances last re-rendered for.
@@ -12968,8 +12990,9 @@ BUFFER defaults to the current buffer and may be a buffer object or
 a buffer name.  Returns nil if BUFFER does not exist or has no
 mounted VUI instance.
 
-Use this together with `vui-rerender', `vui-update', and
-`vui-update-props' to drive a mounted UI from outside:
+Use this together with `vui-rerender', `vui-update',
+`vui-update-props', and `vui-set-props' to drive a mounted UI from
+outside:
 
   (when-let* ((instance (vui-get-instance \"*sidebar*\")))
     (vui-update instance (list :note note)))

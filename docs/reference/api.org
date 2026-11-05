@@ -146,7 +146,7 @@ its position by anything else stays after it.
 
 Pass the returned instance to =vui-unmount= to dismiss the UI (teardown
 also runs automatically when the buffer is killed), or drive it with
-=vui-rerender= / =vui-update= / =vui-update-props=.
+=vui-rerender= / =vui-update= / =vui-update-props= / =vui-set-props=.
 
 Called from a hook of a tree in the buffer while the trees of the
 buffer unmount (its =:on-unmount=, say), the mount waits until they are
@@ -228,8 +228,8 @@ Return the root component instance mounted in BUFFER.
 - Returns :: The root instance, or nil if BUFFER does not exist or has no
   mounted VUI instance
 
-Use this together with =vui-rerender=, =vui-update=, and =vui-update-props=
-to drive a mounted UI from outside, without storing the instance yourself:
+Use this together with =vui-rerender=, =vui-update=, =vui-update-props=,
+and =vui-set-props= to drive a mounted UI from outside, without storing the instance yourself:
 
 #+begin_src elisp
 (when-let* ((instance (vui-get-instance "*sidebar*")))
@@ -311,12 +311,29 @@ Returns INSTANCE for chaining.
 (vui-update-props instance (list :note (fetch-note)))
 #+end_src
 
+** vui-set-props
+
+#+begin_src elisp
+(vui-set-props INSTANCE &rest PROPS) -> instance
+#+end_src
+
+Set PROPS of INSTANCE, keep its other props, and re-render. PROPS
+alternates keys and values. A prop the instance did not have is added,
+and a prop set to nil stays, with nil for its value. Memos are kept, as
+with =vui-update-props=.
+
+#+begin_src elisp
+;; A command that changes the query of a page and keeps its other props
+(vui-set-props (vui-get-instance) :query "is:closed")
+#+end_src
+
 ** When to use which
 
 | Function            | Props   | Memos       | Use case                                    |
 |---------------------+---------+-------------+---------------------------------------------|
 | =vui-rerender=      | Keep    | Preserved   | Force redraw, same props                    |
 | =vui-update-props=  | Replace | Preserved   | Periodic refresh, data may not have changed |
+| =vui-set-props=     | Merge   | Preserved   | Change some props, keep the rest            |
 | =vui-update=        | Replace | Invalidated | Data changed, force recomputation           |
 
 As a rule of thumb:
