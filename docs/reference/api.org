@@ -98,6 +98,9 @@ If the buffer already has a mounted instance, it is unmounted first
 (see =vui-unmount=), so the old tree's lifecycle cleanups run before the
 new tree renders.
 
+Point is at the start of the buffer after the render. An effect of the
+render can move it, for example to open the buffer at a given line.
+
 - COMPONENT-VNODE :: Created with =vui-component=
 - BUFFER-NAME :: String (default ="*vui*"=)
 - NO-DISPLAY :: When non-nil, render without showing the buffer: every

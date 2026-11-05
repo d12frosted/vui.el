@@ -2608,6 +2608,10 @@ DEPS is a list of variables to watch. The effect runs:
 If BODY returns a function, it's called as cleanup before
 the next effect run or on unmount.
 
+BODY runs in the component's buffer, and it can move point there: the
+first render of `vui-mount' or `vui-render' puts point at the start of
+the buffer before its effects run.
+
 Examples:
   ;; Run once on mount (empty deps)
   (vui-use-effect ()
@@ -12628,6 +12632,9 @@ selected window unless NO-DISPLAY is non-nil, which leaves every
 window and the current buffer as they were.
 Returns the root instance.
 
+Point is at the start of the buffer after the render.  An effect of
+the render can move it, to open the buffer at a given place, say.
+
 Called from a hook or an effect of a render in progress, the mount
 renders the tree once, and the re-renders the tree asks for while it
 mounts (state set from its own hooks, say) wait for that render to be
@@ -12789,7 +12796,8 @@ RESIZE is as in `vui--mount-root', which calls this when BUF is free."
               ;; A mount from a hook or an effect runs inside the render
               ;; of another tree, which has to go on queueing requests
               ;; after this one is done
-              (outer-rendering vui--rendering-p))
+              (outer-rendering vui--rendering-p)
+              (effect-moved-point nil))
           ;; Queue re-render requests (sync resolve, vui-set-state with
           ;; nil delay) until commit and effects are done
           (setq vui--rendering-p t)
@@ -12803,16 +12811,24 @@ RESIZE is as in `vui--mount-root', which calls this when BUF is free."
                                               ;; for buffer-read-only
                                               (widget-setup)
                                               (vui--setup-field-placeholders)
+                                              ;; The buffer opens at its start.  Before
+                                              ;; the effects, so one can move point.
+                                              (goto-char (point-min))
                                               ;; Run effects after initial render
-                                              (vui--run-pending-effects))
+                                              (vui--run-pending-effects)
+                                              (setq effect-moved-point
+                                                    (/= (point) (point-min))))
                                           (setq vui--rendering-p outer-rendering))
                                         ;; Run any re-renders requested during render/effects.  The
                                         ;; render in progress, if any, runs them when it is done.
                                         (unless outer-rendering
-                                          (vui--flush-queued-rerenders))))
-        ;; A hook can kill BUF: another buffer is current then
-        (when (buffer-live-p buf)
-          (goto-char (point-min))))
+                                          (vui--flush-queued-rerenders)))
+          ;; A re-render the effects asked for keeps point on the text
+          ;; it was on, and text they add above moves it down.  Only
+          ;; an effect that moved point itself decides where it is.  A
+          ;; hook can kill BUF: another buffer is current then.
+          (when (and (not effect-moved-point) (buffer-live-p buf))
+            (goto-char (point-min)))))
       ;; Outside the `buffer-undo-list' binding: leave the list empty, as
       ;; `widget-setup' did before the render stopped recording.
       (when (buffer-live-p buf)
