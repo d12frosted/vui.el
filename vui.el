@@ -636,7 +636,20 @@ keybindings while preserving VUI and widget functionality.
                      (make-composed-keymap widget-keymap special-mode-map))
   ;; Disable buffer-read-only; widget-setup installs before-change-functions
   ;; that prevent editing outside of editable fields
-  (setq-local buffer-read-only nil))
+  (setq-local buffer-read-only nil)
+  (vui--setup-key-property))
+
+(defun vui--setup-key-property ()
+  "Keep the `vui-key' property on the text vui wrote it on.
+Text typed after a keyed row does not take its key, and text yanked
+into the buffer leaves the key it had behind (see `vui-key-at')."
+  (unless (assq 'vui-key text-property-default-nonsticky)
+    (setq-local text-property-default-nonsticky
+                (cons '(vui-key . t) text-property-default-nonsticky)))
+  (unless (or (eq yank-excluded-properties t)
+              (memq 'vui-key yank-excluded-properties))
+    (setq-local yank-excluded-properties
+                (cons 'vui-key yank-excluded-properties))))
 
 ;;; Core Data Structures - Virtual Nodes
 
@@ -1749,7 +1762,10 @@ Options:
                  to MAP, and keys unbound in MAP fall through to the
                  buffer's usual keymaps.  Input fields keep their own
                  keymap.
-  :key KEY     - for reconciliation
+  :key KEY     - for reconciliation.  `vui-key-at' returns it on the
+                 children's text, unless something keyed nested in the
+                 region is there, so a row of plain text tells which
+                 item it shows.
 
 Usage:
   (vui-region :face \\='highlight :keymap my-map
@@ -2149,7 +2165,11 @@ keyword starts the children, nil children are dropped and lists are
 spliced in.  The children can instead be passed as a :children prop
 \(a list, or a single vnode), which may appear anywhere in the plist.
 A non-nil :children together with positional children signals an
-error."
+error.
+
+A :key prop identifies the component in reconciliation, and marks its
+text: `vui-key-at' returns the key there, unless something keyed
+nested in the component is there."
   (declare (indent 1))
   (let ((props nil)
         (children nil)
@@ -5238,13 +5258,25 @@ change (issue #113)."
   (vui--elt-get element prop))
 
 (defun vui-key-at (&optional pos)
-  "Return the reconciliation `:key' of the vui element at POS, or nil.
-POS defaults to point.  Returns nil when POS holds no vui element, or the
-element carries no key.  A convenience for the common case of asking which
-keyed row - a note, an item, a choice - the cursor sits on; equivalent to
-\(vui-element-get (vui-element-at POS) :vui-key)."
-  (when-let* ((elt (vui--elt-at (or pos (point)))))
-    (vui--elt-get elt :vui-key)))
+  "Return the reconciliation `:key' of what is at POS, or nil.
+POS defaults to point.  That is the key of the vui element at POS, a
+button or a field, when it has one.  Otherwise it is the key of the
+innermost keyed `vui-region' or keyed component whose text POS is in,
+so a row of plain text tells which item - a note, an issue, a choice -
+the cursor sits on.  At the end of a line, POS counts as on the line's
+last character.  Returns nil when POS is in nothing keyed."
+  (let ((pos (or pos (point))))
+    ;; The newline at the end of a line can be the text of a section
+    ;; around the rows: the line's own last character decides first
+    (or (and (save-excursion (goto-char pos) (and (eolp) (not (bolp))))
+             (vui--key-at-1 (1- pos)))
+        (vui--key-at-1 pos))))
+
+(defun vui--key-at-1 (pos)
+  "Return the key of the element at POS, else the key of its text."
+  (or (when-let* ((elt (vui--elt-at pos)))
+        (vui--elt-get elt :vui-key))
+      (and (< pos (point-max)) (get-text-property pos 'vui-key))))
 
 (defun vui-activate (&optional pos)
   "Activate the vui element at POS, running its action.
@@ -5690,20 +5722,37 @@ to START instead of the buffer beginning."
          (t
           (goto-char home))))))))
 
+(defun vui--text-key-position (key &optional start end)
+  "Return where the first text with `vui-key' KEY starts, or nil.
+Search between START and END, by default the whole buffer, comparing
+keys with `equal'.  A nil KEY finds nothing."
+  (when key
+    (let ((pos (or start (point-min)))
+          (end (or end (point-max)))
+          (found nil))
+      (while (and (not found) (< pos end))
+        (if (equal (get-text-property pos 'vui-key) key)
+            (setq found pos)
+          (setq pos (next-single-property-change pos 'vui-key nil end))))
+      found)))
+
 (defun vui-goto-key (key &optional start end)
-  "Move point onto the widget whose reconciliation `:key' is KEY.
-Search the widgets between START and END (default: the whole buffer) in
-the current buffer, comparing keys with `equal'.  On a match, move point
-\(and the point of every window showing the buffer) to the widget's
-start and return that position; return nil when no widget carries KEY.
+  "Move point onto the element or row whose reconciliation `:key' is KEY.
+Search between START and END (default: the whole buffer) in the current
+buffer, comparing keys with `equal': first the elements (buttons and
+fields), then the text of keyed `vui-region's and keyed components (see
+`vui-key-at').  On a match, move point \(and the point of every window
+showing the buffer) to the start of the element, or of the first text
+with KEY, and return that position; return nil when nothing carries KEY.
 
 Handy for steering point to a known row after a re-render, e.g. before
 refreshing so cursor restoration has a stable anchor to return to.  A nil
 KEY matches nothing and returns nil: unkeyed widgets carry a nil
 `:vui-key', so treating nil as a wildcard would jump to the first of
 them."
-  (when-let* ((elt (vui-element-by-key key start end))
-              (pos (car (vui-element-bounds elt))))
+  (when-let* ((pos (if-let* ((elt (vui-element-by-key key start end)))
+                       (car (vui-element-bounds elt))
+                     (vui--text-key-position key start end))))
     (goto-char pos)
     (dolist (win (get-buffer-window-list (current-buffer) nil t))
       (set-window-point win pos))
@@ -5726,8 +5775,8 @@ inserted there (see `vui--keeping-fields')."
                                    (and end (> (overlay-end ov) end))))))
         (delete-overlay ov)))))
 
-(defun vui--apply-region-props (start end face keymap)
-  "Apply container-level FACE and KEYMAP to the region START..END.
+(defun vui--apply-region-props (start end face keymap &optional key)
+  "Apply container-level FACE, KEYMAP and KEY to the region START..END.
 
 FACE is added with the lowest priority, so faces set by children win;
 whitespace inserted by layout containers (separators, padding,
@@ -5739,8 +5788,19 @@ composed keymap where the existing map wins and unbound keys fall
 through to KEYMAP.  Text buttons compose KEYMAP beneath their own
 keymap (`button-map' for buttons without a custom one) so button keys
 keep working.  Input fields are untouched: their field keymap shadows
-text properties."
+text properties.
+
+KEY goes on the text as its `vui-key' property, where the text has none
+yet: a keyed region or component nested in this one wrote its text
+first, so the innermost key wins (see `vui-key-at')."
   (when (< start end)
+    (when key
+      (let ((pos start))
+        (while (< pos end)
+          (let ((next (next-single-property-change pos 'vui-key nil end)))
+            (unless (get-text-property pos 'vui-key)
+              (put-text-property pos next 'vui-key key))
+            (setq pos next)))))
     (when face
       (add-face-text-property start end face t))
     (when keymap
@@ -5981,6 +6041,8 @@ AFTER-EMPTY is non-nil: INSTANCE goes below those then.  With
 SKIP-PARKED non-nil the instances with no region are passed over: the
 rebuild of a stream mounts INSTANCE among its rows, and the parked ones
 it has not written yet come after it (see `vui--stream-mount-row')."
+  ;; A host buffer is not in `vui-mode'
+  (vui--setup-key-property)
   (let ((prev nil)
         (tail vui--inline-instances))
     (while (and tail
@@ -6253,20 +6315,20 @@ See `vui--streams-ending-at'.")
   "What `vui--streams-ending-at' gave at the start of a container.
 Keyed by the marker of the start (see `vui--container-start').")
 
-(defun vui--container-start (face keymap)
+(defun vui--container-start (face keymap &optional key)
   "Return the start of a container that is written from point.
-A marker when the container has a FACE or a KEYMAP to put on its text
-once it is written: the hooks of its children can write or delete text
-above it, or in its text written before them.  Otherwise nothing reads
-the start, and it is nil.  See `vui--finish-container'."
-  (when (or face keymap)
+A marker when the container has a FACE, a KEYMAP or a KEY to put on its
+text once it is written: the hooks of its children can write or delete
+text above it, or in its text written before them.  Otherwise nothing
+reads the start, and it is nil.  See `vui--finish-container'."
+  (when (or face keymap key)
     (let ((start (vui--start-marker)))
       (when-let* ((ending (and vui--streams (vui--streams-ending-at))))
         (puthash start ending vui--container-endings))
       start)))
 
-(defun vui--finish-container (start face keymap)
-  "Put FACE and KEYMAP on the text from START to point; let go of START.
+(defun vui--finish-container (start face keymap &optional key)
+  "Put FACE, KEYMAP and KEY on the text from START to point; free START.
 START is from `vui--container-start'."
   (when start
     (when (marker-position start)
@@ -6275,7 +6337,7 @@ START is from `vui--container-start'."
       (when-let* ((ending (gethash start vui--container-endings)))
         (remhash start vui--container-endings)
         (vui--start-after-streams start ending))
-      (vui--apply-region-props start (point) face keymap))
+      (vui--apply-region-props start (point) face keymap key))
     (set-marker start nil)))
 
 (defun vui--call-lifecycle-hook (hook-name hook-fn instance &rest args)
@@ -6300,6 +6362,20 @@ INSTANCE is the component instance."
          (vui--handle-error 'event callback-name err instance))))))
 
 (defun vui--render-instance (instance &optional commit-fn in-layout)
+  "Render a component INSTANCE into the current buffer.
+COMMIT-FN and IN-LAYOUT are as in `vui--render-instance-1', which does
+the work.  The text of a keyed instance gets its key (see
+`vui-key-at'), but for a buffer root, whose commit (COMMIT-FN) can leave
+text as it was, and whose text is all of the buffer anyway."
+  (let* ((key (and (not commit-fn)
+                   ;; It holds the whole buffer
+                   (not (eq instance vui--mounted-root))
+                   (vui-vnode-key (vui-instance-vnode instance))))
+         (start (and key (vui--container-start nil nil key))))
+    (prog1 (vui--render-instance-1 instance commit-fn in-layout)
+      (vui--finish-container start nil nil key))))
+
+(defun vui--render-instance-1 (instance &optional commit-fn in-layout)
   "Render a component INSTANCE into the current buffer.
 When COMMIT-FN is non-nil it is called with the computed vtree to write
 it to the buffer, instead of the default `vui--render-vnode'.  This lets
@@ -11920,8 +11996,20 @@ it got is gone too, and nothing is left."
        ;; that caught an error goes after it.
        ((or (vui-vnode-region-p child) (vui-vnode-error-boundary-p child)
             (vui-vnode-stream-p child))
-        (let ((vui--children-layout (list indent indent-str 0)))
-          (vui--render-vnode child)))
+        ;; The key of a region is on that indent, though: point at the
+        ;; start of the line is on its row (see `vui-key-at')
+        (let ((key (and (vui-vnode-region-p child) (vui-vnode-key child)))
+              (indent-start nil)
+              (indent-end nil))
+          (when (and key (< start content-start))
+            (setq indent-start (copy-marker start)
+                  indent-end (copy-marker content-start)))
+          (let ((vui--children-layout (list indent indent-str 0)))
+            (vui--render-vnode child))
+          (when indent-start
+            (vui--apply-region-props indent-start indent-end nil nil key)
+            (set-marker indent-start nil)
+            (set-marker indent-end nil))))
        ;; Tables and boxes: render with indent, then add indent after
        ;; internal newlines.  A flex or a grid in a box subtracts that
        ;; indent from its width as well.
@@ -12469,7 +12557,8 @@ is written."
     (let* ((layout vui--children-layout)
            (vui--children-layout nil)
            (start (vui--container-start (vui-vnode-region-face vnode)
-                                        (vui-vnode-region-keymap vnode))))
+                                        (vui-vnode-region-keymap vnode)
+                                        (vui-vnode-key vnode))))
       (if layout
           (vui--render-children (vui-vnode-region-children vnode) layout)
         (let ((idx 0))
@@ -12479,7 +12568,8 @@ is written."
             (cl-incf idx))))
       (vui--finish-container start
                              (vui-vnode-region-face vnode)
-                             (vui-vnode-region-keymap vnode))))
+                             (vui-vnode-region-keymap vnode)
+                             (vui-vnode-key vnode))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
