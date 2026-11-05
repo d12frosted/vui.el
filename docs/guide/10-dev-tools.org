@@ -341,7 +341,10 @@ often.
 ;; Get the root instance of the current buffer
 (vui-get-instance)
 
-;; Check its state
+;; Check one of its state keys
+(vui-get-state (vui-get-instance) :count)
+
+;; Or all of its state
 (vui-instance-state (vui-get-instance))
 
 ;; Manually modify state (for testing)

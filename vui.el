@@ -2317,6 +2317,19 @@ The tree of a root in the list has to be written again even when it is
 the tree it gave last time, as that tree does not show the new state of
 the component (see `vui--commit-root').")
 
+(defun vui-get-state (instance key)
+  "Return the value of state KEY of INSTANCE, or nil.
+INSTANCE nil gives nil, as `vui-get-instance' returns in a buffer with
+nothing mounted.  Use it outside a render, from a command, say:
+
+  (vui-get-state (vui-get-instance) :marks)
+
+Only the state of INSTANCE itself is read, not that of its parents.
+The value is the latest one: `vui-set-state' stores it at once, also
+when the render that shows it has not run yet.  Inside a render, read
+the state variable instead."
+  (and instance (plist-get (vui-instance-state instance) key)))
+
 (defun vui-set-state (key value)
   "Set state KEY to VALUE in the appropriate component and re-render.
 Searches for the component that owns KEY, starting from the current

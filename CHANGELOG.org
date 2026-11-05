@@ -9,6 +9,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-get-state= reads a state key of an instance from outside its
+  render (#297): =(vui-get-state (vui-get-instance) :marks)= in a
+  command. It reads the instance's own state, and sees a value
+  =vui-set-state= stored before the render that shows it.
+
 - =vui-set-props= changes some props of an instance and keeps the rest
   (#296): =(vui-set-props (vui-get-instance) :query "is:closed")=. It
   re-renders and keeps memos, like =vui-update-props=, which replaces
