@@ -28,7 +28,86 @@
             (expect (get-buffer-window "*test-hidden-mount*" t) :to-be nil)
             (expect (with-current-buffer "*test-hidden-mount*" (buffer-string))
                     :to-equal "hidden"))
-        (kill-buffer "*test-hidden-mount*")))))
+        (kill-buffer "*test-hidden-mount*"))))
+
+  (it "leaves point at the start of the buffer"
+    (vui-defcomponent mount-point-start ()
+      :render (vui-text "line 1\nline 2"))
+    (unwind-protect
+        (progn
+          (vui-mount (vui-component 'mount-point-start) "*test-mount-point*" t)
+          (with-current-buffer "*test-mount-point*"
+            (goto-char (point-max)))
+          ;; Again into the same buffer, where point was at the end
+          (vui-mount (vui-component 'mount-point-start) "*test-mount-point*" t)
+          (expect (with-current-buffer "*test-mount-point*" (point)) :to-equal 1))
+      (kill-buffer "*test-mount-point*")))
+
+  (it "keeps the point an effect of the first render moves"
+    (vui-defcomponent mount-point-effect ()
+      :render (progn
+                (vui-use-effect ()
+                  (goto-char (point-max))
+                  nil)
+                (vui-text "line 1\nline 2\nline 3")))
+    (unwind-protect
+        (progn
+          (vui-mount (vui-component 'mount-point-effect) "*test-mount-effect-point*" t)
+          (with-current-buffer "*test-mount-effect-point*"
+            (expect (point) :to-equal (point-max))))
+      (kill-buffer "*test-mount-effect-point*")))
+
+  (it "keeps the point an effect moves when it also sets state"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent mount-point-effect-state ()
+        :state ((n 0))
+        :render (progn
+                  (vui-use-effect ()
+                    (goto-char (point-max))
+                    (vui-set-state :n 1)
+                    nil)
+                  (vui-text (format "line 1\nline 2\nline %d" n))))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'mount-point-effect-state)
+                       "*test-mount-effect-state*" t)
+            (with-current-buffer "*test-mount-effect-state*"
+              (expect (buffer-string) :to-equal "line 1\nline 2\nline 1")
+              (expect (line-number-at-pos) :to-equal 3)))
+        (kill-buffer "*test-mount-effect-state*"))))
+
+  (it "leaves point at the start when an effect adds text above it"
+    ;; The re-render the effect asks for keeps point on the text it was
+    ;; on, which moves down; the effect did not move point itself
+    (let ((vui-render-delay nil))
+      (vui-defcomponent mount-point-prepend ()
+        :state ((ready nil))
+        :render (progn
+                  (vui-use-effect ()
+                    (vui-set-state :ready t)
+                    nil)
+                  (vui-vstack (when ready (vui-text "header"))
+                              (vui-text "body"))))
+      (unwind-protect
+          (progn
+            (vui-mount (vui-component 'mount-point-prepend)
+                       "*test-mount-prepend*" t)
+            (with-current-buffer "*test-mount-prepend*"
+              (expect (buffer-string) :to-equal "header\nbody")
+              (expect (point) :to-equal 1)))
+        (kill-buffer "*test-mount-prepend*")))))
+
+(describe "vui-render"
+  (it "keeps the point an effect of the first render moves"
+    (vui-defcomponent render-point-effect ()
+      :render (progn
+                (vui-use-effect ()
+                  (goto-char (point-max))
+                  nil)
+                (vui-text "line 1\nline 2\nline 3")))
+    (with-temp-buffer
+      (vui-render (vui-component 'render-point-effect))
+      (expect (point) :to-equal (point-max)))))
 
 (describe "vui-unmount"
   (it "runs on-unmount hooks for the whole tree, children first"

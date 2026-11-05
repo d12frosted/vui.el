@@ -117,6 +117,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Fixed
 
+- An effect of the first render of =vui-mount= or =vui-render= can move
+  point (#295). The mount put point at the start of the buffer after
+  the effects ran, so a move an effect made was undone; a page that
+  should open at a given line needed a timer for it. Point now goes to
+  the start before the effects run, and the buffer opens there as
+  before unless an effect moves it.
+
 - State that changes more often than =vui-render-delay= renders again.
   Every =vui-set-state= started the delay over, so a timer or a process
   filter that set state faster than the delay put the render off until
