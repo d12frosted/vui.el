@@ -1165,6 +1165,28 @@ captured variables may be stale.
 (vui-set-state :items (lambda (old) (cons new-item old)))
 #+end_src
 
+** vui-get-state
+
+#+begin_src elisp
+(vui-get-state INSTANCE KEY) -> value
+#+end_src
+
+Return the value of state KEY of INSTANCE, or nil (also for a nil
+INSTANCE). Use it outside a render, for example in a command that acts
+on what a page holds:
+
+#+begin_src elisp
+(defun my-list-marks ()
+  "Return the items marked in the current list buffer."
+  (when-let* ((page (vui-get-instance)))
+    (vui-get-state page :marks)))
+#+end_src
+
+Only the state of INSTANCE itself is read, not that of its parents. The
+value is the latest one: =vui-set-state= stores it at once, also when
+the render that shows it has not run yet. Inside a render, read the
+state variable instead.
+
 ** vui-batch
 
 #+begin_src elisp

@@ -1283,4 +1283,57 @@
           (kill-buffer "*test-set-props-odd*"))))))
 
 
+(describe "vui-get-state"
+  (it "reads a state key of an instance from outside its render"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent get-state-list ()
+        :state ((marks nil) (sort 'newest))
+        :render (vui-button "mark"
+                  :on-click (lambda () (vui-set-state :marks (cons 1 marks)))))
+      (let ((inst (vui-mount (vui-component 'get-state-list) "*test-get-state*" t)))
+        (unwind-protect
+            (with-current-buffer "*test-get-state*"
+              (expect (vui-get-state inst :marks) :to-be nil)
+              (expect (vui-get-state inst :sort) :to-be 'newest)
+              (button-activate (button-at (point-min)))
+              (expect (vui-get-state inst :marks) :to-equal '(1)))
+          (kill-buffer "*test-get-state*")))))
+
+  (it "sees a change before it renders"
+    (let ((vui-render-delay 0.05))
+      (vui-defcomponent get-state-pending ()
+        :state ((n 0))
+        :render (vui-text (number-to-string n)))
+      (let ((inst (vui-mount (vui-component 'get-state-pending)
+                             "*test-get-state-pending*" t)))
+        (unwind-protect
+            (with-current-buffer "*test-get-state-pending*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :n 5))
+              (expect (buffer-string) :to-equal "0")
+              (expect (vui-get-state inst :n) :to-equal 5))
+          (kill-buffer "*test-get-state-pending*")))))
+
+  (it "returns nil for a nil instance"
+    ;; As (vui-get-instance) gives in a buffer with nothing mounted
+    (expect (vui-get-state nil :marks) :to-be nil))
+
+  (it "reads the instance's own state, not a parent's"
+    (let ((vui-render-delay nil)
+          (child nil))
+      (vui-defcomponent get-state-child ()
+        :render (progn (setq child vui--current-instance)
+                       (vui-text "child")))
+      (vui-defcomponent get-state-parent ()
+        :state ((marks '(7)))
+        :render (vui-component 'get-state-child))
+      (let ((inst (vui-mount (vui-component 'get-state-parent)
+                             "*test-get-state-own*" t)))
+        (unwind-protect
+            (progn
+              (expect (vui-get-state inst :marks) :to-equal '(7))
+              (expect (vui-get-state child :marks) :to-be nil))
+          (kill-buffer "*test-get-state-own*"))))))
+
+
 ;;; vui-state-test.el ends here

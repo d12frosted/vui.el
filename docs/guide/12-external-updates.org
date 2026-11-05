@@ -134,6 +134,9 @@ Two things to know:
   #+begin_src elisp
   (vui-set-props (vui-get-instance "*my-panel*") :query "is:closed")
   #+end_src
+
+  To read a state key of the instance, use =vui-get-state=:
+  =(vui-get-state (vui-get-instance "*my-panel*") :marks)=.
 - =vui-get-instance= returns the *root* instance, so this reaches the
   component you passed to =vui-mount=. To update something deeper, pass
   the data down as props, or use Approach 1 from inside that component.
