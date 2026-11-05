@@ -90,6 +90,20 @@ todo-list (id: 3):
 
 Useful for testing or debugging specific components.
 
+** By Key
+
+#+begin_src elisp
+(vui-get-instance-by-key "note-42")
+;; => #s(vui-instance ...)
+#+end_src
+
+Finds the component mounted with =:key "note-42"= anywhere in the
+current buffer, stream rows and inline regions included. Unlike the two
+above, it is meant for commands too: when the keys are unique in the
+buffer, =(vui-get-instance-by-key (vui-key-at))= is the component of the
+row at point. See
+[[file:12-external-updates.org][External Updates]].
+
 * Render Timing
 
 Profile render performance:

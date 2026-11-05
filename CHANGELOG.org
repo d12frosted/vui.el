@@ -9,6 +9,13 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-get-instance-by-key= finds a mounted component by its =:key=, in
+  a buffer (its tree, inline regions and shown stream rows) or below an
+  instance, optionally of one component TYPE. A command reaches the
+  component of the row at point with
+  =(vui-get-instance-by-key (vui-key-at))=, then reads or sets its
+  state with =vui-get-state= and =vui-set-state=.
+
 - =vui-set-state= takes an optional INSTANCE, so a command can set
   state with no component context around it:
   =(vui-set-state :marks nil (vui-get-instance))=. It sets the state of

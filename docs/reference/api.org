@@ -240,6 +240,40 @@ The instance returned is the root - the component passed to =vui-mount=. To
 push data into a nested component, or into state rather than props, see
 [[file:../guide/12-external-updates.org][External Updates]].
 
+** vui-get-instance-by-key
+
+#+begin_src elisp
+(vui-get-instance-by-key KEY &optional WHERE TYPE) -> instance or nil
+#+end_src
+
+Return the mounted component instance whose =:key= is KEY. Keys are
+compared with =equal=, and a nil KEY matches nothing. Use it in a
+command to reach the component of an item, then read its state with
+=vui-get-state= or set it with =vui-set-state=:
+
+#+begin_src elisp
+(when-let* ((row (vui-get-instance-by-key (vui-key-at))))
+  (vui-set-state :marked t row))
+#+end_src
+
+- WHERE :: Where to look. A buffer or buffer name (default: current
+  buffer) means all of it: the tree of =vui-mount=, every
+  =vui-mount-inline= region, and every component row of a =vui-stream=
+  that is shown.
+  An instance means the instance itself and what it renders: its
+  children and the rows of the streams it renders, all the way down.
+- TYPE :: A component name. Only instances of that component match.
+
+A key is unique only among siblings of the same type, so more than one
+instance can match. The first one found is returned: an instance comes
+before its children, and its children before the rows of its streams,
+the oldest row first. In a buffer, the tree of =vui-mount= comes before
+the inline regions. Pass TYPE, or an instance as WHERE, to tell them
+apart. So =(vui-get-instance-by-key (vui-key-at))= is the component of
+the row at point only when no other component in the buffer has its
+key; if two lists reuse keys, search from the list. On a keyed button
+inside a row, =vui-key-at= gives the key of the button.
+
 ** vui-rerender
 
 #+begin_src elisp

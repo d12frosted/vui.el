@@ -464,6 +464,62 @@ Returns a list of instances."
         (setq result (append result (vui-get-component-instances component-type child)))))
     result))
 
+(defun vui-get-instance-by-key (key &optional where type)
+  "Return the mounted component instance whose `:key' is KEY, or nil.
+Keys are compared with `equal'.  A command uses this to reach the
+component of an item, to read its state with `vui-get-state' or to set
+it with `vui-set-state':
+
+  (when-let* ((row (vui-get-instance-by-key (vui-key-at))))
+    (vui-set-state :marked t row))
+
+WHERE is where to look.  A buffer or a buffer name (the default is the
+current buffer) means all of it: the tree of `vui-mount', every
+`vui-mount-inline' region and every component row of a `vui-stream'
+that is shown.  An instance means the instance itself and what it
+renders: its children, and the rows of the streams it renders, all the
+way down.
+
+With TYPE, a component name, only instances of that component match.
+A key is unique only among siblings of the same type, so more than one
+instance can match.  The first one found is returned: an instance
+comes before its children, and its children before the rows of its
+streams, the oldest row first.  In a buffer, the tree of `vui-mount'
+comes before the inline regions.  TYPE, or an instance as WHERE, tells
+them apart.  A nil KEY matches nothing."
+  (when key
+    (let ((walked (make-hash-table :test 'eq))
+          (match nil))
+      (cl-labels
+          ((walk (inst)
+             (unless (or match (gethash inst walked)
+                         (eq (vui-instance-mounted-p inst) 'unmounted))
+               (puthash inst t walked)
+               (if (and (equal (vui-vnode-key (vui-instance-vnode inst)) key)
+                        (or (null type)
+                            (eq (vui-component-def-name (vui-instance-def inst))
+                                type)))
+                   (setq match inst)
+                 (mapc #'walk (vui-instance-children inst))
+                 ;; The rows of a stream are trees of their own
+                 (let ((buf (vui-instance-buffer inst)))
+                   (when (buffer-live-p buf)
+                     (dolist (handle (buffer-local-value 'vui--streams buf))
+                       (when (eq (vui-stream-handle-parent handle) inst)
+                         (mapc #'walk
+                               (reverse (vui-stream-handle-rows handle)))))))))))
+        (if (vui-instance-p where)
+            (walk where)
+          (when-let* ((buf (get-buffer (or where (current-buffer))))
+                      ((buffer-live-p buf)))
+            (when-let* ((root (buffer-local-value 'vui--mounted-root buf)))
+              (walk root))
+            ;; A row of a stream that is not shown has no region
+            (dolist (inst (buffer-local-value 'vui--inline-instances buf))
+              (when (vui--inline-bounds inst)
+                (walk inst))))))
+      match)))
+
 ;;; Major Mode
 
 (defun vui-quit ()
