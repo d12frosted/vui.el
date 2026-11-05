@@ -458,18 +458,30 @@ When you bind your own key or command, you often need to know which VUI element 
 
 - =(vui-element-at &optional POS)= — the VUI element at POS (default point), or =nil=. An opaque handle; don't assume how it was rendered.
 - =(vui-element-get ELEMENT PROP)= — a VUI property of ELEMENT: =:vui-key= (reconciliation key), =:vui-tag= (label), =:vui-path= (component-tree path), and so on.
-- =(vui-key-at &optional POS)= — convenience for the common case: the =:key= of the element at POS, or =nil=. Same as =(vui-element-get (vui-element-at POS) :vui-key)=.
+- =(vui-key-at &optional POS)= — the =:key= of what POS is on, or =nil=: the element's key when it has one, otherwise the key of the innermost keyed =vui-region= or keyed component around POS. So a list of plain-text rows tells which item the cursor is on, with no buttons needed. At the end of a line, POS counts as on that line.
 - =(vui-activate &optional POS)= — run the element's action: follow a button, toggle a checkbox, open a select, submit a field. Returns non-nil when an element was found.
 - =(vui-field-at &optional POS)= — the editable field at POS, or =nil=; never a button. The end of a full field counts as in it, since typing there still goes into the field.
 - =(vui-element-bounds ELEMENT)= — =(START . END)= of ELEMENT: a field's editable area (the padding after its value included), or a button's whole text.
-- =(vui-element-by-key KEY &optional START END)= — the first element, button or field, whose =:key= is KEY (compared with =equal=), or =nil=. =vui-goto-key= moves point onto it.
+- =(vui-element-by-key KEY &optional START END)= — the first element, button or field, whose =:key= is KEY (compared with =equal=), or =nil=.
+- =(vui-goto-key KEY &optional START END)= — move point onto the element with KEY, or else to the start of the first keyed row with KEY.
 
 #+begin_src elisp
-;; A command that opens whatever keyed row the cursor is on.
+;; Rows of plain text, each a keyed component.
+(vui-defcomponent my-note-row (note)
+  :render (vui-text (plist-get note :title)))
+
+(vui-defcomponent my-notes (notes)
+  :render (apply #'vui-vstack
+                 (mapcar (lambda (note)
+                           (vui-component 'my-note-row
+                             :key (plist-get note :id) :note note))
+                         notes)))
+
+;; A command that opens whatever row the cursor is on.
 (defun my-open-at-point ()
   (interactive)
-  (when-let* ((key (vui-key-at)))
-    (my-open-note key)))
+  (when-let* ((id (vui-key-at)))
+    (my-open-note id)))
 #+end_src
 
 #+begin_src elisp

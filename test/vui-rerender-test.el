@@ -1005,6 +1005,21 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
           (kill-buffer "*rr-ctxr*"))))))
 
 (describe "vui-goto-key"
+  (it "moves point to the start of a keyed row of text"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent gk-rows ()
+        :render (vui-vstack (vui-region :key 'one (vui-text "first"))
+                            (vui-region :key 'two (vui-text "second"))))
+      (vui-mount (vui-component 'gk-rows) "*gk-rows*" t)
+      (unwind-protect
+          (with-current-buffer "*gk-rows*"
+            (goto-char (point-min))
+            (let ((pos (vui-goto-key 'two)))
+              (expect pos :to-equal (point))
+              (expect (buffer-substring (point) (line-end-position))
+                      :to-equal "second")))
+        (kill-buffer "*gk-rows*"))))
+
   (it "moves point onto the widget carrying KEY and returns its position"
     (let ((vui-render-delay nil))
       (vui-defcomponent gk-comp ()
