@@ -2350,11 +2350,21 @@ when the render that shows it has not run yet.  Inside a render, read
 the state variable instead."
   (and instance (plist-get (vui-instance-state instance) key)))
 
-(defun vui-set-state (key value)
+(defun vui-set-state (key value &optional instance)
   "Set state KEY to VALUE in the appropriate component and re-render.
 Searches for the component that owns KEY, starting from the current
 component and going up the parent chain.
-Must be called from within a component's event handler.
+Must be called from within a component's event handler, unless
+INSTANCE is given.
+
+With INSTANCE, the state of INSTANCE itself is set, not that of its
+parents, as `vui-get-state' reads it.  This is for code outside the
+components, a command, say:
+
+  (vui-set-state :marks \='(3 7) (vui-get-instance))
+
+The tree INSTANCE is in renders again as for a change in a handler.  An
+instance that is unmounted is left as it is.
 
 If VALUE is a function that accepts one argument, it is called with the
 current value and the result is used as the new value.  This is useful in
@@ -2374,10 +2384,24 @@ Treat state values as immutable: replace them (as both examples
 above do) rather than mutating them in place with setcar, push, or
 sort.  In-place mutation is invisible to change detection
 \(should-update, on-update, and hook dependency comparisons)."
-  (unless vui--current-instance
-    (error "vui-set-state called outside of component context"))
-  (let* ((target (vui--find-state-owner vui--current-instance key))
-         (current-state (vui-instance-state target))
+  (cond
+   ((null instance)
+    (unless vui--current-instance
+      (error "vui-set-state called outside of component context"))
+    (vui--set-state-of (vui--find-state-owner vui--current-instance key)
+                       key value))
+   ((not (eq (vui-instance-mounted-p instance) 'unmounted))
+    ;; The context of a handler of INSTANCE, so the tree it is in
+    ;; renders: a stream row is a root of its own
+    (let ((vui--current-instance instance)
+          (vui--root-instance (vui--find-root instance)))
+      (vui--set-state-of instance key value t)))))
+
+(defun vui--set-state-of (target key value &optional own)
+  "Set state KEY of TARGET to VALUE, as `vui-set-state' does.
+OWN non-nil means TARGET was given, not found by a search: a warning
+for a KEY it does not declare names TARGET alone."
+  (let* ((current-state (vui-instance-state target))
          (current-value (plist-get current-state key))
          (new-value (if (vui--state-updater-p value)
                         (funcall value current-value)
@@ -2388,8 +2412,11 @@ sort.  In-place mutation is invisible to change detection
     (unless (plist-member current-state key)
       (display-warning
        'vui
-       (format "vui-set-state: %s is not a state key of any component in scope; setting it on <%s>"
-               key (vui-component-def-name (vui-instance-def target)))
+       (if own
+           (format "vui-set-state: %s is not a state key of <%s>; setting it there"
+                   key (vui-component-def-name (vui-instance-def target)))
+         (format "vui-set-state: %s is not a state key of any component in scope; setting it on <%s>"
+                 key (vui-component-def-name (vui-instance-def target))))
        :warning))
     (vui--debug-log 'state-change "<%s> state %s = %S"
                     (vui-component-def-name (vui-instance-def target))

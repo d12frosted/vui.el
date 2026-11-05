@@ -1139,12 +1139,24 @@ Create a component vnode.
 ** vui-set-state
 
 #+begin_src elisp
-(vui-set-state KEY VALUE)
+(vui-set-state KEY VALUE &optional INSTANCE)
 #+end_src
 
 Set state KEY to VALUE and schedule re-render.
 
-Must be called from within a component context (event handler, lifecycle hook).
+Without INSTANCE, it must be called from within a component context (event
+handler, lifecycle hook), and it sets KEY on the nearest component that
+declares it, the current one or a parent.
+
+With INSTANCE, it works from anywhere, a command say, and sets the state of
+INSTANCE itself, not that of its parents, as =vui-get-state= reads it. An
+unmounted INSTANCE is left as it is.
+
+#+begin_src elisp
+(defun my-clear-marks ()
+  (interactive)
+  (vui-set-state :marks nil (vui-get-instance)))
+#+end_src
 
 If VALUE is a function, it is called with the current value and the result
 is used as the new value. This is essential for async callbacks where
