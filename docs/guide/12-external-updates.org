@@ -128,7 +128,12 @@ If the data really belongs to the outside world, make it a prop.
 Two things to know:
 
 - =NEW-PROPS= replaces the props plist completely. Pass every prop the
-  component needs, not just the changed one.
+  component needs, not just the changed one. To change one prop and
+  keep the rest, use =vui-set-props=:
+
+  #+begin_src elisp
+  (vui-set-props (vui-get-instance "*my-panel*") :query "is:closed")
+  #+end_src
 - =vui-get-instance= returns the *root* instance, so this reaches the
   component you passed to =vui-mount=. To update something deeper, pass
   the data down as props, or use Approach 1 from inside that component.

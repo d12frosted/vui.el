@@ -1206,4 +1206,81 @@
           (kill-buffer "*test-memo-cmp*"))))))
 
 
+(describe "vui-set-props"
+  (it "changes the props it is given and keeps the rest"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent set-props-page (query sort)
+        :render (vui-text (format "query=%S sort=%S" query sort)))
+      (let ((inst (vui-mount (vui-component 'set-props-page
+                               :query "is:open" :sort 'newest)
+                             "*test-set-props*" t)))
+        (unwind-protect
+            (with-current-buffer "*test-set-props*"
+              (expect (vui-set-props inst :query "is:closed") :to-be inst)
+              (expect (buffer-string)
+                      :to-equal "query=\"is:closed\" sort=newest")
+              (vui-set-props inst :sort 'oldest :query "all")
+              (expect (buffer-string) :to-equal "query=\"all\" sort=oldest"))
+          (kill-buffer "*test-set-props*")))))
+
+  (it "adds a prop the instance did not have and keeps one set to nil"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent set-props-add (a b)
+        :render (vui-text (format "a=%S b=%S" a b)))
+      (let ((inst (vui-mount (vui-component 'set-props-add :a 1)
+                             "*test-set-props-add*" t)))
+        (unwind-protect
+            (with-current-buffer "*test-set-props-add*"
+              (vui-set-props inst :b 2)
+              (expect (buffer-string) :to-equal "a=1 b=2")
+              (vui-set-props inst :a nil)
+              (expect (buffer-string) :to-equal "a=nil b=2")
+              (expect (plist-member (vui-instance-props inst) :a) :to-be-truthy))
+          (kill-buffer "*test-set-props-add*")))))
+
+  (it "does not change the props list it replaces"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent set-props-copy (a b)
+        :render (vui-text (format "a=%S b=%S" a b)))
+      (let* ((inst (vui-mount (vui-component 'set-props-copy :a 1 :b 2)
+                              "*test-set-props-copy*" t))
+             (old (vui-instance-props inst))
+             (before (copy-sequence old)))
+        (unwind-protect
+            (progn
+              (vui-set-props inst :a 10)
+              (expect old :to-equal before))
+          (kill-buffer "*test-set-props-copy*")))))
+
+  (it "keeps memos whose deps did not change"
+    (let ((vui-render-delay nil)
+          (computed 0))
+      (vui-defcomponent set-props-memo (value label)
+        :render (let ((result (vui-use-memo (value)
+                                (setq computed (1+ computed))
+                                (* value 10))))
+                  (vui-text (format "%s %d" label result))))
+      (let ((inst (vui-mount (vui-component 'set-props-memo :value 3 :label "x")
+                             "*test-set-props-memo*" t)))
+        (unwind-protect
+            (with-current-buffer "*test-set-props-memo*"
+              (vui-set-props inst :label "y")
+              (expect (buffer-string) :to-equal "y 30")
+              (expect computed :to-equal 1))
+          (kill-buffer "*test-set-props-memo*")))))
+
+  (it "signals when a prop has no value"
+    (let ((vui-render-delay nil))
+      (vui-defcomponent set-props-odd (a)
+        :render (vui-text (format "a=%S" a)))
+      (let ((inst (vui-mount (vui-component 'set-props-odd :a 1)
+                             "*test-set-props-odd*" t)))
+        (unwind-protect
+            (progn
+              (expect (vui-set-props inst :a) :to-throw 'wrong-number-of-arguments)
+              (expect (with-current-buffer "*test-set-props-odd*" (buffer-string))
+                      :to-equal "a=1"))
+          (kill-buffer "*test-set-props-odd*"))))))
+
+
 ;;; vui-state-test.el ends here

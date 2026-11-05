@@ -146,12 +146,12 @@ Inline regions are ephemeral UI chrome, not document content:
 
 * API Summary
 
-| Function                  | Description                                |
-|---------------------------+--------------------------------------------|
-| =vui-mount-inline=        | Mount a component at point/position        |
-| =vui-unmount=             | Dismiss (also accepts inline instances)    |
-| =vui-inline-instance-at=  | Find the inline instance at a position     |
-| =vui-rerender= / =vui-update= / =vui-update-props= | Drive a mounted instance |
+| Function                                                            | Description                             |
+|---------------------------------------------------------------------+-----------------------------------------|
+| =vui-mount-inline=                                                  | Mount a component at point/position     |
+| =vui-unmount=                                                       | Dismiss (also accepts inline instances) |
+| =vui-inline-instance-at=                                            | Find the inline instance at a position  |
+| =vui-rerender= / =vui-update= / =vui-update-props= / =vui-set-props= | Drive a mounted instance                |
 
 See [[file:12-external-updates.org][External Updates]] for driving a mounted tree from a process
 sentinel, timer, or hook.
