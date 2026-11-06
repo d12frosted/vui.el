@@ -834,7 +834,9 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   "Virtual node that applies face and keymap to its children's extent."
   children   ; List of child vnodes
   face       ; Face applied beneath the children's own faces
-  keymap)    ; Keymap cascading beneath the children's own keymaps
+  keymap     ; Keymap cascading beneath the children's own keymaps
+  sticky     ; Non-nil: pin the first line while the window is inside
+  sticky-face) ; Face on the pinned copy of that line
 
 ;; Layout: flexible-width horizontal row
 (cl-defstruct (vui-vnode-flex (:include vui-vnode)
@@ -1772,9 +1774,11 @@ Table properties:
                      sticky table pins its own header as the window
                      moves through it.  Requires plain string headers.
                      The previous `header-line-format' is restored once
-                     no sticky table is left: on unmount, or when a
+                     no sticky part is left (a sticky table, or a
+                     sticky `vui-region'): on unmount, or when a
                      re-render or an edit of a `vui-stream' item
-                     leaves none.
+                     leaves none.  Inside a sticky region, the table's
+                     header wins over the region's line.
   :header-face FACE  - face for header cells (default `vui-table-header')
   :border-face FACE  - face for border characters (default `vui-table-border')
   :key KEY           - for reconciliation
@@ -1822,27 +1826,50 @@ Options:
                  children's text, unless something keyed nested in the
                  region is there, so a row of plain text tells which
                  item it shows.
+  :sticky BOOL - pin the line the region starts on in the header line
+                 while a window is scrolled into the region, past that
+                 line.  The region bounds it: once the window starts
+                 after the region, the pin goes, so the heading of a
+                 section gives way to the next one.  When sticky parts
+                 are nested, the innermost one the window is in wins,
+                 the sticky header of a `vui-table' included.  The
+                 pinned copy is text only: buttons and fields in it do
+                 not work.  It is the whole line, so make the region
+                 start a line of its own.
+  :sticky-face FACE - put on the pinned copy, over its own faces, so
+                 a pinned heading can look different from the one in
+                 the buffer.
 
 Usage:
   (vui-region :face \\='highlight :keymap my-map
-    (vui-hstack child1 child2))"
+    (vui-hstack child1 child2))
+
+  (vui-region :sticky t
+    (vui-vstack (vui-text \"Section A\" :face \\='bold)
+                rows...))"
   (let ((face nil)
         (keymap nil)
         (key nil)
+        (sticky nil)
+        (sticky-face nil)
         (children nil))
     ;; Parse keyword arguments
     (while (and args (keywordp (car args)))
       (pcase (pop args)
         (:face (setq face (pop args)))
         (:keymap (setq keymap (pop args)))
-        (:key (setq key (pop args)))))
+        (:key (setq key (pop args)))
+        (:sticky (setq sticky (pop args)))
+        (:sticky-face (setq sticky-face (pop args)))))
     ;; Remaining args are children
     (setq children (remq nil (flatten-list args)))
     (vui-vnode-region--create
      :children children
      :face face
      :keymap keymap
-     :key key)))
+     :key key
+     :sticky sticky
+     :sticky-face sticky-face)))
 
 (defun vui-flex (&rest args)
   "Create a horizontal row that distributes a total width among children.
@@ -4893,6 +4920,8 @@ buffer."
                                  (vui--region-edges-at
                                   (cdr vui--enclosing-regions) pos
                                   #'vui-instance-region-start)))
+               ;; And so do the pins of the sticky parts it starts
+               (held-pins (and row-p (vui--sticky-pins-at pos end-pos)))
                (vui--held-starts (append (seq-take (cdr vui--enclosing-regions)
                                                    (length held-starts))
                                          vui--held-starts)))
@@ -4923,14 +4952,15 @@ buffer."
                                            t
                                          ;; And a row at their start
                                          ;; writes inside them
-                                         (vui--marker-types held-starts nil
+                                         (vui--marker-types
+                                             (append held-starts held-pins) nil
                                            (vui--inline-replace-text
                                             instance pos end-pos))))))
                     ;; The header line of a sticky table that is gone, as
                     ;; in `vui--rerender-buffer'.  Not when a hook killed
                     ;; the buffer: another one is current then
                     (when (buffer-live-p buffer)
-                      (vui--table-restore-header-line)
+                      (vui--sticky-restore-header-line)
                       (widget-setup)
                       (vui--inline-host-change-hooks)
                       (vui--setup-field-placeholders))))
@@ -5091,10 +5121,10 @@ writes there goes into the region."
                         (vui--render-instance instance #'vui--commit-root))
                   ;; A sticky table the render did not draw again leaves
                   ;; the header line it installed; put back what that
-                  ;; replaced once no sticky table is left (it was erased
+                  ;; replaced once no sticky part is left (it was erased
                   ;; or patched away).  Before the windows are restored:
                   ;; their height depends on the header line.
-                  (vui--table-restore-header-line)
+                  (vui--sticky-restore-header-line)
                   (widget-setup)
                   (vui--setup-field-placeholders)
                   ;; Restore the cursor position
@@ -7648,54 +7678,75 @@ Width calculation:
                 (- (vui--normalize-width fill (+ w padding)) padding))
               (append widths nil)))))
 
-(defvar-local vui--table-sticky-registry nil
-  "Sticky table regions in this buffer, newest first.
-Each entry is a cons (HEADER-MARKER . END-MARKER): HEADER-MARKER sits
-at the start of the table's in-buffer header row, END-MARKER at the
-end of the table.  `vui--table-sticky-header' pins the header of the
-entry whose region spans the window start.  Entries whose region has
-collapsed (the table was erased or re-rendered elsewhere) are inert
-and are pruned by `vui--table-prune-sticky-registry'.")
+(defvar-local vui--sticky-registry nil
+  "The sticky parts of this buffer, newest first.
+Each entry is a list (PIN-MARKER END-MARKER FACE).  PIN-MARKER is on
+the line to pin: the header row of a table with a sticky header, the
+first line of a sticky `vui-region'.  END-MARKER is at the end of what
+bounds it: the table, the region.  FACE, when non-nil, goes on the
+pinned copy.  `vui--sticky-header' pins the line of the innermost entry
+that spans the window start.  Entries whose region has collapsed (the
+text was erased or written again elsewhere) are inert and are pruned
+by `vui--sticky-prune-registry'.")
 
-(defvar-local vui--table-saved-header-line nil
+(defvar-local vui--sticky-saved-header-line nil
   "Previous `header-line-format', saved before a sticky header replaced it.
-A cons (t . VALUE) while a sticky table header is installed, nil
+A cons (t . VALUE) while a sticky header line is installed, nil
 otherwise.  The cons distinguishes a saved nil from nothing saved.
-VALUE is put back by `vui--table-restore-header-line'.")
+VALUE is put back by `vui--sticky-restore-header-line'.")
 
-(defun vui--table-prune-sticky-registry ()
-  "Drop registry entries whose table region no longer exists.
-A deleted or rewritten table leaves its markers collapsed (start not
-before end); such entries never match a window position, so this is
-garbage collection, not behavior."
-  (setq vui--table-sticky-registry
+(defun vui--sticky-prune-registry ()
+  "Drop registry entries whose region no longer exists.
+A deleted or rewritten table or region leaves its markers collapsed
+\(start not before end); such entries never match a window position,
+so this is garbage collection, not behavior."
+  (setq vui--sticky-registry
         (cl-delete-if (lambda (entry)
-                        (let ((start (marker-position (car entry)))
-                              (end (marker-position (cdr entry))))
+                        (let ((start (marker-position (nth 0 entry)))
+                              (end (marker-position (nth 1 entry))))
                           (when (or (null start) (null end) (>= start end))
-                            (set-marker (car entry) nil)
-                            (set-marker (cdr entry) nil)
+                            (set-marker (nth 0 entry) nil)
+                            (set-marker (nth 1 entry) nil)
                             t)))
-                      vui--table-sticky-registry)))
+                      vui--sticky-registry)))
 
-(defun vui--table-register-sticky (header-pos end-pos)
-  "Register a sticky table spanning up to END-POS in the current buffer.
-HEADER-POS is where its in-buffer header row starts.  Installs the
-header-line machinery on first use, saving the previous
-`header-line-format' so `vui--table-restore-header-line' can put it
-back once no sticky table is left."
-  (vui--table-prune-sticky-registry)
-  ;; Text inserted where the header row starts is not the table's: with
-  ;; no border, that is where the table starts, and what comes before
-  ;; it (a line in a fragment, a stream) can be written again there.
-  ;; The header marker moves past it, so it stays on the header row.
-  (push (cons (copy-marker header-pos t) (copy-marker end-pos))
-        vui--table-sticky-registry)
-  (unless vui--table-saved-header-line
-    (setq vui--table-saved-header-line (cons t header-line-format)))
-  (setq header-line-format '("" (:eval (vui--table-sticky-header)))))
+(defun vui--sticky-register (pin-pos end-pos &optional face)
+  "Register a sticky part spanning up to END-POS in the current buffer.
+PIN-POS is where the line to pin starts: the header row of a table, the
+first line of a `vui-region'.  FACE goes on the pinned copy.  Installs
+the header-line machinery on first use, saving the previous
+`header-line-format' so `vui--sticky-restore-header-line' can put it
+back once no sticky part is left."
+  (vui--sticky-prune-registry)
+  ;; Text inserted where the pinned line starts is not the part's: with
+  ;; no border, that is where a table starts, and what comes before it
+  ;; (a line in a fragment, a stream) can be written again there.  The
+  ;; pin marker moves past it, so it stays on the pinned line.
+  (push (list (copy-marker pin-pos t) (copy-marker end-pos) face)
+        vui--sticky-registry)
+  (unless vui--sticky-saved-header-line
+    (setq vui--sticky-saved-header-line (cons t header-line-format)))
+  (setq header-line-format '("" (:eval (vui--sticky-header)))))
 
-(defun vui--table-sticky-header-padding ()
+(defun vui--sticky-pins-at (pos end)
+  "Return the pins of the sticky parts that start at POS and end past END.
+Each as (MARKER . TYPE), as `vui--region-edges-at' returns them.
+These are the parts around the text from POS to END that start with it:
+a stream row at the start of a sticky region, say.  When that text is
+written again, their pins stay before it, as the start of a region
+does (see `vui--rerender-inline-1').  The parts inside the text are
+not among them: they are written again, and register again."
+  (let ((pins nil))
+    (dolist (entry vui--sticky-registry)
+      (let ((pin (nth 0 entry))
+            (stop (nth 1 entry)))
+        (when (and (eql (marker-position pin) pos)
+                   (marker-position stop)
+                   (> stop end))
+          (push (cons pin (marker-insertion-type pin)) pins))))
+    pins))
+
+(defun vui--sticky-header-padding ()
   "Return a stretch space aligning sticky headers with buffer text.
 A window's content consists of the fringe, margin, and text area.
 
@@ -7712,17 +7763,21 @@ is the most common case.  :align-to N refers to the Nth canonical column
 from the start of the text area."
   (propertize " " 'display `(space :align-to ,(line-number-display-width 'columns))))
 
-(defun vui--table-sticky-header (&optional pos)
-  "Return the header to pin for a window starting at POS.
+(defun vui--sticky-header (&optional pos)
+  "Return the line to pin for a window starting at POS.
 POS defaults to `window-start'; redisplay evaluates this per window,
-with that window selected, so each window pins the header of the
-sticky table it is scrolled into.  Returns the table's in-buffer
-header row - read live from the buffer, so it is always in sync with
-the current column widths - when POS is past the header row but
-before the table's end, and an empty string otherwise.
+with that window selected, so each window pins the line of the sticky
+part it is scrolled into.  A part spans POS when POS is past the start
+of its line to pin but before its end.  Of the parts that span POS, the
+innermost wins: the one that starts last, and of two that start at
+the same position, the one that ends first.  So a table's header
+wins over the heading of the section around the table.  Returns that
+line - read live from the buffer, so it is always in sync with the
+current column widths - with the part's face on it, and an empty
+string when no part spans POS.
 
 The copy is prefixed with a stretch space reaching the start of the
-buffer text (see `vui--table-sticky-header-padding'): header-line
+buffer text (see `vui--sticky-header-padding'): header-line
 content starts at the window edge (over the fringe), while buffer
 text starts after it, so without the prefix the pinned columns would
 not line up with the table body.  Percent signs are doubled because
@@ -7730,34 +7785,42 @@ the result is a mode-line construct.  Never signals: redisplay runs
 this on every frame update, and an error here would loop."
   (condition-case nil
       (let* ((pos (or pos (window-start)))
-             (entry (cl-find-if
-                     (lambda (e)
-                       (let ((start (marker-position (car e)))
-                             (end (marker-position (cdr e))))
-                         (and start end (> pos start) (< pos end))))
-                     vui--table-sticky-registry)))
+             (entry nil))
+        (dolist (e vui--sticky-registry)
+          (let ((start (marker-position (nth 0 e)))
+                (end (marker-position (nth 1 e))))
+            (when (and start end (> pos start) (< pos end)
+                       (or (null entry)
+                           (let ((best (marker-position (nth 0 entry))))
+                             ;; On the same line, the one that ends first
+                             (or (> start best)
+                                 (and (= start best)
+                                      (< end (marker-position (nth 1 entry))))))))
+              (setq entry e))))
         (if (null entry)
             ""
           (save-excursion
-            (goto-char (car entry))
-            (concat (vui--table-sticky-header-padding)
-                    (replace-regexp-in-string
-                     "%" "%%"
-                     (buffer-substring (line-beginning-position)
-                                       (line-end-position)))))))
+            (goto-char (nth 0 entry))
+            (let ((line (replace-regexp-in-string
+                         "%" "%%"
+                         (buffer-substring (line-beginning-position)
+                                           (line-end-position)))))
+              (when (nth 2 entry)
+                (add-face-text-property 0 (length line) (nth 2 entry) nil line))
+              (concat (vui--sticky-header-padding) line)))))
     (error "")))
 
-(defun vui--table-restore-header-line ()
-  "Restore the header line replaced by sticky table headers, if any.
-Only restores once no live sticky table remains in the buffer, so
-tearing down one instance leaves another instance's pinned header
+(defun vui--sticky-restore-header-line ()
+  "Restore the header line replaced by sticky parts, if any.
+Only restores once no live sticky part remains in the buffer, so
+tearing down one instance leaves another instance's pinned line
 working."
-  (vui--table-prune-sticky-registry)
-  (when (and vui--table-saved-header-line
-             (null vui--table-sticky-registry))
-    (setq header-line-format (cdr vui--table-saved-header-line))
-    (kill-local-variable 'vui--table-saved-header-line)
-    (kill-local-variable 'vui--table-sticky-registry)))
+  (vui--sticky-prune-registry)
+  (when (and vui--sticky-saved-header-line
+             (null vui--sticky-registry))
+    (setq header-line-format (cdr vui--sticky-saved-header-line))
+    (kill-local-variable 'vui--sticky-saved-header-line)
+    (kill-local-variable 'vui--sticky-registry)))
 
 (defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face spanned)
   "Render a table border line.
@@ -10780,7 +10843,7 @@ row, or what the hook appended after it."
                       ;; the per-token path above: it only inserts, which
                       ;; never takes a table out.
                       (unless suffix
-                        (vui--table-restore-header-line))))
+                        (vui--sticky-restore-header-line))))
                   (vui--stream-relay-empty-transition handle was-empty)))))))))))
   handle)
 
@@ -11447,7 +11510,7 @@ content takes any VNODE (see `vui-stream-open')."
                           (set-marker end (point))
                           (vui--stream-sync-end handle (point)))))
                     ;; As in `vui-stream-update-last'
-                    (vui--table-restore-header-line)))
+                    (vui--sticky-restore-header-line)))
                 (vui--stream-relay-empty-transition handle was-empty node)))))))
     node))
 
@@ -11716,7 +11779,7 @@ if NODE is not live."
                     (vui--undo-writing from to
                       (vui--forget-text from to)))
                   ;; As in `vui-stream-update-last'
-                  (vui--table-restore-header-line))))
+                  (vui--sticky-restore-header-line))))
             ;; splice NODE's cell out of items-rev, and its id out of ids-rev
             (vui--stream-drop-item handle cell)
             (vui-stream-finalize node)
@@ -12546,7 +12609,7 @@ is written."
         ;; buffer: only the real render may touch the target buffer's
         ;; header line.
         (when header-row-start
-          (vui--table-register-sticky header-row-start (point))
+          (vui--sticky-register header-row-start (point))
           (set-marker header-row-start nil))
         (set-marker table-start nil))))
 
@@ -12641,7 +12704,12 @@ is written."
            (vui--children-layout nil)
            (start (vui--container-start (vui-vnode-region-face vnode)
                                         (vui-vnode-region-keymap vnode)
-                                        (vui-vnode-key vnode))))
+                                        (vui-vnode-key vnode)))
+           ;; Not in a measure pass: it renders in a temp buffer, and
+           ;; only the real render may touch the header line
+           (sticky-start (and (vui-vnode-region-sticky vnode)
+                              (not vui--measuring-p)
+                              (vui--start-marker))))
       (if layout
           (vui--render-children (vui-vnode-region-children vnode) layout)
         (let ((idx 0))
@@ -12652,7 +12720,12 @@ is written."
       (vui--finish-container start
                              (vui-vnode-region-face vnode)
                              (vui-vnode-region-keymap vnode)
-                             (vui-vnode-key vnode))))
+                             (vui-vnode-key vnode))
+      (when sticky-start
+        (when (and (marker-position sticky-start) (< sticky-start (point)))
+          (vui--sticky-register sticky-start (point)
+                                (vui-vnode-region-sticky-face vnode)))
+        (set-marker sticky-start nil))))
 
    ;; Component - reconcile and render
    ((vui-vnode-component-p vnode)
@@ -12751,7 +12824,7 @@ is written."
                (setq vui--hook-shift (+ shift (- start start-pos))))
              (goto-char start)
              ;; A sticky table in that text goes too
-             (vui--table-restore-header-line)
+             (vui--sticky-restore-header-line)
              (setq vui--pending-effects effects
                    vui--new-children new-children)
              ;; The components that existed before are not children any
@@ -12991,7 +13064,7 @@ RESIZE is as in `vui--mount-root', which calls this when BUF is free."
         (erase-buffer)
         ;; The previous mount's sticky table header must not leak into
         ;; this one; the new tree installs its own if it has one
-        (vui--table-restore-header-line)
+        (vui--sticky-restore-header-line)
         ;; Store root instance for state updates
         (setq vui--mounted-root instance)
         ;; Release component resources when the buffer is killed
@@ -13264,7 +13337,7 @@ Returns INSTANCE, or nil if it was already unmounted."
                 (vui--park-streams pos end-pos instance)
                 (delete-region pos end-pos))))
           ;; Put back the header line a sticky table header replaced
-          (vui--table-restore-header-line)
+          (vui--sticky-restore-header-line)
           ;; And the change hooks of the host, after the last region
           (vui--inline-host-change-hooks)))
       (when start (set-marker start nil))
@@ -13374,7 +13447,7 @@ Returns the unmounted instance, or nil if nothing was mounted."
                 (dolist (hook vui--widget-change-hooks)
                   (remove-hook (car hook) (cdr hook) t))
                 ;; Put back the header line a sticky table header replaced
-                (vui--table-restore-header-line)
+                (vui--sticky-restore-header-line)
                 ;; The trees its hooks mounted in the buffer go in now
                 (vui--run-mounts-after-teardown instance)))))
         instance)))))

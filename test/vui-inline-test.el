@@ -1120,7 +1120,7 @@ PROP is face, or `vui-inline-test--keymap' when PROP is keymap."
       (with-temp-buffer
         (insert "HOST\n")
         (vui-mount-inline (vui-component 'inline-sticky-stream-table))
-        (let ((header (caar vui--table-sticky-registry)))
+        (let ((header (caar vui--sticky-registry)))
           (expect (buffer-substring-no-properties
                    header (save-excursion (goto-char header)
                                           (line-end-position)))
@@ -1130,7 +1130,7 @@ PROP is face, or `vui-inline-test--keymap' when PROP is keymap."
     (with-temp-buffer
       (insert "HOST\n")
       (vui-mount-inline (vui-component 'inline-sticky-table))
-      (let ((header (caar vui--table-sticky-registry)))
+      (let ((header (caar vui--sticky-registry)))
         (expect (buffer-substring-no-properties
                  header (save-excursion (goto-char header) (line-end-position)))
                 :to-match "\\`H1"))))
