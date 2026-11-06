@@ -3351,23 +3351,23 @@ leaves no render record, the first re-render writes one."
             (expect (vui-field-value 'name) :to-be nil)
             (expect (vui-rr--widget-overlays) :to-be nil))))
 
-      (it "puts back the header line its sticky table replaced"
+      (it "releases the header line when its sticky table goes"
         (let ((vui-incremental-render flag))
           (vui-rr--with-maybe inst (lambda ()
                                      (vui-table :sticky-header t
                                                 :columns '((:header "H"))
                                                 :rows '(("x") ("y"))))
-            (expect header-line-format :not :to-be nil)
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (vui-rr--show inst nil)
-            (expect header-line-format :to-be nil)
+            (expect (vui--sticky-live-p) :to-be nil)
             ;; a header line of its own, which the table replaces and
             ;; which is not nil, so putting it back is not clearing it
             (setq header-line-format "mine")
             (vui-rr--show inst t)
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (vui-rr--show inst nil)
-            (expect header-line-format :to-equal "mine")
-            (expect vui--sticky-saved-header-line :to-be nil))))
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
+            (expect (local-variable-p (quote vui--sticky-registry)) :to-be nil))))
 
       (it "builds the tree it shows again from an empty buffer"
         (let ((vui-incremental-render flag))
