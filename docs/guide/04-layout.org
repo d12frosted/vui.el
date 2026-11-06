@@ -425,7 +425,7 @@ several sticky tables; the pinned header hands over as you scroll
 from one into the next. The copy is read from the buffer at
 redisplay time, so it always matches the current column widths,
 borders, and faces. Unmounting, or a re-render or an edit of a
-=vui-stream= item that leaves no sticky table, restores the previous
+=vui-stream= item that leaves no sticky part, restores the previous
 =header-line-format=.
 
 Sticky headers must be plain strings: the pinned copy is outside the
@@ -824,6 +824,24 @@ available through the =vui-region= wrapper:
   (vui-fragment child1 child2))
 #+end_src
 
+=vui-region= can also keep its first line in view: with =:sticky t=,
+that line is pinned in the header line while the window is scrolled
+into the region, and the end of the region lets it go. A sticky page
+title around sticky sections pins the heading of the section you are
+in, and the page title between sections:
+
+#+begin_src elisp
+(vui-region :sticky t
+  (vui-vstack
+   (vui-text "Page title" :face 'bold)
+   (vui-region :sticky t (vui-vstack (vui-text "Section A") rows-a...))
+   (vui-region :sticky t (vui-vstack (vui-text "Section B") rows-b...))))
+#+end_src
+
+The innermost sticky part wins, a sticky table header included. See
+=vui-region= in the API reference for =:sticky-face= and the limits of
+the pinned copy.
+
 * Summary
 
 | Primitive    | Purpose                | Key Props                                 |
@@ -835,7 +853,7 @@ available through the =vui-region= wrapper:
 | =vui-box=    | Fixed-width container  | =:width=, =:align=, =:padding-left/right= |
 | =vui-table=  | Tabular data           | =:columns=, =:rows=, =:border=, =:sticky-header= |
 | =vui-list=   | Dynamic list rendering | items, render-fn, key-fn, =:indent=, =:spacing= |
-| =vui-region= | Styling wrapper        | =:face=, =:keymap=                        |
+| =vui-region= | Styling wrapper        | =:face=, =:keymap=, =:sticky=             |
 
 * Try It Yourself
 

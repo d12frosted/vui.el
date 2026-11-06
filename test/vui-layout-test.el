@@ -1127,7 +1127,7 @@
       (goto-char (point-min))
       (search-forward "| b")
       (expect (substring-no-properties
-               (vui--table-sticky-header (line-beginning-position))
+               (vui--sticky-header (line-beginning-position))
                1)
               :to-equal "| Lon ¦gHeader")))
 

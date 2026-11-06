@@ -3367,7 +3367,7 @@ leaves no render record, the first re-render writes one."
             (expect header-line-format :not :to-equal "mine")
             (vui-rr--show inst nil)
             (expect header-line-format :to-equal "mine")
-            (expect vui--table-saved-header-line :to-be nil))))
+            (expect vui--sticky-saved-header-line :to-be nil))))
 
       (it "builds the tree it shows again from an empty buffer"
         (let ((vui-incremental-render flag))

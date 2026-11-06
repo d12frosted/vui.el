@@ -899,6 +899,8 @@ extent, without affecting layout.
 | =:face=   | face   | Applied beneath the children's own faces     |
 | =:keymap= | keymap | Cascades beneath the children's own keymaps  |
 | =:key=    | any    | Reconciliation key                           |
+| =:sticky= | boolean | Pin the first line while scrolled into the region (see below) |
+| =:sticky-face= | face | Put on the pinned copy                    |
 
 The face is layered with the lowest priority: children that set their
 own faces keep them, while plain text - including separators, padding,
@@ -917,6 +919,38 @@ default =RET= / =TAB= behavior, and input fields keep their own keymap.
    (vui-text "item")
    (vui-button "open" :on-click #'my-open)))
 #+end_src
+
+With =:sticky t= the line the region starts on is pinned in the header
+line while a window is scrolled into the region, past that line. The
+region bounds it, like CSS =position: sticky= is bounded by its parent:
+once the window starts after the region, the pin goes. So a page
+title stays in view over the whole page, and the heading of a section
+gives way to the next section's heading:
+
+#+begin_src elisp
+(vui-region :sticky t
+  (vui-vstack
+   (vui-text "Page title" :face 'bold)
+   (vui-region :sticky t :sticky-face 'shadow
+     (vui-vstack (vui-text "Section A") rows-a...))
+   (vui-region :sticky t :sticky-face 'shadow
+     (vui-vstack (vui-text "Section B") rows-b...))))
+#+end_src
+
+The header line is one row, so when sticky parts are nested, the
+innermost one the window is in wins: in a section, its heading, and in
+a table with =:sticky-header= in it, the table's header. =:sticky-face=
+goes on the pinned copy, over its own faces, so a pinned heading can
+look different from the one in the buffer.
+
+The pinned copy is the whole line, read live from the buffer, so let
+the region start a line of its own. It has the limitations of a sticky
+table header: it is text only (buttons and fields in it do not work),
+and while a sticky part is in the buffer the header line stays shown,
+empty when nothing is pinned. In a =vui-grid= cell, =:sticky= does
+nothing: a grid composes its cells from text it measured. Rows
+appended later to a =vui-stream= that ends the region are not inside
+it, as its =:face= does not reach them either.
 
 ** vui-table
 
@@ -1028,7 +1062,10 @@ is per window: two windows on the same buffer scrolled to different
 tables each pin their own header. Unmounting the tree (or mounting
 another one over the buffer) restores whatever =header-line-format=
 was there before, and so does a re-render or an edit of a =vui-stream=
-item that leaves no sticky table in the buffer.
+item that leaves no sticky part in the buffer (a sticky table, or a
+=vui-region= with =:sticky=). A table inside a sticky region pins its
+header while the window is in its body, and the region's line
+elsewhere in the region.
 
 Faces: the pinned copy keeps =vui-table-header= (or =:header-face=)
 and =vui-table-border= (or =:border-face=), drawn on top of the
@@ -1044,8 +1081,8 @@ Limitations:
   =vui-backward=) and buttons cannot reach it; a vnode header signals
   an error when =:sticky-header= is on. (The in-buffer header row is
   plain text anyway, so nothing is lost.)
-- While any sticky table is in the buffer, the header line is
-  reserved: it shows an empty line when no table is pinned, rather
+- While any sticky part is in the buffer, the header line is
+  reserved: it shows an empty line when nothing is pinned, rather
   than appearing and disappearing as you scroll (which would make the
   window content jump by a line).
 

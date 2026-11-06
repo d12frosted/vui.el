@@ -13,7 +13,7 @@
 ;; ended yet.  Multiple sticky tables hand the pinned header over as
 ;; the window moves from one into the next.
 ;;
-;; `vui--table-sticky-header' takes an optional position standing in
+;; `vui--sticky-header' takes an optional position standing in
 ;; for `window-start', which is what these tests drive.
 
 ;;; Code:
@@ -23,7 +23,7 @@
 
 (defun vui-sticky--at (pos)
   "Pinned header at window-start POS, without the alignment prefix."
-  (let ((s (vui--table-sticky-header pos)))
+  (let ((s (vui--sticky-header pos)))
     (if (string-empty-p s) s (substring-no-properties s 1))))
 
 (defun vui-sticky--pos-of (text)
@@ -79,7 +79,7 @@
                    :columns '((:header "H"))
                    :rows '(("x"))))
       (expect header-line-format
-              :to-equal '("" (:eval (vui--table-sticky-header))))))
+              :to-equal '("" (:eval (vui--sticky-header))))))
 
   (it "pins the header only while the window is inside the table body"
     (with-temp-buffer
@@ -116,7 +116,7 @@
                      :rows '(("1" "2"))
                      :border :ascii))
         (let* ((row-pos (vui-sticky--pos-of "| 1"))
-               (pinned (vui--table-sticky-header row-pos)))
+               (pinned (vui--sticky-header row-pos)))
           (expect (substring-no-properties pinned 1) :to-equal "| A   | B   |")
           ;; Alignment prefix over the fringe, margin, and line numbers.
           (expect (get-text-property 0 'display pinned)
@@ -181,7 +181,7 @@
                    :sticky-header t
                    :columns '((:header "Load %" :width 8 :grow t))
                    :rows '(("90%"))))
-      (let ((pinned (vui--table-sticky-header (vui-sticky--pos-of "90%"))))
+      (let ((pinned (vui--sticky-header (vui-sticky--pos-of "90%"))))
         (expect (substring-no-properties pinned) :to-match "Load %%"))))
 
   (it "stops pinning when a re-render drops the table"
@@ -233,8 +233,8 @@
           (expect header-line-format :not :to-be nil)
           (vui-unmount)
           (expect header-line-format :to-be nil)
-          (expect vui--table-saved-header-line :to-be nil)
-          (expect vui--table-sticky-registry :to-be nil))
+          (expect vui--sticky-saved-header-line :to-be nil)
+          (expect vui--sticky-registry :to-be nil))
       (kill-buffer "*sticky-u*")))
 
   (it "restores the header line when remounting without a sticky table"
@@ -321,7 +321,7 @@
                     :columns '((:header "A" :width 3 :grow t))
                     :rows '(("1")))
                    :width 20))
-      (expect (length vui--table-sticky-registry) :to-equal 1)
+      (expect (length vui--sticky-registry) :to-equal 1)
       (expect (vui-sticky--at (vui-sticky--pos-of "1")) :to-equal "A  "))))
 
 ;;; The header line across a re-render
@@ -425,8 +425,8 @@ its own, \"mine\", for a sticky table to replace."
             (vui-sticky--mode inst 'text)
             (expect (buffer-string) :to-equal "top\nplain")
             (expect header-line-format :to-equal "mine")
-            (expect vui--table-saved-header-line :to-be nil)
-            (expect vui--table-sticky-registry :to-be nil))))
+            (expect vui--sticky-saved-header-line :to-be nil)
+            (expect vui--sticky-registry :to-be nil))))
 
       (it "keeps the header line pinned when the table renders again"
         (let ((vui-incremental-render flag))
@@ -524,7 +524,7 @@ its own, \"mine\", for a sticky table to replace."
             (vui-sticky--mode inst 'text)
             (setq header-line-format (delete "crumb" header-line-format))
             (expect header-line-format :to-equal "mine")
-            (expect vui--table-saved-header-line :to-be nil))))
+            (expect vui--sticky-saved-header-line :to-be nil))))
 
       (it "pins its own header after the line before it is written again"
         ;; With the flag on, only the line renders again: its new text is
@@ -637,8 +637,8 @@ its own, \"mine\", for a sticky table to replace."
         (with-temp-buffer (vui-stream-update-last stream (vui-text "m1")))
         (expect (buffer-string) :to-equal "m0\nm1\nplain")
         (expect header-line-format :to-equal "mine")
-        (expect vui--table-saved-header-line :to-be nil)
-        (expect vui--table-sticky-registry :to-be nil))))
+        (expect vui--sticky-saved-header-line :to-be nil)
+        (expect vui--sticky-registry :to-be nil))))
 
   (it "keeps the header line pinned when update-last draws the table again"
     (let ((stream (vui-make-stream)))
