@@ -79,6 +79,14 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- A sticky table header or sticky region no longer replaces the
+  buffer's =header-line-format= (issue #305). The pin goes in the
+  =header-line-format= parameter of each window that shows the buffer,
+  and when nothing is pinned, the window shows the buffer's own header
+  line, also one a mode changes later (which-func, say). A window that
+  shows another buffer drops the pin, and a new window on the buffer
+  gets it. A header line parameter vui did not set is left alone.
+
 - The items of a =vui-stream= see the context providers around the
   stream, as if they were written in its place. Before, a component row
   rendered with no provider at all, and content written in place (an

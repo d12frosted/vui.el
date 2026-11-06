@@ -43,6 +43,7 @@
 (defvar vui--root-instance)
 (defvar vui--mounted-root)
 (defvar vui--inline-instances)
+(defvar vui--sticky-registry)
 
 ;;; Custom Variables
 
@@ -1767,16 +1768,17 @@ Table properties:
   :border MODE       - nil (default), :ascii, :unicode
   :sticky-header BOOL - keep the header row visible while scrolling:
                      the header renders into the buffer as usual, and
-                     a copy is pinned in `header-line-format' whenever
+                     a copy is pinned in the window's header line whenever
                      the window is scrolled into the table's body (the
                      in-buffer header row is above the window start).
                      Windows outside the table pin nothing, and each
                      sticky table pins its own header as the window
                      moves through it.  Requires plain string headers.
-                     The previous `header-line-format' is restored once
-                     no sticky part is left (a sticky table, or a
-                     sticky `vui-region'): on unmount, or when a
-                     re-render or an edit of a `vui-stream' item
+                     The buffer's `header-line-format' is left alone:
+                     it shows when nothing is pinned.  The windows go
+                     back to it once no sticky part is left (a sticky
+                     table, or a sticky `vui-region'): on unmount, or
+                     when a re-render or an edit of a `vui-stream' item
                      leaves none.  Inside a sticky region, the table's
                      header wins over the region's line.
   :header-face FACE  - face for header cells (default `vui-table-header')
@@ -3650,7 +3652,9 @@ current."
          (height (if buffer
                      (- (+ (window-body-height window t) lines)
                         (* (window-default-line-height window)
-                           (+ (if header-line-format 1 0)
+                           ;; A window gets a header line for the
+                           ;; sticky parts of BUFFER too
+                           (+ (if (or header-line-format vui--sticky-registry) 1 0)
                               (if tab-line-format 1 0))))
                    (window-body-height window t)))
          ;; The limit counts from the top of the window, the result from
@@ -4956,11 +4960,11 @@ buffer."
                                              (append held-starts held-pins) nil
                                            (vui--inline-replace-text
                                             instance pos end-pos))))))
-                    ;; The header line of a sticky table that is gone, as
-                    ;; in `vui--rerender-buffer'.  Not when a hook killed
+                    ;; The sticky header line of a sticky part that is
+                    ;; gone, as in `vui--rerender-buffer'.  Not when a hook killed
                     ;; the buffer: another one is current then
                     (when (buffer-live-p buffer)
-                      (vui--sticky-restore-header-line)
+                      (vui--sticky-release-header-line)
                       (widget-setup)
                       (vui--inline-host-change-hooks)
                       (vui--setup-field-placeholders))))
@@ -5119,12 +5123,12 @@ writes there goes into the region."
                 ;; is left to do when a hook unmounted the tree
                 (when (vui--rendering-root instance
                         (vui--render-instance instance #'vui--commit-root))
-                  ;; A sticky table the render did not draw again leaves
-                  ;; the header line it installed; put back what that
-                  ;; replaced once no sticky part is left (it was erased
-                  ;; or patched away).  Before the windows are restored:
+                  ;; A sticky part the render did not draw again leaves
+                  ;; the sticky header line on the windows; take it off
+                  ;; once no sticky part is left (it was erased or
+                  ;; patched away).  Before the windows are restored:
                   ;; their height depends on the header line.
-                  (vui--sticky-restore-header-line)
+                  (vui--sticky-release-header-line)
                   (widget-setup)
                   (vui--setup-field-placeholders)
                   ;; Restore the cursor position
@@ -7689,11 +7693,51 @@ that spans the window start.  Entries whose region has collapsed (the
 text was erased or written again elsewhere) are inert and are pruned
 by `vui--sticky-prune-registry'.")
 
-(defvar-local vui--sticky-saved-header-line nil
-  "Previous `header-line-format', saved before a sticky header replaced it.
-A cons (t . VALUE) while a sticky header line is installed, nil
-otherwise.  The cons distinguishes a saved nil from nothing saved.
-VALUE is put back by `vui--sticky-restore-header-line'.")
+(defconst vui--sticky-window-format '("" (:eval (vui--sticky-header-line)))
+  "The header line of a window that shows a buffer with sticky parts.
+It goes in the window's `header-line-format' parameter, which wins over
+the buffer's `header-line-format' in that window, so the variable of
+the buffer is never touched: the header line an app or a mode sets
+there shows whenever nothing is pinned (see `vui--sticky-header-line').
+A window parameter is the window's own, so each window shows what its
+own scroll pins, and a window that shows another buffer drops it (see
+`vui--sticky-window-buffer-change').")
+
+(defun vui--sticky-live-p ()
+  "Return non-nil when the current buffer has a live sticky part."
+  (when (local-variable-p 'vui--sticky-registry)
+    (vui--sticky-prune-registry)
+    (and vui--sticky-registry t)))
+
+(defun vui--sticky-sync-window (window)
+  "Give WINDOW the sticky header line when its buffer has sticky parts.
+And take it from WINDOW when its buffer has none.  A header line
+parameter that is not `vui--sticky-window-format' is someone else's,
+and stays.  It is compared with `equal': a window state saved with its
+parameters gives back a copy."
+  (let* ((format (window-parameter window 'header-line-format))
+         (ours (equal format vui--sticky-window-format))
+         (live (buffer-local-value 'vui--sticky-registry (window-buffer window))))
+    (cond
+     ((and live (null format))
+      (set-window-parameter window 'header-line-format vui--sticky-window-format))
+     ((and ours (not live))
+      (set-window-parameter window 'header-line-format nil)))))
+
+(defun vui--sticky-sync-windows ()
+  "Sync the sticky header line of the windows that show this buffer.
+See `vui--sticky-sync-window'."
+  (dolist (window (get-buffer-window-list nil nil t))
+    (vui--sticky-sync-window window)))
+
+(defun vui--sticky-window-buffer-change (frame)
+  "Sync the sticky header line of the windows of FRAME.
+On `window-buffer-change-functions', which redisplay runs for a frame
+when one of its windows shows another buffer, or is new: a window that
+leaves a buffer with sticky parts drops the pinned line, and a window
+that comes to one gets it."
+  (dolist (window (window-list frame 'never))
+    (vui--sticky-sync-window window)))
 
 (defun vui--sticky-prune-registry ()
   "Drop registry entries whose region no longer exists.
@@ -7713,10 +7757,10 @@ so this is garbage collection, not behavior."
 (defun vui--sticky-register (pin-pos end-pos &optional face)
   "Register a sticky part spanning up to END-POS in the current buffer.
 PIN-POS is where the line to pin starts: the header row of a table, the
-first line of a `vui-region'.  FACE goes on the pinned copy.  Installs
-the header-line machinery on first use, saving the previous
-`header-line-format' so `vui--sticky-restore-header-line' can put it
-back once no sticky part is left."
+first line of a `vui-region'.  FACE goes on the pinned copy.  The
+windows that show the buffer get the sticky header line, as does a
+window that shows it later (see `vui--sticky-window-format'), until no
+sticky part is left (see `vui--sticky-release-header-line')."
   (vui--sticky-prune-registry)
   ;; Text inserted where the pinned line starts is not the part's: with
   ;; no border, that is where a table starts, and what comes before it
@@ -7724,9 +7768,19 @@ back once no sticky part is left."
   ;; pin marker moves past it, so it stays on the pinned line.
   (push (list (copy-marker pin-pos t) (copy-marker end-pos) face)
         vui--sticky-registry)
-  (unless vui--sticky-saved-header-line
-    (setq vui--sticky-saved-header-line (cons t header-line-format)))
-  (setq header-line-format '("" (:eval (vui--sticky-header)))))
+  (add-hook 'window-buffer-change-functions #'vui--sticky-window-buffer-change)
+  (add-hook 'change-major-mode-hook #'vui--sticky-forget nil t)
+  (vui--sticky-sync-windows))
+
+(defun vui--sticky-forget ()
+  "Drop the sticky parts of this buffer, and their header line.
+On `change-major-mode-hook': the new mode kills the registry with the
+other local variables, and the windows would keep the header line."
+  (dolist (entry vui--sticky-registry)
+    (set-marker (nth 0 entry) nil)
+    (set-marker (nth 1 entry) nil))
+  (kill-local-variable 'vui--sticky-registry)
+  (vui--sticky-sync-windows))
 
 (defun vui--sticky-pins-at (pos end)
   "Return the pins of the sticky parts that start at POS and end past END.
@@ -7810,17 +7864,26 @@ this on every frame update, and an error here would loop."
               (concat (vui--sticky-header-padding) line)))))
     (error "")))
 
-(defun vui--sticky-restore-header-line ()
-  "Restore the header line replaced by sticky parts, if any.
-Only restores once no live sticky part remains in the buffer, so
-tearing down one instance leaves another instance's pinned line
-working."
-  (vui--sticky-prune-registry)
-  (when (and vui--sticky-saved-header-line
-             (null vui--sticky-registry))
-    (setq header-line-format (cdr vui--sticky-saved-header-line))
-    (kill-local-variable 'vui--sticky-saved-header-line)
-    (kill-local-variable 'vui--sticky-registry)))
+(defun vui--sticky-header-line ()
+  "Return what the header line of a window with sticky parts shows.
+That is the line pinned for the window's start (see
+`vui--sticky-header'), and when nothing is pinned, the buffer's own
+`header-line-format', which can be nil: the header line is then empty.
+It stays, rather than come and go as the window scrolls, which would
+make the text below it jump by a line."
+  (let ((pin (vui--sticky-header)))
+    (if (string-empty-p pin) header-line-format pin)))
+
+(defun vui--sticky-release-header-line ()
+  "Take the sticky header line from the windows once no sticky part is left.
+Only once no live sticky part remains in the buffer, so tearing down
+one instance leaves another instance's pinned line working.  The
+windows show the buffer's own header line again."
+  (when (local-variable-p 'vui--sticky-registry)
+    (vui--sticky-prune-registry)
+    (unless vui--sticky-registry
+      (kill-local-variable 'vui--sticky-registry)
+      (vui--sticky-sync-windows))))
 
 (defun vui--render-table-border (col-widths border-style position &optional cell-padding border-face spanned)
   "Render a table border line.
@@ -10837,13 +10900,13 @@ row, or what the hook appended after it."
                                     (vui--stream-restore-item handle old end)
                                   (vui--stream-render-item vnode (vui-stream-handle-layout handle))))
                               (set-marker end (point))))))
-                      ;; The old item may have had the last sticky table:
-                      ;; no render of the root follows to put back the
-                      ;; header line it replaced, so do it here.  Not on
+                      ;; The old item may have had the last sticky part:
+                      ;; no render of the root follows to take the sticky
+                      ;; header line off the windows, so do it here.  Not on
                       ;; the per-token path above: it only inserts, which
                       ;; never takes a table out.
                       (unless suffix
-                        (vui--sticky-restore-header-line))))
+                        (vui--sticky-release-header-line))))
                   (vui--stream-relay-empty-transition handle was-empty)))))))))))
   handle)
 
@@ -11510,7 +11573,7 @@ content takes any VNODE (see `vui-stream-open')."
                           (set-marker end (point))
                           (vui--stream-sync-end handle (point)))))
                     ;; As in `vui-stream-update-last'
-                    (vui--sticky-restore-header-line)))
+                    (vui--sticky-release-header-line)))
                 (vui--stream-relay-empty-transition handle was-empty node)))))))
     node))
 
@@ -11779,7 +11842,7 @@ if NODE is not live."
                     (vui--undo-writing from to
                       (vui--forget-text from to)))
                   ;; As in `vui-stream-update-last'
-                  (vui--sticky-restore-header-line))))
+                  (vui--sticky-release-header-line))))
             ;; splice NODE's cell out of items-rev, and its id out of ids-rev
             (vui--stream-drop-item handle cell)
             (vui-stream-finalize node)
@@ -12824,7 +12887,7 @@ is written."
                (setq vui--hook-shift (+ shift (- start start-pos))))
              (goto-char start)
              ;; A sticky table in that text goes too
-             (vui--sticky-restore-header-line)
+             (vui--sticky-release-header-line)
              (setq vui--pending-effects effects
                    vui--new-children new-children)
              ;; The components that existed before are not children any
@@ -13064,7 +13127,7 @@ RESIZE is as in `vui--mount-root', which calls this when BUF is free."
         (erase-buffer)
         ;; The previous mount's sticky table header must not leak into
         ;; this one; the new tree installs its own if it has one
-        (vui--sticky-restore-header-line)
+        (vui--sticky-release-header-line)
         ;; Store root instance for state updates
         (setq vui--mounted-root instance)
         ;; Release component resources when the buffer is killed
@@ -13336,8 +13399,8 @@ Returns INSTANCE, or nil if it was already unmounted."
                 (vui--forget-region-fields pos end-pos t)
                 (vui--park-streams pos end-pos instance)
                 (delete-region pos end-pos))))
-          ;; Put back the header line a sticky table header replaced
-          (vui--sticky-restore-header-line)
+          ;; Take the sticky header line off the windows
+          (vui--sticky-release-header-line)
           ;; And the change hooks of the host, after the last region
           (vui--inline-host-change-hooks)))
       (when start (set-marker start nil))
@@ -13446,8 +13509,8 @@ Returns the unmounted instance, or nil if nothing was mounted."
                 (setq widget-field-list nil widget-field-new nil)
                 (dolist (hook vui--widget-change-hooks)
                   (remove-hook (car hook) (cdr hook) t))
-                ;; Put back the header line a sticky table header replaced
-                (vui--sticky-restore-header-line)
+                ;; Take the sticky header line off the windows
+                (vui--sticky-release-header-line)
                 ;; The trees its hooks mounted in the buffer go in now
                 (vui--run-mounts-after-teardown instance)))))
         instance)))))

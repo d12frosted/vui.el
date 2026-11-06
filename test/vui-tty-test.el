@@ -170,6 +170,20 @@ up, or what was wrong with it."
                       (mapcar (lambda (i) (vui-button (format "row%d" i)))
                               (number-sequence 1 count)))))
 
+    (defvar vui-tty-fit-set nil)
+    (defvar vui-tty-fit-lines 10)
+    (vui-defcomponent vui-tty-fit ()
+      :state ((tick 0))
+      :render (progn
+                (setq vui-tty-fit-set
+                      (vui-async-callback (v) (vui-set-state :tick v)))
+                (vui-vstack
+                 (vui-text (format "top %d" tick))
+                 (vui-region :sticky t
+                   (apply #'vui-vstack (vui-text "Section")
+                          (mapcar (lambda (i) (vui-text (format "s%d" i)))
+                                  (number-sequence 1 (- vui-tty-fit-lines 2))))))))
+
     (vui-defcomponent vui-tty-chat (stream)
       :render (vui-vstack (vui-stream stream) (vui-text "status")))
 
@@ -337,6 +351,74 @@ AFTER), the window's state once redisplay has run before the re-render
      50 300 (lambda ()
               (set-window-start nil (vui-tty-line "a row 20"))
               (goto-char (vui-tty-line "status"))))
+    ;; A sticky section scrolled into, then the window shown another
+    ;; buffer and back, then split: what each window's header line
+    ;; shows after redisplay, as (HEADER-LINE-HEIGHT TEXT).
+    :sticky
+    (let ((buf (get-buffer-create "*vui-tty-sticky*"))
+          (other (get-buffer-create "*vui-tty-other*"))
+          (shown (lambda (window)
+                   (list (window-header-line-height window)
+                         (string-trim
+                          (format-mode-line
+                           (or (window-parameter window 'header-line-format)
+                               (buffer-local-value 'header-line-format
+                                                   (window-buffer window)))
+                           nil window))))))
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (vui-render
+       (vui-vstack
+        (vui-text "top")
+        (vui-region :sticky t
+          (apply #'vui-vstack (vui-text "Section")
+                 (mapcar (lambda (i) (vui-text (format "s%d" i)))
+                         (number-sequence 1 80))))))
+      (setq header-line-format "own")
+      (set-window-start nil (vui-tty-line "s40"))
+      (redisplay t)
+      (let ((scrolled (funcall shown (selected-window))))
+        (set-window-start nil (point-min))
+        (redisplay t)
+        (let ((top (funcall shown (selected-window))))
+          (switch-to-buffer other)
+          (redisplay t)
+          (let ((away (funcall shown (selected-window))))
+            (switch-to-buffer buf)
+            (redisplay t)
+            (let ((back (window-parameter nil 'header-line-format)))
+              (let ((split (split-window)))
+                (redisplay t)
+                (list :scrolled scrolled :top top :away away
+                      :back (and back t)
+                      :split (and (window-parameter split 'header-line-format) t))))))))
+    ;; A buffer with a sticky part that fits the window only without a
+    ;; header line, scrolled one line down, re-rendered while another
+    ;; buffer is shown: (START-LINE POINT-LINE) before and after it is
+    ;; shown again.
+    :sticky-fit
+    (let ((other (get-buffer-create "*vui-tty-fit-other*")))
+      (with-current-buffer other
+        (dotimes (i 100) (insert (format "o%d\n" i))))
+      (delete-other-windows)
+      (switch-to-buffer other)
+      (redisplay t)
+      (setq vui-tty-fit-lines (window-body-height))
+      (vui-mount (vui-component 'vui-tty-fit) "*vui-tty-fit*")
+      (switch-to-buffer "*vui-tty-fit*")
+      (goto-char (point-max))
+      (set-window-start nil (save-excursion (goto-char (point-min))
+                                            (forward-line 1) (point)))
+      (redisplay t)
+      (let ((before (list (line-number-at-pos (window-start))
+                          (line-number-at-pos (point)))))
+        (switch-to-buffer other)
+        (redisplay t)
+        (funcall vui-tty-fit-set 1)
+        (switch-to-buffer "*vui-tty-fit*")
+        (redisplay t)
+        (list before (list (line-number-at-pos (window-start))
+                           (line-number-at-pos (point))))))
     ;; Not a scenario: whether the child compiles what it loads, and
     ;; the processes it has running.
     :native-comp
@@ -450,6 +532,24 @@ anyone noticing."
     ;; point into view instead
     (pcase-let ((`(,_before ,after) (vui-tty-test--scenario :stream-below)))
       (expect (cadr after) :to-equal "status")))
+
+  (it "pins a sticky line per window and drops it with the buffer"
+    (let ((report (vui-tty-test--scenario :sticky)))
+      ;; Scrolled into the section: its heading
+      (expect (plist-get report :scrolled) :to-equal '(1 "Section"))
+      ;; At the top: the buffer's own header line
+      (expect (plist-get report :top) :to-equal '(1 "own"))
+      ;; Another buffer, with no header line, has none
+      (expect (car (plist-get report :away)) :to-equal 0)
+      ;; Back to the buffer, and in a new window on it, the sticky line
+      (expect (plist-get report :back) :to-be t)
+      (expect (plist-get report :split) :to-be t)))
+
+  (it "counts the sticky header line of a buffer a window does not show"
+    ;; Fitting the buffer without it, the re-render took the window for
+    ;; one that shows it all and sent it back to the top
+    (pcase-let ((`(,before ,after) (vui-tty-test--scenario :sticky-fit)))
+      (expect after :to-equal before)))
 
   (it "runs in a child that starts no native compilation"
     ;; It starts one for vui.elc otherwise, and that process can

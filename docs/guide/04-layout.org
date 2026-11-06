@@ -424,9 +424,11 @@ normally - windows showing it pin nothing - and a buffer can hold
 several sticky tables; the pinned header hands over as you scroll
 from one into the next. The copy is read from the buffer at
 redisplay time, so it always matches the current column widths,
-borders, and faces. Unmounting, or a re-render or an edit of a
-=vui-stream= item that leaves no sticky part, restores the previous
-=header-line-format=.
+borders, and faces. The buffer's own =header-line-format= is left
+alone and shows whenever nothing is pinned: the pin is a parameter of
+each window, so a window that shows another buffer drops it. Unmounting,
+or a re-render or an edit of a =vui-stream= item that leaves no sticky
+part, gives the windows back their plain header line.
 
 Sticky headers must be plain strings: the pinned copy is outside the
 buffer, so buttons there would be unreachable by vui navigation. A
