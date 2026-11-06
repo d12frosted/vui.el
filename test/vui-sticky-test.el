@@ -64,11 +64,14 @@
         (setq sticky (buffer-string)))
       (expect sticky :to-equal plain)))
 
-  (it "installs an :eval header line format"
+  (it "leaves the buffer's header-line-format alone"
     (with-temp-buffer
       (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
-      (expect header-line-format
-              :to-equal '("" (:eval (vui--sticky-header))))))
+      ;; `vui-mode' resets it, so it is set after the first render
+      (setq header-line-format "mine")
+      (vui--sticky-register (point-min) (point-max))
+      (expect (vui--sticky-live-p) :to-be-truthy)
+      (expect header-line-format :to-equal "mine")))
 
   (it "pins its first line only while the window start is inside it"
     (with-temp-buffer
@@ -199,7 +202,7 @@
         (expect (funcall face-at "in") :to-equal '(italic))
         (expect (funcall face-at "out") :to-equal '(bold)))))
 
-  (it "puts back the header line when a re-render drops it"
+  (it "releases the header line when a re-render drops it"
     (let ((vui-render-delay nil)
           (set-show nil))
       (vui-defcomponent vui-st-toggle ()
@@ -212,11 +215,137 @@
       (vui-mount (vui-component 'vui-st-toggle) "*vui-st-drop*" t)
       (unwind-protect
           (with-current-buffer "*vui-st-drop*"
-            (expect header-line-format :to-equal '("" (:eval (vui--sticky-header))))
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (funcall set-show nil)
             (expect (buffer-string) :to-equal "plain")
-            ;; What `vui-mode' had before the sticky line replaced it
-            (expect header-line-format :to-be nil))
+            (expect (vui--sticky-live-p) :to-be nil))
         (kill-buffer "*vui-st-drop*")))))
+
+(defun vui-st--window-format (window)
+  "The header line WINDOW's parameter gives it, or nil."
+  (window-parameter window 'header-line-format))
+
+(describe "the sticky header line of a window"
+  (it "is set on the windows that show a buffer with sticky parts"
+    (let ((buf (get-buffer-create "*vui-st-win*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf))))
+
+  (it "shows the pin, or the buffer's own header line when nothing is pinned"
+    (let ((buf (get-buffer-create "*vui-st-own*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (vui-render (vui-vstack
+                         (vui-text "top")
+                         (vui-region :sticky t
+                           (vui-vstack (vui-text "Heading") (vui-text "body")))))
+            (setq header-line-format "mine")
+            (set-window-start (selected-window) (point-min))
+            (expect (vui--sticky-header-line) :to-equal "mine")
+            (set-window-start (selected-window) (vui-st--pos-of "body"))
+            (expect (substring-no-properties (vui--sticky-header-line) 1)
+                    :to-equal "Heading"))
+        (kill-buffer buf))))
+
+  (it "is cleared when the window shows another buffer"
+    (let ((buf (get-buffer-create "*vui-st-away*"))
+          (other (get-buffer-create "*vui-st-other*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+            (switch-to-buffer other)
+            ;; What redisplay runs after a window changed its buffer
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            (switch-to-buffer buf)
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf)
+        (kill-buffer other))))
+
+  (it "leaves a header line parameter it did not set alone"
+    (let ((buf (get-buffer-create "*vui-st-theirs*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-parameter nil 'header-line-format "theirs")
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window)) :to-equal "theirs"))
+        (set-window-parameter nil 'header-line-format nil)
+        (kill-buffer buf))))
+
+  (it "does not take the place of someone else's header line parameter"
+    (let ((buf (get-buffer-create "*vui-st-taken*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-parameter nil 'header-line-format 'none)
+            (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window)) :to-be 'none))
+        (set-window-parameter nil 'header-line-format nil)
+        (kill-buffer buf))))
+
+  (it "is cleared when the buffer changes its major mode"
+    (let ((buf (get-buffer-create "*vui-st-mode*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (fundamental-mode)
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer buf))))
+
+  (it "knows its own header line after it was printed and read back"
+    (let ((buf (get-buffer-create "*vui-st-read*"))
+          (other (get-buffer-create "*vui-st-read-other*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer other)
+            ;; As a window state saved with its parameters gives it back
+            (set-window-parameter nil 'header-line-format
+                                  (car (read-from-string
+                                        (prin1-to-string vui--sticky-window-format))))
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (set-window-parameter nil 'header-line-format nil)
+        (kill-buffer buf)
+        (kill-buffer other))))
+
+  (it "is cleared when the last sticky part goes"
+    (let ((vui-render-delay nil)
+          (set-show nil))
+      (vui-defcomponent vui-st-wtoggle ()
+        :state ((show t))
+        :render (progn
+                  (setq set-show (vui-async-callback (v) (vui-set-state :show v)))
+                  (if show
+                      (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b")))
+                    (vui-text "plain"))))
+      (unwind-protect
+          (save-window-excursion
+            (vui-mount (vui-component 'vui-st-wtoggle) "*vui-st-wgone*")
+            (switch-to-buffer "*vui-st-wgone*")
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (funcall set-show nil)
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            (funcall set-show t)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (vui-unmount "*vui-st-wgone*")
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer "*vui-st-wgone*")))))
 
 ;;; vui-sticky-test.el ends here

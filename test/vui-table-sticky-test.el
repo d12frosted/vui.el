@@ -72,14 +72,13 @@
         (setq sticky (buffer-string)))
       (expect sticky :to-equal plain)))
 
-  (it "installs an :eval header line format"
+  (it "makes the buffer one with a sticky part"
     (with-temp-buffer
       (vui-render (vui-table
                    :sticky-header t
                    :columns '((:header "H"))
                    :rows '(("x"))))
-      (expect header-line-format
-              :to-equal '("" (:eval (vui--sticky-header))))))
+      (expect (vui--sticky-live-p) :to-be-truthy)))
 
   (it "pins the header only while the window is inside the table body"
     (with-temp-buffer
@@ -211,7 +210,7 @@
                    :columns '((:header "Name" :width 6 :grow t))
                    :rows '(("Alice"))))
       (expect (buffer-string) :to-equal "Name  \nAlice ")
-      (expect header-line-format :to-be nil)))
+      (expect (vui--sticky-live-p) :to-be nil)))
 
   (it "does not touch the header line when no column has a header"
     (with-temp-buffer
@@ -219,9 +218,9 @@
                    :sticky-header t
                    :columns '((:width 3 :grow t))
                    :rows '(("x"))))
-      (expect header-line-format :to-be nil)))
+      (expect (vui--sticky-live-p) :to-be nil)))
 
-  (it "restores header-line-format on unmount"
+  (it "releases the header line on unmount"
     (vui-defcomponent sticky-unmount ()
       :render (vui-table
                :sticky-header t
@@ -230,14 +229,14 @@
     (vui-mount (vui-component 'sticky-unmount) "*sticky-u*")
     (unwind-protect
         (with-current-buffer "*sticky-u*"
-          (expect header-line-format :not :to-be nil)
+          (expect (vui--sticky-live-p) :to-be-truthy)
           (vui-unmount)
-          (expect header-line-format :to-be nil)
-          (expect vui--sticky-saved-header-line :to-be nil)
+          (expect (vui--sticky-live-p) :to-be nil)
+          (expect (local-variable-p (quote vui--sticky-registry)) :to-be nil)
           (expect vui--sticky-registry :to-be nil))
       (kill-buffer "*sticky-u*")))
 
-  (it "restores the header line when remounting without a sticky table"
+  (it "releases the header line when remounting without a sticky table"
     (vui-defcomponent sticky-first ()
       :render (vui-table
                :sticky-header t
@@ -249,24 +248,24 @@
     (unwind-protect
         (progn
           (with-current-buffer "*sticky-r*"
-            (expect header-line-format :not :to-be nil))
+            (expect (vui--sticky-live-p) :to-be-truthy))
           (vui-mount (vui-component 'plain-second) "*sticky-r*")
           (with-current-buffer "*sticky-r*"
             (expect (buffer-string) :to-equal "no table")
-            (expect header-line-format :to-be nil)))
+            (expect (vui--sticky-live-p) :to-be nil)))
       (kill-buffer "*sticky-r*")))
 
-  (it "restores the header line when vui-render clears the buffer"
+  (it "releases the header line when vui-render clears the buffer"
     (with-temp-buffer
       (vui-render (vui-table
                    :sticky-header t
                    :columns '((:header "H"))
                    :rows '(("x"))))
-      (expect header-line-format :not :to-be nil)
+      (expect (vui--sticky-live-p) :to-be-truthy)
       (vui-render (vui-text "plain"))
-      (expect header-line-format :to-be nil)))
+      (expect (vui--sticky-live-p) :to-be nil)))
 
-  (it "restores the header line when an inline instance unmounts"
+  (it "releases the header line when an inline instance unmounts"
     (with-temp-buffer
       (vui-defcomponent sticky-inline ()
         :render (vui-table
@@ -275,9 +274,9 @@
                  :rows '(("x"))))
       (insert "before\n")
       (let ((inst (vui-mount-inline (vui-component 'sticky-inline))))
-        (expect header-line-format :not :to-be nil)
+        (expect (vui--sticky-live-p) :to-be-truthy)
         (vui-unmount inst)
-        (expect header-line-format :to-be nil))))
+        (expect (vui--sticky-live-p) :to-be nil))))
 
   (it "keeps the header line while another sticky table is still live"
     (with-temp-buffer
@@ -296,12 +295,12 @@
             (ib nil))
         (goto-char (point-max))
         (setq ib (vui-mount-inline (vui-component 'sticky-b) (point-max)))
-        (expect header-line-format :not :to-be nil)
+        (expect (vui--sticky-live-p) :to-be-truthy)
         ;; Unmounting one inline instance keeps the pin for the other
         (vui-unmount ia)
-        (expect header-line-format :not :to-be nil)
+        (expect (vui--sticky-live-p) :to-be-truthy)
         (vui-unmount ib)
-        (expect header-line-format :to-be nil))))
+        (expect (vui--sticky-live-p) :to-be nil))))
 
   (it "errors when a sticky header cell is not a plain string"
     (with-temp-buffer
@@ -417,15 +416,15 @@ its own, \"mine\", for a sticky table to replace."
   ;; content after a live stream is patched with the flag off as well.
   (dolist (flag '(nil t))
     (describe (format "with `vui-incremental-render' %s" flag)
-      (it "puts back the header line when the table gives way to text"
+      (it "releases the header line when the table gives way to text"
         (let ((vui-incremental-render flag))
           (vui-sticky--with-switch inst (:mode 'text)
             (vui-sticky--mode inst 'table)
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (vui-sticky--mode inst 'text)
             (expect (buffer-string) :to-equal "top\nplain")
-            (expect header-line-format :to-equal "mine")
-            (expect vui--sticky-saved-header-line :to-be nil)
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
+            (expect (local-variable-p (quote vui--sticky-registry)) :to-be nil)
             (expect vui--sticky-registry :to-be nil))))
 
       (it "keeps the header line pinned when the table renders again"
@@ -433,7 +432,7 @@ its own, \"mine\", for a sticky table to replace."
           (vui-sticky--with-switch inst (:mode 'text)
             (vui-sticky--mode inst 'table)
             (vui-sticky--mode inst 'table)
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
                     :to-equal "H "))))
 
@@ -442,13 +441,13 @@ its own, \"mine\", for a sticky table to replace."
           (vui-sticky--with-switch inst (:mode 'text)
             (vui-sticky--mode inst 'both)
             (vui-sticky--mode inst 'second)
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (expect (vui-sticky--at (vui-sticky--pos-of "k2"))
                     :to-equal "K ")
             (vui-sticky--mode inst 'text)
-            (expect header-line-format :to-equal "mine"))))
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))))
 
-      (it "puts back the header line when the tables of a list of components go"
+      (it "releases the header line when the tables of a list of components go"
         ;; With the flag on, the re-render writes again only the card
         ;; whose props changed, and leaves the text of the other alone
         (let ((vui-incremental-render flag)
@@ -460,18 +459,18 @@ its own, \"mine\", for a sticky table to replace."
                   (vui-rerender inst)
                   (setq header-line-format "mine")
                   (vui-update inst '(:tables ("H" "K")))
-                  (expect header-line-format :not :to-equal "mine")
+                  (expect (vui--sticky-live-p) :to-be-truthy)
                   (vui-update inst '(:tables ("K")))
                   (expect (buffer-string) :to-match "\\`no H\n")
-                  (expect header-line-format :not :to-equal "mine")
+                  (expect (vui--sticky-live-p) :to-be-truthy)
                   (expect (vui-sticky--at (vui-sticky--pos-of "k2"))
                           :to-equal "K ")
                   (vui-update inst '(:tables nil))
                   (expect (buffer-string) :to-equal "no H\nno K")
-                  (expect header-line-format :to-equal "mine"))
+                  (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))
               (kill-buffer "*sticky-cards*")))))
 
-      (it "puts back the header line when the table after a stream goes"
+      (it "releases the header line when the table after a stream goes"
         ;; The re-render keeps the region of the live stream and renders
         ;; again only what comes after it
         (let ((vui-incremental-render flag)
@@ -480,12 +479,12 @@ its own, \"mine\", for a sticky table to replace."
             (vui-stream-append stream (vui-text "m0"))
             (vui-stream-append stream (vui-text "m1"))
             (vui-sticky--mode inst 'table)
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (vui-sticky--mode inst 'text)
             (expect (buffer-string) :to-equal "m0\nm1\nplain")
-            (expect header-line-format :to-equal "mine"))))
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))))
 
-      (it "puts back the header line when a stream row drops its table"
+      (it "releases the header line when a stream row drops its table"
         ;; A component row renders again on its own, not with the root
         (let ((vui-incremental-render flag)
               (stream (vui-make-stream)))
@@ -493,13 +492,13 @@ its own, \"mine\", for a sticky table to replace."
             (vui-stream-append stream (vui-text "m0"))
             (vui-stream-append stream (vui-component 'vui-sticky--card
                                                      :header "R" :table t))
-            (expect header-line-format :not :to-equal "mine")
+            (expect (vui--sticky-live-p) :to-be-truthy)
             (vui-update (car (vui-stream-handle-items-rev stream))
                         '(:header "R" :table nil))
             (expect (buffer-string) :to-equal "m0\nno R\nplain")
-            (expect header-line-format :to-equal "mine"))))
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))))
 
-      (it "puts back the header line when an inline table gives way to text"
+      (it "releases the header line when an inline table gives way to text"
         (let ((vui-incremental-render flag)
               (vui-render-delay nil))
           (with-temp-buffer
@@ -507,9 +506,9 @@ its own, \"mine\", for a sticky table to replace."
             (insert "host\n")
             (let ((inst (vui-mount-inline
                          (vui-component 'vui-sticky--switch :mode 'table))))
-              (expect header-line-format :not :to-equal "mine")
+              (expect (vui--sticky-live-p) :to-be-truthy)
               (vui-sticky--mode inst 'text)
-              (expect header-line-format :to-equal "mine")
+              (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
               (vui-unmount inst)))))
 
       (it "leaves no sticky header line behind when a mode added to it"
@@ -520,11 +519,13 @@ its own, \"mine\", for a sticky table to replace."
         (let ((vui-incremental-render flag))
           (vui-sticky--with-switch inst (:mode 'text)
             (vui-sticky--mode inst 'table)
-            (add-to-list 'header-line-format "crumb")
+            ;; The mode's header line is the buffer's, and stays its
+            (setq header-line-format (list "crumb" header-line-format))
+            (expect (vui--sticky-header-line) :to-equal '("crumb" "mine"))
             (vui-sticky--mode inst 'text)
-            (setq header-line-format (delete "crumb" header-line-format))
-            (expect header-line-format :to-equal "mine")
-            (expect vui--sticky-saved-header-line :to-be nil))))
+            (setq header-line-format (cadr header-line-format))
+            (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
+            (expect (local-variable-p (quote vui--sticky-registry)) :to-be nil))))
 
       (it "pins its own header after the line before it is written again"
         ;; With the flag on, only the line renders again: its new text is
@@ -544,7 +545,7 @@ its own, \"mine\", for a sticky table to replace."
                   (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
                           :to-equal "H ")
                   (vui-update inst '(:n 22 :table nil))
-                  (expect header-line-format :to-equal "mine"))
+                  (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))
               (kill-buffer "*sticky-after*")))))
 
       (it "pins its own header after the stream before it changes"
@@ -567,7 +568,7 @@ its own, \"mine\", for a sticky table to replace."
                   (expect (vui-sticky--at (vui-sticky--pos-of "t2"))
                           :to-equal "T ")
                   (vui-update inst (list :stream stream :table nil))
-                  (expect header-line-format :to-equal "mine"))
+                  (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine"))
               (kill-buffer "*sticky-after*")))))
 
       (it "pins its own header after the inline mount before it renders again"
@@ -586,11 +587,11 @@ its own, \"mine\", for a sticky table to replace."
               (expect (vui-sticky--at (vui-sticky--pos-of "h2"))
                       :to-equal "H ")
               (vui-update card '(:header "H" :table nil))
-              (expect header-line-format :to-equal "mine")
+              (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
               (vui-unmount line)
               (vui-unmount card)))))))
 
-  (it "puts back the header line before it restores the window start"
+  (it "releases the header line before it restores the window start"
     ;; Text one line taller than the window body under the sticky header
     ;; line fits once that header line is gone, so the window shows it
     ;; from the top.  Restored after the window, it would not.
@@ -610,6 +611,9 @@ its own, \"mine\", for a sticky table to replace."
             (save-window-excursion
               (let ((win (selected-window)))
                 (set-window-buffer win "*sticky-tall*")
+                ;; What redisplay runs for a window that shows another
+                ;; buffer: it gets the sticky header line
+                (vui--sticky-window-buffer-change (selected-frame))
                 (with-current-buffer "*sticky-tall*"
                   (let ((height (window-body-height win)))
                     (set-window-start win (save-excursion
@@ -619,7 +623,7 @@ its own, \"mine\", for a sticky table to replace."
                     (goto-char (window-start win))
                     (forward-line 1)
                     (vui-update inst (list :lines (1+ height)))
-                    (expect header-line-format :to-be nil)
+                    (expect (vui--sticky-live-p) :to-be nil)
                     (expect (window-start win) :to-equal (point-min))))))
           (kill-buffer "*sticky-tall*"))))))
 
@@ -628,16 +632,16 @@ its own, \"mine\", for a sticky table to replace."
   ;; render of the root, so it has to put back the header line itself
   ;; when the item had the last sticky table.  The edits run from another
   ;; buffer, as from a process filter or a timer.
-  (it "puts back the header line when update-last replaces a table item"
+  (it "releases the header line when update-last replaces a table item"
     (let ((stream (vui-make-stream)))
       (vui-sticky--with-switch inst (:mode 'text :stream stream)
         (vui-stream-append stream (vui-text "m0"))
         (vui-stream-append stream (vui-sticky--table "S"))
-        (expect header-line-format :not :to-equal "mine")
+        (expect (vui--sticky-live-p) :to-be-truthy)
         (with-temp-buffer (vui-stream-update-last stream (vui-text "m1")))
         (expect (buffer-string) :to-equal "m0\nm1\nplain")
-        (expect header-line-format :to-equal "mine")
-        (expect vui--sticky-saved-header-line :to-be nil)
+        (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")
+        (expect (local-variable-p (quote vui--sticky-registry)) :to-be nil)
         (expect vui--sticky-registry :to-be nil))))
 
   (it "keeps the header line pinned when update-last draws the table again"
@@ -646,30 +650,30 @@ its own, \"mine\", for a sticky table to replace."
         (vui-stream-append stream (vui-text "m0"))
         (vui-stream-append stream (vui-sticky--table "S"))
         (vui-stream-update-last stream (vui-sticky--table "S"))
-        (expect header-line-format :not :to-equal "mine")
+        (expect (vui--sticky-live-p) :to-be-truthy)
         (expect (vui-sticky--at (vui-sticky--pos-of "s2")) :to-equal "S "))))
 
-  (it "puts back the header line when a node drops its table"
+  (it "releases the header line when a node drops its table"
     (let ((stream (vui-make-stream)))
       (vui-sticky--with-switch inst (:mode 'text :stream stream)
         (vui-stream-append stream (vui-text "m0"))
         (let ((node (vui-stream-open stream (vui-sticky--table "S"))))
           (vui-stream-append stream (vui-text "m2"))
-          (expect header-line-format :not :to-equal "mine")
+          (expect (vui--sticky-live-p) :to-be-truthy)
           (with-temp-buffer (vui-stream-update node (vui-text "m1")))
           (expect (buffer-string) :to-equal "m0\nm1\nm2\nplain")
-          (expect header-line-format :to-equal "mine")))))
+          (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")))))
 
-  (it "puts back the header line when the node with the table is removed"
+  (it "releases the header line when the node with the table is removed"
     (let ((stream (vui-make-stream)))
       (vui-sticky--with-switch inst (:mode 'text :stream stream)
         (vui-stream-append stream (vui-text "m0"))
         (let ((node (vui-stream-open stream (vui-sticky--table "S"))))
           (vui-stream-append stream (vui-text "m2"))
-          (expect header-line-format :not :to-equal "mine")
+          (expect (vui--sticky-live-p) :to-be-truthy)
           (with-temp-buffer (vui-stream-remove node))
           (expect (buffer-string) :to-equal "m0\nm2\nplain")
-          (expect header-line-format :to-equal "mine")))))
+          (expect (vui--sticky-live-p) :to-be nil) (expect header-line-format :to-equal "mine")))))
 
   (it "keeps the header line while the root still shows a sticky table"
     (let ((stream (vui-make-stream)))
@@ -677,7 +681,7 @@ its own, \"mine\", for a sticky table to replace."
         (vui-stream-append stream (vui-text "m0"))
         (vui-stream-append stream (vui-sticky--table "S"))
         (vui-stream-update-last stream (vui-text "m1"))
-        (expect header-line-format :not :to-equal "mine")
+        (expect (vui--sticky-live-p) :to-be-truthy)
         (expect (vui-sticky--at (vui-sticky--pos-of "h2")) :to-equal "H "))))
 
   (it "keeps the header line when node edits leave the root's sticky table"
@@ -689,7 +693,7 @@ its own, \"mine\", for a sticky table to replace."
           (vui-stream-update node (vui-text "m1"))
           (vui-stream-remove other)
           (expect (buffer-string) :to-match "\\`m0\nm1\nH ")
-          (expect header-line-format :not :to-equal "mine")
+          (expect (vui--sticky-live-p) :to-be-truthy)
           (expect (vui-sticky--at (vui-sticky--pos-of "h2")) :to-equal "H "))))))
 
 (provide 'vui-table-sticky-test)

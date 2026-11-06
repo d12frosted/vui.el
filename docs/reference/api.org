@@ -946,8 +946,9 @@ look different from the one in the buffer.
 The pinned copy is the whole line, read live from the buffer, so let
 the region start a line of its own. It has the limitations of a sticky
 table header: it is text only (buttons and fields in it do not work),
-and while a sticky part is in the buffer the header line stays shown,
-empty when nothing is pinned. In a =vui-grid= cell, =:sticky= does
+and while a sticky part is in the buffer the header line stays shown:
+it shows the buffer's own header line when nothing is pinned, or an
+empty line when there is none. In a =vui-grid= cell, =:sticky= does
 nothing: a grid composes its cells from text it measured. Rows
 appended later to a =vui-stream= that ends the region are not inside
 it, as its =:face= does not reach them either.
@@ -966,7 +967,7 @@ interactive widgets like buttons, fields, and components).
 | =:columns=        | list    | List of column specs (see below)               |
 | =:rows=           | list    | List of rows, each a list of cells             |
 | =:border=         | symbol  | nil, :ascii, or :unicode                       |
-| =:sticky-header=  | boolean | Render the header row into =header-line-format= (see below) |
+| =:sticky-header=  | boolean | Pin the header row in the window's header line (see below) |
 | =:header-face=    | face    | Face for header cells (default =vui-table-header=) |
 | =:border-face=    | face    | Face for border characters (default =vui-table-border=) |
 | =:key=            | any     | Reconciliation key                             |
@@ -1035,7 +1036,7 @@ row as it is.
 With =:sticky-header t= the header row stays visible while a long
 table scrolls. The table renders into the buffer exactly as without
 it - header row included - and a copy of the header row is pinned in
-the window's =header-line-format= *only while the window is scrolled
+the window's header line *only while the window is scrolled
 into the table's body*, that is, while the in-buffer header row is
 above the window start but the table has not ended yet:
 
@@ -1059,13 +1060,25 @@ always matches the current column widths, borders, padding, faces,
 and even surrounding indentation - columns line up exactly, and
 re-renders that change widths are picked up automatically. Evaluation
 is per window: two windows on the same buffer scrolled to different
-tables each pin their own header. Unmounting the tree (or mounting
-another one over the buffer) restores whatever =header-line-format=
-was there before, and so does a re-render or an edit of a =vui-stream=
-item that leaves no sticky part in the buffer (a sticky table, or a
-=vui-region= with =:sticky=). A table inside a sticky region pins its
-header while the window is in its body, and the region's line
-elsewhere in the region.
+tables each pin their own header.
+
+The buffer's =header-line-format= is left alone. The pin goes in the
+=header-line-format= parameter of each window that shows the buffer,
+and when nothing is pinned, that window shows the buffer's own header
+line, as set by the app or a mode, also when it changes later. A
+window that shows another buffer drops the parameter, and a new window
+on the buffer gets it. Unmounting the tree (or mounting another one
+over the buffer) takes the parameter from the windows, and so does a
+re-render or an edit of a =vui-stream= item that leaves no sticky part
+in the buffer (a sticky table, or a =vui-region= with =:sticky=), and
+so does a change of the buffer's major mode. A header line parameter
+that vui did not set is never changed, so a window that has one of its
+own (=none=, say) never shows the pin. A window gets the parameter when
+redisplay runs after it comes to the buffer, so code that fits a new
+window to the buffer before that, such as =fit-window-to-buffer= in a
+=display-buffer= action, does not count the header line. A table
+inside a sticky region pins its header while the window is in its
+body, and the region's line elsewhere in the region.
 
 Faces: the pinned copy keeps =vui-table-header= (or =:header-face=)
 and =vui-table-border= (or =:border-face=), drawn on top of the
@@ -1082,8 +1095,9 @@ Limitations:
   an error when =:sticky-header= is on. (The in-buffer header row is
   plain text anyway, so nothing is lost.)
 - While any sticky part is in the buffer, the header line is
-  reserved: it shows an empty line when nothing is pinned, rather
-  than appearing and disappearing as you scroll (which would make the
+  reserved: when nothing is pinned it shows the buffer's own header
+  line, or an empty line when the buffer has none, rather than
+  appearing and disappearing as you scroll (which would make the
   window content jump by a line).
 
 See =docs/examples/16-sticky-table.el= for a runnable demo: a long

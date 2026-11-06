@@ -408,7 +408,7 @@
                                               :sticky-header t)
                                    (vui-component 'sticky-bad-child))))
       (expect (buffer-string) :to-equal "fallback")
-      (expect header-line-format :to-be nil)))
+      (expect (vui--sticky-live-p) :to-be nil)))
 
   (it "unmounts a child whose render fails, and starts it again on a reset"
     (let ((should-error nil)
