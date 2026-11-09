@@ -840,7 +840,9 @@ in, and the page title between sections:
    (vui-region :sticky t (vui-vstack (vui-text "Section B") rows-b...))))
 #+end_src
 
-The innermost sticky part wins, a sticky table header included. See
+The innermost sticky part wins, a sticky table header included. Give
+=:sticky= a string to pin that text in place of the first line, say
+a name without the avatar next to it. See
 =vui-region= in the API reference for =:sticky-face= and the limits of
 the pinned copy.
 

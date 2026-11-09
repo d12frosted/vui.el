@@ -221,6 +221,114 @@
             (expect (vui--sticky-live-p) :to-be nil))
         (kill-buffer "*vui-st-drop*")))))
 
+(describe "vui-region :sticky with a string"
+  (it "pins the string in place of the region's first line"
+    (with-temp-buffer
+      (vui-render (vui-vstack
+                   (vui-text "before")
+                   (vui-region :sticky "Octocat"
+                     (vui-vstack (vui-text "[avatar] Octocat")
+                                 (vui-text "bio")
+                                 (vui-text "repos")))
+                   (vui-text "after")))
+      ;; Same span as a line pin: past the first line, inside the region
+      (expect (vui-st--at (vui-st--pos-of "[avatar]")) :to-equal "")
+      (expect (vui-st--at (vui-st--pos-of "bio")) :to-equal "Octocat")
+      (expect (vui-st--at (vui-st--pos-of "repos")) :to-equal "Octocat")
+      (expect (vui-st--at (vui-st--pos-of "after")) :to-equal "")))
+
+  (it "can pin text from further down the region"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "[open] Fix the bug"
+                    (vui-vstack (vui-text "Fix the bug")
+                                (vui-text "[open] opened by me")
+                                (vui-text "body"))))
+      (expect (vui-st--at (vui-st--pos-of "body"))
+              :to-equal "[open] Fix the bug")))
+
+  (it "keeps the string's faces, puts :sticky-face over them, and leaves the string alone"
+    (let ((title (propertize "Title" 'face 'bold)))
+      (with-temp-buffer
+        (vui-render (vui-region :sticky title :sticky-face 'shadow
+                      (vui-vstack (vui-text "head") (vui-text "body"))))
+        (let* ((pinned (vui--sticky-header (vui-st--pos-of "body")))
+               (faces (ensure-list
+                       (get-text-property (1- (length pinned)) 'face pinned))))
+          ;; Over its own faces: first in the list
+          (expect faces :to-equal '(shadow bold)))
+        ;; Pinning again does not stack the face, nor touch the caller's string
+        (vui--sticky-header (vui-st--pos-of "body"))
+        (expect (get-text-property 0 'face title) :to-equal 'bold))))
+
+  (it "doubles the percent signs of the string"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "100% done"
+                    (vui-vstack (vui-text "head") (vui-text "body"))))
+      (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "100%% done")))
+
+  (it "pins only the first line of a string with newlines"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "one\ntwo"
+                    (vui-vstack (vui-text "head") (vui-text "body"))))
+      (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "one")))
+
+  (it "follows the string of the latest render"
+    (let ((vui-render-delay nil)
+          (set-title nil))
+      (vui-defcomponent vui-st-titled ()
+        :state ((title "First"))
+        :render (progn
+                  (setq set-title (vui-async-callback (v) (vui-set-state :title v)))
+                  (vui-region :sticky title
+                    (vui-vstack (vui-text "head") (vui-text "body")))))
+      (vui-mount (vui-component 'vui-st-titled) "*vui-st-titled*" t)
+      (unwind-protect
+          (with-current-buffer "*vui-st-titled*"
+            (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "First")
+            (funcall set-title "Second")
+            (vui--sticky-prune-registry)
+            (expect (length vui--sticky-registry) :to-equal 1)
+            (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "Second"))
+        (kill-buffer "*vui-st-titled*"))))
+
+  (it "lets the inner of two regions with the same span win"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "Outer"
+                    (vui-region :sticky "Inner"
+                      (vui-vstack (vui-text "head") (vui-text "body")))))
+      (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "Inner")))
+
+  (it "lets a table header win over a region with the same span"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "Region"
+                    (vui-table :sticky-header t :border nil
+                               :columns '((:header "Name" :width 4 :grow t))
+                               :rows '(("r1") ("r2")))))
+      (expect (vui-st--at (vui-st--pos-of "r2")) :to-equal "Name")))
+
+  (it "pins nothing for an empty string"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "Outer"
+                    (vui-vstack
+                     (vui-text "outer head")
+                     (vui-region :sticky ""
+                       (vui-vstack (vui-text "head") (vui-text "body"))))))
+      (expect (length vui--sticky-registry) :to-equal 1)
+      (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "Outer")))
+
+  (it "takes part in nesting like a line pin"
+    (with-temp-buffer
+      (vui-render (vui-region :sticky "Page"
+                    (vui-vstack
+                     (vui-text "page head")
+                     (vui-text "intro")
+                     (vui-region :sticky t
+                       (vui-vstack (vui-text "Section") (vui-text "s1")))
+                     (vui-text "end"))))
+      (expect (vui-st--at (vui-st--pos-of "intro")) :to-equal "Page")
+      (expect (vui-st--at (vui-st--pos-of "s1")) :to-equal "Section")
+      (expect (vui-st--at (vui-st--pos-of "end")) :to-equal "Page"))))
+
 (defun vui-st--window-format (window)
   "The header line WINDOW's parameter gives it, or nil."
   (window-parameter window 'header-line-format))

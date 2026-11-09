@@ -15,7 +15,9 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
   go. Sticky page titles and section headings work the way CSS
   =position: sticky= does inside a parent. When sticky parts are
   nested, the innermost one wins, a table's =:sticky-header= included.
-  =:sticky-face= goes on the pinned copy.
+  =:sticky-face= goes on the pinned copy. =:sticky= also takes a
+  string to pin in place of the first line, such as a name without
+  the avatar next to it.
 
 - =vui-get-instance-by-key= finds a mounted component by its =:key=, in
   a buffer (its tree, inline regions and shown stream rows) or below an

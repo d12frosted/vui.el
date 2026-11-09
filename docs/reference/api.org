@@ -899,7 +899,7 @@ extent, without affecting layout.
 | =:face=   | face   | Applied beneath the children's own faces     |
 | =:keymap= | keymap | Cascades beneath the children's own keymaps  |
 | =:key=    | any    | Reconciliation key                           |
-| =:sticky= | boolean | Pin the first line while scrolled into the region (see below) |
+| =:sticky= | boolean or string | Pin the first line, or the string, while scrolled into the region (see below) |
 | =:sticky-face= | face | Put on the pinned copy                    |
 
 The face is layered with the lowest priority: children that set their
@@ -944,10 +944,29 @@ goes on the pinned copy, over its own faces, so a pinned heading can
 look different from the one in the buffer.
 
 The pinned copy is the whole line, read live from the buffer, so let
-the region start a line of its own. It has the limitations of a sticky
-table header: it is text only (buttons and fields in it do not work),
-and while a sticky part is in the buffer the header line stays shown:
-it shows the buffer's own header line when nothing is pinned, or an
+the region start a line of its own. To pin something else, give
+=:sticky= a string: it is pinned in place of the line, with its own
+faces and other text properties (only its first line, as the header
+line is one row), and an empty string pins nothing. The
+region still decides where the pin applies. A user page can pin the
+name without the avatar next to it, and an issue page can lead the
+title with its state from further down:
+
+#+begin_src elisp
+(vui-region :sticky (concat (propertize state 'face 'bold) " " title)
+  (vui-vstack
+   (vui-text title :face 'bold)
+   (vui-text (format "%s, opened by %s" state author))
+   body...))
+#+end_src
+
+A pinned string follows the latest render, so a component that
+renders a new title pins the new one.
+
+The pinned copy has the limitations of a sticky table header: a
+pinned line is text only (its buttons and fields do not work), and
+while a sticky part is in the buffer the header line stays shown: it
+shows the buffer's own header line when nothing is pinned, or an
 empty line when there is none. In a =vui-grid= cell, =:sticky= does
 nothing: a grid composes its cells from text it measured. Rows
 appended later to a =vui-stream= that ends the region are not inside
