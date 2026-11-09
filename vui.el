@@ -836,8 +836,8 @@ parsing and validation, use `vui-typed-field' from vui-components.el."
   children   ; List of child vnodes
   face       ; Face applied beneath the children's own faces
   keymap     ; Keymap cascading beneath the children's own keymaps
-  sticky     ; Non-nil: pin the first line while the window is inside
-  sticky-face) ; Face on the pinned copy of that line
+  sticky     ; Non-nil: pin while the window is inside; a string pins itself
+  sticky-face) ; Face on the pinned copy
 
 ;; Layout: flexible-width horizontal row
 (cl-defstruct (vui-vnode-flex (:include vui-vnode)
@@ -1828,16 +1828,19 @@ Options:
                  children's text, unless something keyed nested in the
                  region is there, so a row of plain text tells which
                  item it shows.
-  :sticky BOOL - pin the line the region starts on in the header line
-                 while a window is scrolled into the region, past that
-                 line.  The region bounds it: once the window starts
-                 after the region, the pin goes, so the heading of a
+  :sticky BOOL-OR-STRING - pin the line the region starts on in the
+                 header line while a window is scrolled into the
+                 region, past that line.  A string is pinned in its
+                 place: the first line of it, with its own text
+                 properties.  An empty string pins nothing.
+                 The region bounds it: once the window starts after
+                 the region, the pin goes, so the heading of a
                  section gives way to the next one.  When sticky parts
                  are nested, the innermost one the window is in wins,
                  the sticky header of a `vui-table' included.  The
                  pinned copy is text only: buttons and fields in it do
                  not work.  It is the whole line, so make the region
-                 start a line of its own.
+                 start a line of its own, or pin a string.
   :sticky-face FACE - put on the pinned copy, over its own faces, so
                  a pinned heading can look different from the one in
                  the buffer.
@@ -7684,12 +7687,13 @@ Width calculation:
 
 (defvar-local vui--sticky-registry nil
   "The sticky parts of this buffer, newest first.
-Each entry is a list (PIN-MARKER END-MARKER FACE).  PIN-MARKER is on
-the line to pin: the header row of a table with a sticky header, the
-first line of a sticky `vui-region'.  END-MARKER is at the end of what
-bounds it: the table, the region.  FACE, when non-nil, goes on the
-pinned copy.  `vui--sticky-header' pins the line of the innermost entry
-that spans the window start.  Entries whose region has collapsed (the
+Each entry is a list (PIN-MARKER END-MARKER FACE TEXT).  PIN-MARKER is
+on the line to pin: the header row of a table with a sticky header,
+the first line of a sticky `vui-region'.  END-MARKER is at the end of
+what bounds it: the table, the region.  FACE, when non-nil, goes on
+the pinned copy.  TEXT, when non-nil, is pinned in place of the line.
+`vui--sticky-header' pins the innermost entry that spans the window
+start.  Entries whose region has collapsed (the
 text was erased or written again elsewhere) are inert and are pruned
 by `vui--sticky-prune-registry'.")
 
@@ -7754,10 +7758,11 @@ so this is garbage collection, not behavior."
                             t)))
                       vui--sticky-registry)))
 
-(defun vui--sticky-register (pin-pos end-pos &optional face)
+(defun vui--sticky-register (pin-pos end-pos &optional face text)
   "Register a sticky part spanning up to END-POS in the current buffer.
 PIN-POS is where the line to pin starts: the header row of a table, the
-first line of a `vui-region'.  FACE goes on the pinned copy.  The
+first line of a `vui-region'.  TEXT, when non-nil, is pinned in place
+of that line.  FACE goes on the pinned copy.  The
 windows that show the buffer get the sticky header line, as does a
 window that shows it later (see `vui--sticky-window-format'), until no
 sticky part is left (see `vui--sticky-release-header-line')."
@@ -7766,7 +7771,7 @@ sticky part is left (see `vui--sticky-release-header-line')."
   ;; no border, that is where a table starts, and what comes before it
   ;; (a line in a fragment, a stream) can be written again there.  The
   ;; pin marker moves past it, so it stays on the pinned line.
-  (push (list (copy-marker pin-pos t) (copy-marker end-pos) face)
+  (push (list (copy-marker pin-pos t) (copy-marker end-pos) face text)
         vui--sticky-registry)
   (add-hook 'window-buffer-change-functions #'vui--sticky-window-buffer-change)
   (add-hook 'change-major-mode-hook #'vui--sticky-forget nil t)
@@ -7823,12 +7828,14 @@ POS defaults to `window-start'; redisplay evaluates this per window,
 with that window selected, so each window pins the line of the sticky
 part it is scrolled into.  A part spans POS when POS is past the start
 of its line to pin but before its end.  Of the parts that span POS, the
-innermost wins: the one that starts last, and of two that start at
-the same position, the one that ends first.  So a table's header
+innermost wins: the one that starts last, of two that start at the
+same position the one that ends first, and of two with the same span
+the one inside the other.  So a table's header
 wins over the heading of the section around the table.  Returns that
 line - read live from the buffer, so it is always in sync with the
-current column widths - with the part's face on it, and an empty
-string when no part spans POS.
+current column widths - or the first line of the part's own text to
+pin, with the part's face on it, and an empty string when no part
+spans POS.
 
 The copy is prefixed with a stretch space reaching the start of the
 buffer text (see `vui--sticky-header-padding'): header-line
@@ -7846,10 +7853,13 @@ this on every frame update, and an error here would loop."
             (when (and start end (> pos start) (< pos end)
                        (or (null entry)
                            (let ((best (marker-position (nth 0 entry))))
-                             ;; On the same line, the one that ends first
+                             ;; On the same line, the one that ends first,
+                             ;; and of two with the same span, the inner:
+                             ;; a part registers after the parts inside it,
+                             ;; so it comes before them in the registry
                              (or (> start best)
                                  (and (= start best)
-                                      (< end (marker-position (nth 1 entry))))))))
+                                      (<= end (marker-position (nth 1 entry))))))))
               (setq entry e))))
         (if (null entry)
             ""
@@ -7857,8 +7867,12 @@ this on every frame update, and an error here would loop."
             (goto-char (nth 0 entry))
             (let ((line (replace-regexp-in-string
                          "%" "%%"
-                         (buffer-substring (line-beginning-position)
-                                           (line-end-position)))))
+                         (if (nth 3 entry)
+                             ;; The header line is one row
+                             (substring (nth 3 entry) 0
+                                        (string-search "\n" (nth 3 entry)))
+                           (buffer-substring (line-beginning-position)
+                                             (line-end-position))))))
               (when (nth 2 entry)
                 (add-face-text-property 0 (length line) (nth 2 entry) nil line))
               (concat (vui--sticky-header-padding) line)))))
@@ -12771,6 +12785,8 @@ is written."
            ;; Not in a measure pass: it renders in a temp buffer, and
            ;; only the real render may touch the header line
            (sticky-start (and (vui-vnode-region-sticky vnode)
+                              ;; An empty string pins nothing
+                              (not (equal (vui-vnode-region-sticky vnode) ""))
                               (not vui--measuring-p)
                               (vui--start-marker))))
       (if layout
@@ -12787,7 +12803,9 @@ is written."
       (when sticky-start
         (when (and (marker-position sticky-start) (< sticky-start (point)))
           (vui--sticky-register sticky-start (point)
-                                (vui-vnode-region-sticky-face vnode)))
+                                (vui-vnode-region-sticky-face vnode)
+                                (let ((sticky (vui-vnode-region-sticky vnode)))
+                                  (and (stringp sticky) sticky))))
         (set-marker sticky-start nil))))
 
    ;; Component - reconcile and render
