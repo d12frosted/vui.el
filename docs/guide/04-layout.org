@@ -430,6 +430,11 @@ each window, so a window that shows another buffer drops it. Unmounting,
 or a re-render or an edit of a =vui-stream= item that leaves no sticky
 part, gives the windows back their plain header line.
 
+While nothing is pinned the header line stays, empty or with the
+buffer's own header line, so the text does not move as you scroll.
+Set =vui-sticky-keep-header-line= to nil in the buffer to have it only
+while something is pinned.
+
 Sticky headers must be plain strings: the pinned copy is outside the
 buffer, so buttons there would be unreachable by vui navigation. A
 vnode header signals an error when =:sticky-header= is on. See the

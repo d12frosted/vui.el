@@ -419,6 +419,53 @@ AFTER), the window's state once redisplay has run before the re-render
         (redisplay t)
         (list before (list (line-number-at-pos (window-start))
                            (line-number-at-pos (point))))))
+    ;; With `vui-sticky-keep-header-line' off: the height of the header
+    ;; line after a single redisplay, at the top, scrolled into a sticky
+    ;; part, back at the top, and with a point far down that redisplay
+    ;; picks a new start for.
+    :sticky-hide
+    (let ((buf (get-buffer-create "*vui-tty-hide*")))
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (setq-local vui-sticky-keep-header-line nil)
+      (vui-render
+       (vui-vstack
+        (vui-text "top")
+        (vui-region :sticky t
+          (apply #'vui-vstack (vui-text "Section")
+                 (mapcar (lambda (i) (vui-text (format "s%d" i)))
+                         (number-sequence 1 200))))))
+      (goto-char (point-min))
+      (set-window-start nil (point-min))
+      (redisplay t)
+      (let ((top (window-header-line-height)))
+        (scroll-up 10)
+        (redisplay t)
+        (let ((scrolled (window-header-line-height)))
+          (goto-char (point-min))
+          (set-window-start nil (point-min))
+          (redisplay t)
+          (let ((back (window-header-line-height)))
+            (goto-char (vui-tty-line "s120"))
+            (redisplay t)
+            (let ((jumped (window-header-line-height)))
+              (goto-char (point-min))
+              (set-window-start nil (point-min))
+              (redisplay t)
+              ;; A start that is not forced: no `window-scroll-functions'.
+              ;; Point in view from it, or redisplay scrolls back to it
+              (goto-char (vui-tty-line "s40"))
+              (set-window-start nil (vui-tty-line "s30") t)
+              (redisplay t)
+              (let ((unforced (window-header-line-height)))
+                (goto-char (point-min))
+                (set-window-start nil (point-min))
+                (redisplay t)
+                (setq-local vui-sticky-keep-header-line t)
+                (redisplay t)
+                (list :top top :scrolled scrolled :back back
+                      :jumped jumped :unforced unforced
+                      :kept (window-header-line-height))))))))
     ;; Not a scenario: whether the child compiles what it loads, and
     ;; the processes it has running.
     :native-comp
@@ -550,6 +597,17 @@ anyone noticing."
     ;; one that shows it all and sent it back to the top
     (pcase-let ((`(,before ,after) (vui-tty-test--scenario :sticky-fit)))
       (expect after :to-equal before)))
+
+  (it "shows the sticky header line only while something is pinned, when asked"
+    ;; Each in a single redisplay, also when redisplay picks the start
+    (let ((report (vui-tty-test--scenario :sticky-hide)))
+      (expect (plist-get report :top) :to-equal 0)
+      (expect (plist-get report :scrolled) :to-be-greater-than 0)
+      (expect (plist-get report :back) :to-equal 0)
+      (expect (plist-get report :jumped) :to-be-greater-than 0)
+      (expect (plist-get report :unforced) :to-be-greater-than 0)
+      ;; Turned back on at the top: the bar comes back
+      (expect (plist-get report :kept) :to-be-greater-than 0)))
 
   (it "runs in a child that starts no native compilation"
     ;; It starts one for vui.elc otherwise, and that process can

@@ -334,6 +334,11 @@
   (window-parameter window 'header-line-format))
 
 (describe "the sticky header line of a window"
+  ;; `save-window-excursion' gives the window back with the parameter a
+  ;; spec gave it, and other specs measure the window
+  (after-each
+    (set-window-parameter nil 'header-line-format nil))
+
   (it "is set on the windows that show a buffer with sticky parts"
     (let ((buf (get-buffer-create "*vui-st-win*")))
       (unwind-protect
@@ -414,6 +419,29 @@
             (expect (vui-st--window-format (selected-window)) :to-be nil))
         (kill-buffer buf))))
 
+  (it "is cleared when the buffer is killed"
+    ;; Not left for redisplay to find on the buffer the window gets next
+    (let ((buf (get-buffer-create "*vui-st-kill*")))
+      (switch-to-buffer buf)
+      (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+      (expect (vui-st--window-format (selected-window))
+              :to-equal vui--sticky-window-format)
+      (kill-buffer buf)
+      (expect (vui-st--window-format (selected-window)) :to-be nil)))
+
+  (it "keeps the parts of the base buffer when an indirect clone goes"
+    (let ((buf (get-buffer-create "*vui-st-base*")))
+      (unwind-protect
+          (with-current-buffer buf
+            (vui-render (vui-vstack
+                         (vui-text "top")
+                         (vui-region :sticky t
+                           (vui-vstack (vui-text "Heading") (vui-text "body")))))
+            (let ((clone (clone-indirect-buffer nil nil)))
+              (kill-buffer clone))
+            (expect (vui-st--at (vui-st--pos-of "body")) :to-equal "Heading"))
+        (kill-buffer buf))))
+
   (it "knows its own header line after it was printed and read back"
     (let ((buf (get-buffer-create "*vui-st-read*"))
           (other (get-buffer-create "*vui-st-read-other*")))
@@ -455,5 +483,248 @@
             (vui-unmount "*vui-st-wgone*")
             (expect (vui-st--window-format (selected-window)) :to-be nil))
         (kill-buffer "*vui-st-wgone*")))))
+
+(defun vui-st--hide-page ()
+  "Render a page with a sticky section in the current buffer, the bar off."
+  (setq-local vui-sticky-keep-header-line nil)
+  (vui-render (vui-vstack
+               (vui-text "top")
+               (vui-region :sticky t
+                 (apply #'vui-vstack (vui-text "Section") (vui-st--lines "s" 5)))
+               (vui-text "after"))))
+
+(describe "vui-sticky-keep-header-line"
+  ;; `save-window-excursion' gives the window back with the parameter a
+  ;; spec gave it, and other specs measure the window
+  (after-each
+    (set-window-parameter nil 'header-line-format nil))
+
+  (it "keeps the header line by default"
+    (expect (default-value 'vui-sticky-keep-header-line) :to-be t))
+
+  (it "survives the first render, which turns on vui-mode"
+    (with-temp-buffer
+      (vui-st--hide-page)
+      (expect vui-sticky-keep-header-line :to-be nil)))
+
+  (it "gives a window the header line only while something is pinned"
+    (let ((buf (get-buffer-create "*vui-st-hide*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-st--hide-page)
+            ;; At the top nothing is pinned: no bar
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            ;; What redisplay runs when the window scrolls
+            (set-window-start nil (vui-st--pos-of "s 2"))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (set-window-start nil (vui-st--pos-of "after"))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            (set-window-start nil (vui-st--pos-of "s 4"))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (set-window-start nil (point-min))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer buf))))
+
+  (it "goes by the start redisplay passes, not the one the window had"
+    (let ((buf (get-buffer-create "*vui-st-hide-start*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-st--hide-page)
+            (vui--sticky-window-scroll (selected-window) (vui-st--pos-of "s 2"))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf))))
+
+  (it "syncs on a re-render, with the window scrolled into a part"
+    (let ((vui-render-delay nil)
+          (set-tick nil))
+      (vui-defcomponent vui-st-hide-tall ()
+        :state ((tick 0))
+        :render (progn
+                  (setq set-tick (vui-async-callback (v) (vui-set-state :tick v)))
+                  (vui-vstack
+                   (vui-text (format "top %d" tick))
+                   (vui-region :sticky t
+                     (apply #'vui-vstack (vui-text "Section")
+                            (vui-st--lines "s" 100))))))
+      (unwind-protect
+          (save-window-excursion
+            (vui-mount (vui-component 'vui-st-hide-tall) "*vui-st-hide-tall*")
+            (setq-local vui-sticky-keep-header-line nil)
+            (goto-char (vui-st--pos-of "s 50"))
+            (set-window-start nil (vui-st--pos-of "s 40"))
+            (set-window-parameter nil 'header-line-format nil)
+            (funcall set-tick 1)
+            (expect (buffer-substring (pos-bol) (pos-eol)) :to-equal "s 50")
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer "*vui-st-hide-tall*"))))
+
+  (it "counts no sticky header line for a hidden buffer that fits the window"
+    ;; Nothing is pinned once the window shows it all from the top, so
+    ;; there is no header line to count: the buffer fits, and the window
+    ;; goes back to the top
+    (let ((vui-render-delay nil)
+          (set-tick nil))
+      (save-window-excursion
+        (switch-to-buffer (get-buffer-create "*vui-st-fit-other*"))
+        (setq header-line-format nil)
+        (let ((rows (window-body-height)))
+          (vui-defcomponent vui-st-hide-fit ()
+            :state ((tick 0))
+            :render (progn
+                      (setq set-tick (vui-async-callback (v) (vui-set-state :tick v)))
+                      (vui-vstack
+                       (vui-text (format "top %d" tick))
+                       (vui-region :sticky t
+                         (apply #'vui-vstack (vui-text "Section")
+                                (vui-st--lines "s" (- rows 2)))))))
+          (unwind-protect
+              (progn
+                (vui-mount (vui-component 'vui-st-hide-fit) "*vui-st-fit*")
+                (setq-local vui-sticky-keep-header-line nil)
+                (set-window-start nil (vui-st--pos-of "Section"))
+                (goto-char (point-max))
+                (switch-to-buffer "*vui-st-fit-other*")
+                (funcall set-tick 1)
+                (switch-to-buffer "*vui-st-fit*")
+                (expect (window-start) :to-equal (point-min)))
+            (kill-buffer "*vui-st-fit*")
+            (kill-buffer "*vui-st-fit-other*"))))))
+
+  (it "drops the bar of a window at the top when the option is turned off"
+    (let ((buf (get-buffer-create "*vui-st-hide-late*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-render (vui-region :sticky t
+                          (vui-vstack (vui-text "h") (vui-text "b"))))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (setq-local vui-sticky-keep-header-line nil)
+            (vui--sticky-window-buffer-change (selected-frame))
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer buf))))
+
+  (it "leaves a header line parameter it did not set alone"
+    (let ((buf (get-buffer-create "*vui-st-hide-theirs*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (vui-st--hide-page)
+            (set-window-parameter nil 'header-line-format "theirs")
+            (set-window-start nil (point-min))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window)) :to-equal "theirs")
+            (set-window-start nil (vui-st--pos-of "s 2"))
+            (vui--sticky-window-scroll (selected-window) (window-start))
+            (expect (vui-st--window-format (selected-window)) :to-equal "theirs"))
+        (set-window-parameter nil 'header-line-format nil)
+        (kill-buffer buf))))
+
+  (it "syncs before redisplay, for a start set without forcing it"
+    ;; `window-scroll-functions' does not run for such a start
+    (let ((buf (get-buffer-create "*vui-st-hide-pre*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-st--hide-page)
+            (set-window-start nil (vui-st--pos-of "s 2") t)
+            (vui--sticky-pre-redisplay t)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (set-window-start nil (point-min) t)
+            (vui--sticky-pre-redisplay (list (selected-window)))
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer buf))))
+
+  (it "drops the bar before redisplay when a stream row stops being sticky"
+    ;; Another sticky part is left, so nothing releases the header line
+    (let ((vui-render-delay nil)
+          (stream (vui-make-stream)))
+      (vui-defcomponent vui-st-hide-row (id)
+        :state ((sticky t))
+        :render (vui-region :sticky sticky
+                  (apply #'vui-vstack (vui-text (format "Row %s" id))
+                         (vui-st--lines id 60))))
+      (vui-defcomponent vui-st-hide-feed ()
+        :render (vui-stream stream))
+      (unwind-protect
+          (save-window-excursion
+            (vui-mount (vui-component 'vui-st-hide-feed) "*vui-st-hide-feed*")
+            (setq-local vui-sticky-keep-header-line nil)
+            (vui-stream-append stream (vui-component 'vui-st-hide-row :key "A" :id "A"))
+            (vui-stream-append stream (vui-component 'vui-st-hide-row :key "B" :id "B"))
+            (goto-char (vui-st--pos-of "B 20"))
+            (set-window-start nil (vui-st--pos-of "B 10"))
+            (vui--sticky-pre-redisplay t)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            (vui-set-state :sticky nil (vui-get-instance-by-key "B"))
+            (vui--sticky-pre-redisplay t)
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer "*vui-st-hide-feed*"))))
+
+  (it "follows the option when it changes, at the next redisplay"
+    (let ((buf (get-buffer-create "*vui-st-hide-flip*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-render (vui-region :sticky t
+                          (vui-vstack (vui-text "h") (vui-text "b"))))
+            (setq-local vui-sticky-keep-header-line nil)
+            (vui--sticky-pre-redisplay t)
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            (setq-local vui-sticky-keep-header-line t)
+            (vui--sticky-pre-redisplay t)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf))))
+
+  (it "reads the parts of the buffer a window shows, not the current one"
+    (let ((buf (get-buffer-create "*vui-st-hide-two*"))
+          (other (get-buffer-create "*vui-st-hide-two-other*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer buf)
+            (vui-st--hide-page)
+            (let ((sticky-window (selected-window)))
+              (set-window-start sticky-window (vui-st--pos-of "s 2"))
+              (vui--sticky-sync-window sticky-window)
+              (select-window (split-window))
+              (switch-to-buffer other)
+              (with-current-buffer other
+                (vui--sticky-window-buffer-change (selected-frame)))
+              (expect (vui-st--window-format sticky-window)
+                      :to-equal vui--sticky-window-format)))
+        (kill-buffer buf)
+        (kill-buffer other))))
+
+  (it "keeps the bar of a window at the top by default"
+    (let ((buf (get-buffer-create "*vui-st-keep*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-render (vui-region :sticky t
+                          (vui-vstack (vui-text "h") (vui-text "b"))))
+            (vui--sticky-window-scroll (selected-window) (point-min))
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf)))))
 
 ;;; vui-sticky-test.el ends here

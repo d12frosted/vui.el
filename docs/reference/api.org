@@ -967,10 +967,12 @@ The pinned copy has the limitations of a sticky table header: a
 pinned line is text only (its buttons and fields do not work), and
 while a sticky part is in the buffer the header line stays shown: it
 shows the buffer's own header line when nothing is pinned, or an
-empty line when there is none. In a =vui-grid= cell, =:sticky= does
-nothing: a grid composes its cells from text it measured. Rows
-appended later to a =vui-stream= that ends the region are not inside
-it, as its =:face= does not reach them either.
+empty line when there is none (see =vui-sticky-keep-header-line= in
+the table's Sticky Header section to show it only while something is
+pinned). In a =vui-grid= cell, =:sticky= does nothing: a grid
+composes its cells from text it measured. Rows appended later to a
+=vui-stream= that ends the region are not inside it, as its =:face=
+does not reach them either.
 
 ** vui-table
 
@@ -1114,10 +1116,22 @@ Limitations:
   an error when =:sticky-header= is on. (The in-buffer header row is
   plain text anyway, so nothing is lost.)
 - While any sticky part is in the buffer, the header line is
-  reserved: when nothing is pinned it shows the buffer's own header
-  line, or an empty line when the buffer has none, rather than
-  appearing and disappearing as you scroll (which would make the
-  window content jump by a line).
+  reserved by default: when nothing is pinned it shows the buffer's
+  own header line, or an empty line when the buffer has none, rather
+  than appearing and disappearing as you scroll (which would make the
+  window content jump by a line). Set =vui-sticky-keep-header-line= to
+  nil in the buffer to show it only while something is pinned:
+
+  #+begin_src elisp
+  (with-current-buffer buffer
+    (setq-local vui-sticky-keep-header-line nil))
+  #+end_src
+
+  It survives the major mode change of a mount, so it can be set
+  before or after the first render, and a change shows at the next
+  redisplay. The text then moves down a line when a pin comes and up
+  a line when it goes. A window gets or drops the header line in the
+  redisplay that draws it, also when redisplay picks its new start.
 
 See =docs/examples/16-sticky-table.el= for a runnable demo: a long
 filterable table with widgets before and after it.

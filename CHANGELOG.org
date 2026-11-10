@@ -9,6 +9,11 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-sticky-keep-header-line= (issue #305): set it to nil in a
+  buffer to have the sticky header line only while something is
+  pinned, instead of an empty bar at the top. The text then moves by a
+  line when a pin comes and goes. The default keeps the bar.
+
 - =vui-region= takes =:sticky= (issue #305): the line the region
   starts on is pinned in the header line while a window is scrolled
   into the region, past that line, and the end of the region lets it

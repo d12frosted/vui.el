@@ -44,6 +44,7 @@
 (defvar vui--mounted-root)
 (defvar vui--inline-instances)
 (defvar vui--sticky-registry)
+(defvar vui-sticky-keep-header-line)
 
 ;;; Custom Variables
 
@@ -3657,7 +3658,12 @@ current."
                         (* (window-default-line-height window)
                            ;; A window gets a header line for the
                            ;; sticky parts of BUFFER too
-                           (+ (if (or header-line-format vui--sticky-registry) 1 0)
+                           (+ (if (or header-line-format
+                                      ;; Unless it is not kept: nothing is
+                                      ;; pinned once the window shows it all
+                                      (and vui--sticky-registry
+                                           vui-sticky-keep-header-line))
+                                  1 0)
                               (if tab-line-format 1 0))))
                    (window-body-height window t)))
          ;; The limit counts from the top of the window, the result from
@@ -5139,6 +5145,11 @@ writes there goes into the region."
                   ;; Restore the point, then the viewport, of all windows
                   (vui--restore-window-points window-points)
                   (vui--restore-window-starts window-info)
+                  ;; The render moved the starts while it wrote, and a
+                  ;; buffer that does not keep the sticky header line
+                  ;; shows it by where a window starts
+                  (when (local-variable-p 'vui--sticky-registry)
+                    (vui--sticky-sync-windows))
                   (vui--restore-remembered-places remembered)
                   ;; Run effects after commit
                   (vui--run-pending-effects)))
@@ -7685,6 +7696,24 @@ Width calculation:
                 (- (vui--normalize-width fill (+ w padding)) padding))
               (append widths nil)))))
 
+(defcustom vui-sticky-keep-header-line t
+  "Whether a window keeps the sticky header line while nothing is pinned.
+A window that shows a buffer with sticky parts (`vui-region' with
+:sticky, `vui-table' with :sticky-header) has a header line for the
+line it pins.  When this is non-nil, the header line stays while
+nothing is pinned, and shows the buffer's own `header-line-format'
+then, or an empty line, so the text below it does not move as the
+window scrolls.  When it is nil, the window has the header line only
+while something is pinned, and the text moves down a line when a pin
+comes and up a line when it goes.
+
+It is read in the buffer the window shows, so set it there with
+`setq-local'.  It stays when the buffer changes its major mode, as
+mounting a component into it does."
+  :type 'boolean
+  :group 'vui)
+(put 'vui-sticky-keep-header-line 'permanent-local t)
+
 (defvar-local vui--sticky-registry nil
   "The sticky parts of this buffer, newest first.
 Each entry is a list (PIN-MARKER END-MARKER FACE TEXT).  PIN-MARKER is
@@ -7713,20 +7742,55 @@ own scroll pins, and a window that shows another buffer drops it (see
     (vui--sticky-prune-registry)
     (and vui--sticky-registry t)))
 
-(defun vui--sticky-sync-window (window)
+(defun vui--sticky-sync-window (window &optional start)
   "Give WINDOW the sticky header line when its buffer has sticky parts.
-And take it from WINDOW when its buffer has none.  A header line
-parameter that is not `vui--sticky-window-format' is someone else's,
-and stays.  It is compared with `equal': a window state saved with its
-parameters gives back a copy."
+And take it from WINDOW when its buffer has none.  When the buffer
+does not keep the header line (see `vui-sticky-keep-header-line'),
+WINDOW has it only while a part is pinned at START, which defaults to
+WINDOW's start.  A header line parameter that is not
+`vui--sticky-window-format' is someone else's, and stays.  It is
+compared with `equal': a window state saved with its parameters gives
+back a copy."
   (let* ((format (window-parameter window 'header-line-format))
          (ours (equal format vui--sticky-window-format))
-         (live (buffer-local-value 'vui--sticky-registry (window-buffer window))))
+         (buffer (window-buffer window))
+         (want (and (buffer-local-value 'vui--sticky-registry buffer)
+                    (or (buffer-local-value 'vui-sticky-keep-header-line buffer)
+                        (with-current-buffer buffer
+                          (vui--sticky-entry (or start (window-start window))))))))
     (cond
-     ((and live (null format))
+     ((and want (null format))
       (set-window-parameter window 'header-line-format vui--sticky-window-format))
-     ((and ours (not live))
+     ((and ours (not want))
       (set-window-parameter window 'header-line-format nil)))))
+
+(defun vui--sticky-pre-redisplay (windows)
+  "Sync the sticky header line of WINDOWS before redisplay draws them.
+On `pre-redisplay-functions'; WINDOWS is t for all windows.  It
+catches what `vui--sticky-window-scroll' does not see: a start set
+without forcing it (a re-render of a stream item or an inline mount
+puts the start back that way), a part that stops being sticky under a
+window that does not scroll, and a change of
+`vui-sticky-keep-header-line'.  Never signals: redisplay would drop
+the function from the hook."
+  (condition-case nil
+      (dolist (window (if (listp windows) windows (window-list-1 nil 'nomini t)))
+        (when (and (window-live-p window)
+                   (local-variable-p 'vui--sticky-registry (window-buffer window)))
+          (vui--sticky-sync-window window)))
+    (error nil)))
+
+(defun vui--sticky-window-scroll (window start)
+  "Sync the sticky header line of WINDOW, which now starts at START.
+On `window-scroll-functions', which redisplay runs before it draws a
+window from a new start: a buffer that does not keep the header line
+\(see `vui-sticky-keep-header-line') shows it only while a part is
+pinned, and the window gets or drops it in the same redisplay.  Never
+signals: redisplay would drop the function from the hook."
+  (condition-case nil
+      (when (local-variable-p 'vui--sticky-registry (window-buffer window))
+        (vui--sticky-sync-window window start))
+    (error nil)))
 
 (defun vui--sticky-sync-windows ()
   "Sync the sticky header line of the windows that show this buffer.
@@ -7774,16 +7838,24 @@ sticky part is left (see `vui--sticky-release-header-line')."
   (push (list (copy-marker pin-pos t) (copy-marker end-pos) face text)
         vui--sticky-registry)
   (add-hook 'window-buffer-change-functions #'vui--sticky-window-buffer-change)
+  (add-hook 'window-scroll-functions #'vui--sticky-window-scroll)
+  (add-hook 'pre-redisplay-functions #'vui--sticky-pre-redisplay)
   (add-hook 'change-major-mode-hook #'vui--sticky-forget nil t)
+  (add-hook 'kill-buffer-hook #'vui--sticky-forget nil t)
   (vui--sticky-sync-windows))
 
 (defun vui--sticky-forget ()
   "Drop the sticky parts of this buffer, and their header line.
 On `change-major-mode-hook': the new mode kills the registry with the
-other local variables, and the windows would keep the header line."
+other local variables, and the windows would keep the header line.
+And on `kill-buffer-hook': the windows that show the buffer get
+another one, and would keep it until the next redisplay."
+  ;; Only the markers of this buffer: an indirect clone shares the
+  ;; registry of its base buffer, and its hooks
   (dolist (entry vui--sticky-registry)
-    (set-marker (nth 0 entry) nil)
-    (set-marker (nth 1 entry) nil))
+    (dolist (marker (list (nth 0 entry) (nth 1 entry)))
+      (when (eq (marker-buffer marker) (current-buffer))
+        (set-marker marker nil))))
   (kill-local-variable 'vui--sticky-registry)
   (vui--sticky-sync-windows))
 
@@ -7822,6 +7894,26 @@ is the most common case.  :align-to N refers to the Nth canonical column
 from the start of the text area."
   (propertize " " 'display `(space :align-to ,(line-number-display-width 'columns))))
 
+(defun vui--sticky-entry (pos)
+  "Return the registry entry of the sticky part to pin at POS, or nil.
+See `vui--sticky-header' for which part that is."
+  (let ((entry nil))
+    (dolist (e vui--sticky-registry)
+      (let ((start (marker-position (nth 0 e)))
+            (end (marker-position (nth 1 e))))
+        (when (and start end (> pos start) (< pos end)
+                   (or (null entry)
+                       (let ((best (marker-position (nth 0 entry))))
+                         ;; On the same line, the one that ends first,
+                         ;; and of two with the same span, the inner:
+                         ;; a part registers after the parts inside it,
+                         ;; so it comes before them in the registry
+                         (or (> start best)
+                             (and (= start best)
+                                  (<= end (marker-position (nth 1 entry))))))))
+          (setq entry e))))
+    entry))
+
 (defun vui--sticky-header (&optional pos)
   "Return the line to pin for a window starting at POS.
 POS defaults to `window-start'; redisplay evaluates this per window,
@@ -7845,22 +7937,7 @@ not line up with the table body.  Percent signs are doubled because
 the result is a mode-line construct.  Never signals: redisplay runs
 this on every frame update, and an error here would loop."
   (condition-case nil
-      (let* ((pos (or pos (window-start)))
-             (entry nil))
-        (dolist (e vui--sticky-registry)
-          (let ((start (marker-position (nth 0 e)))
-                (end (marker-position (nth 1 e))))
-            (when (and start end (> pos start) (< pos end)
-                       (or (null entry)
-                           (let ((best (marker-position (nth 0 entry))))
-                             ;; On the same line, the one that ends first,
-                             ;; and of two with the same span, the inner:
-                             ;; a part registers after the parts inside it,
-                             ;; so it comes before them in the registry
-                             (or (> start best)
-                                 (and (= start best)
-                                      (<= end (marker-position (nth 1 entry))))))))
-              (setq entry e))))
+      (let ((entry (vui--sticky-entry (or pos (window-start)))))
         (if (null entry)
             ""
           (save-excursion
