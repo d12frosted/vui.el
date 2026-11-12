@@ -7709,7 +7709,9 @@ comes and up a line when it goes.
 
 It is read in the buffer the window shows, so set it there with
 `setq-local'.  It stays when the buffer changes its major mode, as
-mounting a component into it does."
+mounting a component into it does.  Code that scrolls a window and
+measures it before redisplay can count the header line it gets with
+`vui-sticky-scroll'."
   :type 'boolean
   :group 'vui)
 (put 'vui-sticky-keep-header-line 'permanent-local t)
@@ -7750,7 +7752,7 @@ WINDOW has it only while a part is pinned at START, which defaults to
 WINDOW's start.  A header line parameter that is not
 `vui--sticky-window-format' is someone else's, and stays.  It is
 compared with `equal': a window state saved with its parameters gives
-back a copy."
+back a copy.  Return non-nil when WINDOW got or lost the header line."
   (let* ((format (window-parameter window 'header-line-format))
          (ours (equal format vui--sticky-window-format))
          (buffer (window-buffer window))
@@ -7760,9 +7762,54 @@ back a copy."
                           (vui--sticky-entry (or start (window-start window))))))))
     (cond
      ((and want (null format))
-      (set-window-parameter window 'header-line-format vui--sticky-window-format))
+      (set-window-parameter window 'header-line-format vui--sticky-window-format)
+      t)
      ((and ours (not want))
-      (set-window-parameter window 'header-line-format nil)))))
+      (set-window-parameter window 'header-line-format nil)
+      t))))
+
+(defun vui-sticky-update-header-line (&optional window)
+  "Bring the sticky header line of WINDOW up to date now.
+WINDOW defaults to the selected window.  When its buffer does not keep
+the header line (see `vui-sticky-keep-header-line'), a window gets or
+drops it at the next redisplay, by where the window starts.  Code that
+scrolls a window and measures it before that (to bring a line to the
+bottom row with `recenter', say) measures it without the header line
+it is about to get, and loses its bottom row to it.  Call this after
+setting the start, and scroll again when it returns non-nil; near the
+end of a sticky part, scrolling again can put the start back where the
+header line goes the other way, which `vui-sticky-scroll' handles, so
+use that to scroll.
+
+Return non-nil when WINDOW got or lost the header line."
+  (vui--sticky-sync-window (window-normalize-window window t)))
+
+(defun vui-sticky-scroll (scroll)
+  "Call SCROLL to scroll the selected window, counting its sticky header line.
+SCROLL is a function of no arguments that sets the start of the
+selected window from scratch, by where point is, as `recenter' does:
+it is called again when the header line it brings changes the rows
+the window has.  See `vui-sticky-update-header-line' for why this
+matters when `vui-sticky-keep-header-line' is nil.
+
+To show a line on the bottom row:
+
+  (vui-sticky-scroll (lambda () (recenter -1)))
+
+At the end of a sticky part there can be no start that fits: the
+start that leaves room for the header line is past the part, so the
+header line goes, and the one without it is in the part, so it comes.
+The window then starts where it has no header line, and the line is a
+row above the bottom."
+  (funcall scroll)
+  (when (vui-sticky-update-header-line)
+    (let ((first (window-start)))
+      (funcall scroll)
+      (when (and (vui-sticky-update-header-line)
+                 (window-parameter nil 'header-line-format))
+        ;; Back to the first start, which had no header line
+        (set-window-start nil first)
+        (vui-sticky-update-header-line)))))
 
 (defun vui--sticky-pre-redisplay (windows)
   "Sync the sticky header line of WINDOWS before redisplay draws them.

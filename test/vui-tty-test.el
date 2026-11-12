@@ -466,6 +466,81 @@ AFTER), the window's state once redisplay has run before the re-render
                 (list :top top :scrolled scrolled :back back
                       :jumped jumped :unforced unforced
                       :kept (window-header-line-height))))))))
+    ;; With `vui-sticky-keep-header-line' off, a line brought to the
+    ;; bottom row by `recenter' (issue #312): whether it is shown after
+    ;; redisplay, as is, and with the header line brought up to date
+    ;; and the window recentered again.
+    :sticky-recenter
+    (let ((buf (get-buffer-create "*vui-tty-recenter*"))
+          (at (lambda (n) (save-excursion (goto-char (point-min))
+                                          (forward-line n) (point)))))
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (setq-local vui-sticky-keep-header-line nil)
+      (vui-render
+       (vui-region :sticky "Pinned"
+         (apply #'vui-vstack
+                (mapcar (lambda (i) (vui-text (format "line %d" i)))
+                        (number-sequence 0 199)))))
+      (let ((show (lambda (update)
+                    (goto-char (point-min))
+                    (set-window-start nil (point-min))
+                    (redisplay t)
+                    (goto-char (funcall at 100))
+                    (recenter -1)
+                    (let ((changed (and update (vui-sticky-update-header-line))))
+                      (when changed (recenter -1))
+                      (goto-char (funcall at 99))
+                      (redisplay t)
+                      (list (and (pos-visible-in-window-p (funcall at 100)) t)
+                            (and changed t))))))
+        (list :as-is (funcall show nil) :updated (funcall show t))))
+    ;; `vui-sticky-scroll' with `recenter -1' on a target line, with
+    ;; `vui-sticky-keep-header-line' off: (VISIBLE HEADER-HEIGHT) after
+    ;; redisplay.  In the middle of a sticky part, and at its end, where
+    ;; the start with the header line is out of the part and the start
+    ;; without it is in: from a window that has the header line, and
+    ;; from one that has none.
+    :sticky-scroll
+    (let ((buf (get-buffer-create "*vui-tty-sticky-scroll*"))
+          (at (lambda (n) (save-excursion (goto-char (point-min))
+                                          (forward-line n) (point)))))
+      (delete-other-windows)
+      (switch-to-buffer buf)
+      (setq-local vui-sticky-keep-header-line nil)
+      (vui-render
+       (vui-vstack
+        (vui-text "line 0")
+        (vui-text "line 1")
+        (vui-region :sticky "Pinned"
+          (apply #'vui-vstack
+                 (mapcar (lambda (i) (vui-text (format "line %d" i)))
+                         (number-sequence 2 40))))
+        (apply #'vui-vstack
+               (mapcar (lambda (i) (vui-text (format "line %d" i)))
+                       (number-sequence 41 200)))))
+      (goto-char (point-min))
+      (set-window-start nil (point-min))
+      (redisplay t)
+      (let* ((rows (window-body-height))
+             ;; Without the header line the start is on line 40, the
+             ;; last of the part; with it, on line 41, after the part
+             (end (+ rows 39))
+             (show (lambda (from target)
+                     (goto-char (funcall at from))
+                     (set-window-start nil (funcall at from))
+                     (redisplay t)
+                     (goto-char (funcall at target))
+                     (vui-sticky-scroll (lambda () (recenter -1)))
+                     ;; As octocat does: point on the line above, so
+                     ;; redisplay does not scroll to keep the target
+                     (goto-char (funcall at (1- target)))
+                     (redisplay t)
+                     (list (and (pos-visible-in-window-p (funcall at target)) t)
+                           (window-header-line-height)))))
+        (list :middle (funcall show 0 (+ rows 20))
+              :end-from-header (funcall show 20 end)
+              :end-from-none (funcall show 0 end))))
     ;; Not a scenario: whether the child compiles what it loads, and
     ;; the processes it has running.
     :native-comp
@@ -597,6 +672,22 @@ anyone noticing."
     ;; one that shows it all and sent it back to the top
     (pcase-let ((`(,before ,after) (vui-tty-test--scenario :sticky-fit)))
       (expect after :to-equal before)))
+
+  (it "measures a window as it will be drawn once its header line is up to date"
+    (let ((report (vui-tty-test--scenario :sticky-recenter)))
+      ;; The header line comes at redisplay and hides the bottom row
+      (expect (plist-get report :as-is) :to-equal '(nil nil))
+      ;; Brought up to date first, the second recenter counts it
+      (expect (plist-get report :updated) :to-equal '(t t))))
+
+  (it "scrolls a line into view counting the sticky header line it gets"
+    (let ((report (vui-tty-test--scenario :sticky-scroll)))
+      (expect (plist-get report :middle) :to-equal '(t 1))
+      ;; At the end of the part no start puts the line on the bottom
+      ;; row with the header line it gets: the one without it shows the
+      ;; line a row above
+      (expect (plist-get report :end-from-header) :to-equal '(t 0))
+      (expect (plist-get report :end-from-none) :to-equal '(t 0))))
 
   (it "shows the sticky header line only while something is pinned, when asked"
     ;; Each in a single redisplay, also when redisplay picks the start

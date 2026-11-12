@@ -727,4 +727,62 @@
                     :to-equal vui--sticky-window-format))
         (kill-buffer buf)))))
 
+(describe "vui-sticky-update-header-line"
+  (after-each
+    (set-window-parameter nil 'header-line-format nil))
+
+  (it "brings the header line of a window up to date before redisplay"
+    (let ((buf (get-buffer-create "*vui-st-update*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer buf)
+            (set-window-start nil (point-min))
+            (vui-st--hide-page)
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            ;; As `recenter' leaves it: a new start, not drawn yet
+            (set-window-start nil (vui-st--pos-of "s 2"))
+            (expect (vui-sticky-update-header-line) :to-be-truthy)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format)
+            ;; Up to date already: nothing changed
+            (expect (vui-sticky-update-header-line) :to-be nil)
+            (set-window-start nil (point-min))
+            (expect (vui-sticky-update-header-line (selected-window)) :to-be-truthy)
+            (expect (vui-st--window-format (selected-window)) :to-be nil))
+        (kill-buffer buf))))
+
+  (it "updates the window it is given, from any buffer"
+    (let ((buf (get-buffer-create "*vui-st-update-win*"))
+          (other (get-buffer-create "*vui-st-update-other*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer buf)
+            (vui-st--hide-page)
+            (let ((sticky-window (selected-window)))
+              (set-window-start sticky-window (vui-st--pos-of "s 2"))
+              (select-window (split-window))
+              (switch-to-buffer other)
+              (expect (vui-sticky-update-header-line sticky-window) :to-be-truthy)
+              (expect (vui-st--window-format sticky-window)
+                      :to-equal vui--sticky-window-format)
+              (set-window-parameter sticky-window 'header-line-format nil)))
+        (kill-buffer buf)
+        (kill-buffer other))))
+
+  (it "changes nothing for a buffer with no sticky parts, or one that keeps the bar"
+    (let ((buf (get-buffer-create "*vui-st-update-keep*")))
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer (get-buffer-create "*vui-st-update-plain*"))
+            (expect (vui-sticky-update-header-line) :to-be nil)
+            (expect (vui-st--window-format (selected-window)) :to-be nil)
+            (switch-to-buffer buf)
+            (vui-render (vui-region :sticky t (vui-vstack (vui-text "h") (vui-text "b"))))
+            (expect (vui-sticky-update-header-line) :to-be nil)
+            (expect (vui-st--window-format (selected-window))
+                    :to-equal vui--sticky-window-format))
+        (kill-buffer buf)
+        (kill-buffer "*vui-st-update-plain*")))))
+
 ;;; vui-sticky-test.el ends here
