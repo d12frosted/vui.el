@@ -1133,6 +1133,26 @@ Limitations:
   a line when it goes. A window gets or drops the header line in the
   redisplay that draws it, also when redisplay picks its new start.
 
+  So code that scrolls a window and measures it before redisplay
+  measures it without the header line it is about to get: a line
+  brought to the bottom row with =recenter= ends up hidden.
+  =vui-sticky-scroll= calls a function that scrolls the selected
+  window, brings its header line up to date, and scrolls again when
+  that changed the rows the window has:
+
+  #+begin_src elisp
+  (vui-sticky-scroll (lambda () (recenter -1)))
+  #+end_src
+
+  The function is called again, so it has to set the start from
+  scratch by where point is, as =recenter= does. At the end of a
+  sticky part no start may fit: room for the header line puts the
+  start past the part, where the header line goes. The window then
+  starts where it has no header line, and the line shows a row above
+  the bottom. =vui-sticky-update-header-line= is the step underneath:
+  it brings the header line of a window up to date right away and
+  returns non-nil when it changed.
+
 See =docs/examples/16-sticky-table.el= for a runnable demo: a long
 filterable table with widgets before and after it.
 

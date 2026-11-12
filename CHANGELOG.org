@@ -9,6 +9,16 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Added
 
+- =vui-sticky-scroll= (issue #312) scrolls the selected window with
+  a function such as =(lambda () (recenter -1))= and counts the sticky
+  header line the window gets. With =vui-sticky-keep-header-line= nil
+  the header line comes at the next redisplay, so code that scrolls a
+  window and measures it before that loses the bottom row to it. At
+  the end of a sticky part, where no start fits, the window starts
+  without the header line and the line shows a row above the bottom.
+  =vui-sticky-update-header-line= brings the header line of a window
+  up to date right away, for code that scrolls on its own.
+
 - =vui-sticky-keep-header-line= (issue #305): set it to nil in a
   buffer to have the sticky header line only while something is
   pinned, instead of an empty bar at the top. The text then moves by a
