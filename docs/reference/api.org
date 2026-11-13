@@ -415,8 +415,13 @@ around an update.
 
 *Scroll* is restored per window too:
 
-- The selected window follows its cursor: the cursor's row keeps the screen
-  row it had, even when rows appear or go away above it.
+- The selected window keeps its start when the text above it is the same
+  after the render, as any window does when text below its start is
+  edited: rows that appear or go away between the start and the cursor
+  move the cursor down or up, and the rest of the view stays put. When
+  that would push the cursor out of view, or into the =scroll-margin=,
+  or when the text above the start changed, the window follows its
+  cursor: the cursor's row keeps the screen row it had.
 - Any other window keeps its own scroll position.
 - A window tall enough to show the whole buffer shows it from the top.
 

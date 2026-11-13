@@ -1283,6 +1283,108 @@ stream: `vui-rr-chat-head', whose render rewrites the stream."
                                          (- 21 (window-body-height win))))))
           (kill-buffer "*rr-shr*"))))))
 
+(vui-defcomponent vui-rr-fold (after newline)
+  "Rows `row1' to `row80', with MORE rows `more1'... after row AFTER.
+AFTER is 15 when nil.  A final newline follows the rows when NEWLINE."
+  :state ((more 0))
+  :render (vui-fragment
+           (apply #'vui-vstack
+                  (mapcan (lambda (i)
+                            (cons (vui-button (format "row%d" i))
+                                  (when (= i (or after 15))
+                                    (mapcar (lambda (j)
+                                              (vui-button (format "more%d" j)))
+                                            (number-sequence 1 more)))))
+                          (number-sequence 1 80)))
+           (when newline (vui-newline))))
+
+(defun vui-rr--fold-viewport (start-row point-row from to &rest props)
+  "Change the rows MORE of a `vui-rr-fold' from FROM to TO.
+The selected window starts on START-ROW, with point on POINT-ROW, or at
+the end of the buffer when it is nil.  PROPS go to the component.
+Returns (START POINT LINES): the window start and the row point is on
+after the change, and how many lines the start is above point."
+  (let ((vui-render-delay nil)
+        (inst (vui-mount (apply #'vui-component 'vui-rr-fold props)
+                         "*rr-fold*")))
+    (unwind-protect
+        (save-window-excursion
+          (let ((win (selected-window)))
+            (set-window-buffer win (get-buffer "*rr-fold*"))
+            (with-current-buffer "*rr-fold*"
+              (let ((vui--current-instance inst))
+                (vui-set-state :more from))
+              (set-window-start win (vui-rr--button-pos start-row))
+              (goto-char (if point-row
+                             (vui-rr--button-pos point-row)
+                           (point-max)))
+              (let ((vui--current-instance inst))
+                (vui-set-state :more to))
+              (list (vui-rr--tag-at (window-start win))
+                    (vui-rr--tag-at (point))
+                    (- (line-number-at-pos (point))
+                       (line-number-at-pos (window-start win)))))))
+      (kill-buffer "*rr-fold*"))))
+
+(describe "re-render keeps the window start when nothing above it changed"
+  ;; As it is when text is edited below the start of a window: the
+  ;; start is a marker, and the rows below it move
+  (it "keeps it when rows appear between it and the cursor"
+    (expect (vui-rr--fold-viewport "row10" "row20" 0 3)
+            :to-equal '("row10" "row20" 13)))
+
+  (it "keeps it when rows go away between it and the cursor"
+    (expect (vui-rr--fold-viewport "row10" "row20" 3 0)
+            :to-equal '("row10" "row20" 10)))
+
+  (it "keeps it when the cursor ends up on the last row of the window"
+    (let* ((height (window-body-height))
+           (point-row (format "row%d" (+ 10 height -4))))
+      (expect (vui-rr--fold-viewport "row10" point-row 0 3)
+              :to-equal (list "row10" point-row (1- height)))))
+
+  (it "follows the cursor when keeping it would leave the cursor out of view"
+    ;; The cursor keeps its screen row then, as when rows change above
+    ;; the start
+    (let* ((height (window-body-height))
+           (point-row (format "row%d" (+ 10 height -3))))
+      (expect (vui-rr--fold-viewport "row10" point-row 0 3)
+              :to-equal (list "row13" point-row (- height 3)))))
+
+  (it "follows the cursor when keeping it would put the cursor in the scroll margin"
+    ;; Redisplay would scroll to get the cursor out of it, by
+    ;; recentering with the default `scroll-conservatively'
+    (let* ((scroll-margin 3)
+           (height (window-body-height))
+           (point-row (format "row%d" (+ 10 height -6))))
+      ;; At the bottom
+      (expect (vui-rr--fold-viewport "row10" point-row 0 3)
+              :to-equal (list "row13" point-row (- height 6)))
+      (expect (vui-rr--fold-viewport "row10" point-row 0 2)
+              :to-equal (list "row10" point-row (- height 4)))
+      ;; At the top
+      (expect (vui-rr--fold-viewport "row14" "row16" 8 0)
+              :to-equal '("row6" "row16" 10))
+      (expect (vui-rr--fold-viewport "row14" "row16" 8 1)
+              :to-equal '("row14" "row16" 3))))
+
+  (it "keeps no scroll margin at the top of the buffer"
+    (let ((scroll-margin 3))
+      (expect (vui-rr--fold-viewport "row1" "row16" 8 0)
+              :to-equal '("row1" "row16" 15))))
+
+  (it "counts the empty line after a final newline as the cursor's row"
+    ;; The cursor is on that line, at the end of the buffer, three lines
+    ;; above the bottom of the window.  One more row keeps the start,
+    ;; two more would push the cursor past the bottom.
+    (let* ((height (window-body-height))
+           (start-row (format "row%d" (- 80 height -3))))
+      (expect (vui-rr--fold-viewport start-row nil 0 1 :after 79 :newline t)
+              :to-equal (list start-row nil (1- height)))
+      (expect (vui-rr--fold-viewport start-row nil 0 2 :after 79 :newline t)
+              :to-equal (list (format "row%d" (- 80 height -5))
+                              nil (- height 2))))))
+
 ;;; Every window keeps its own point
 
 (describe "re-render preserves every window's point"

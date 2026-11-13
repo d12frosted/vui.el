@@ -3617,11 +3617,15 @@ would get (see `vui--window-places')."
 (defun vui--save-window-starts (buffer)
   "Save viewport restoration data for all windows showing BUFFER.
 Returns an alist of (WINDOW . SPEC).  The window that holds point (the
-selected window when it shows BUFFER) gets (relative . DELTA), where
-DELTA is how many lines `window-start' sits above point; restoring by
-this delta keeps the cursor on the same screen row even when the
-re-render changes how many lines precede it, so the viewport does not
-visibly jump.  Every other window gets (absolute . LINE), its own
+selected window when it shows BUFFER) gets (relative DELTA START
+. ABOVE), where DELTA is how many lines `window-start' sits above
+point, START is `window-start' and ABOVE the text before it.  When the
+render leaves ABOVE as it was, the window keeps START, the way it keeps
+its start when text below it is edited: rows that come and go between
+the start and the cursor move the cursor, not the view.  Otherwise
+restoring by DELTA keeps the cursor on the same screen row even when
+the re-render changes how many lines precede it, so the viewport does
+not visibly jump.  Every other window gets (absolute . LINE), its own
 `window-start' line, so a window the cursor does not live in (for
 instance one a background re-render is not focused on) keeps its own
 scroll position instead of being yanked to point.  See
@@ -3631,10 +3635,15 @@ scroll position instead of being yanked to point.  See
          (point-line (line-number-at-pos (point)))
          (result nil))
     (dolist (window (get-buffer-window-list buffer nil t))
-      (let ((start-line (line-number-at-pos (window-start window))))
+      (let* ((start (window-start window))
+             (start-line (line-number-at-pos start)))
         (push (cl-list* window
                         (if (eq window cursor-window)
-                            (cons 'relative (max 0 (- point-line start-line)))
+                            (cl-list* 'relative
+                                      (max 0 (- point-line start-line))
+                                      start
+                                      (buffer-substring-no-properties
+                                       (point-min) start))
                           (cons 'absolute start-line))
                         (vui--window-params window))
               result)))
@@ -3682,13 +3691,40 @@ current."
              0))
         height)))
 
+(defun vui--window-shows-p (window start pos)
+  "Return non-nil when WINDOW starting at START shows the row of POS.
+The row has to be out of `scroll-margin' too, or redisplay would scroll
+the window.  The text is measured the way redisplay lays it out, and
+only as far as the window's height."
+  (and (<= start pos)
+       (let* ((height (window-body-height window t))
+              (line (window-default-line-height window))
+              ;; Capped by `maximum-scroll-margin', as redisplay does
+              (margin (* line
+                         (min (max 0 scroll-margin)
+                              (truncate (* (/ height line)
+                                           (min 0.5 (max 0 maximum-scroll-margin)))))))
+              ;; The bottom of the row of POS
+              (bottom (+ (cdr (window-text-pixel-size
+                               window start (min (1+ pos) (point-max))
+                               nil (1+ height)))
+                         ;; The measure leaves out the empty line after
+                         ;; a final newline
+                         (if (and (= pos (point-max)) (> pos start)
+                                  (eq (char-before pos) ?\n))
+                             line
+                           0))))
+         (<= margin (- bottom line) bottom (- height margin)))))
+
 (defun vui--restore-window-starts (window-info)
   "Restore viewports saved by `vui--save-window-starts'.
 WINDOW-INFO is an alist of (WINDOW . SPEC).  Point, and the point of
-each window, are assumed to be already restored.  A (relative . DELTA)
-spec places `window-start' DELTA lines above point, keeping the cursor
-on the screen row it had; an (absolute . LINE) spec restores that
-window's own `window-start' line unchanged.
+each window, are assumed to be already restored.  A (relative DELTA
+START . ABOVE) spec keeps START when the text before it is still ABOVE
+and the cursor is in view from it.  Otherwise it places `window-start'
+DELTA lines above point, keeping the cursor on the screen row it had.
+An (absolute . LINE) spec restores that window's own `window-start'
+line unchanged.
 
 A window that can show the whole buffer starts at its beginning
 whatever the spec says: there is nothing to scroll, and following the
@@ -3711,13 +3747,20 @@ start it remembers for this buffer is set to the start it would get
         (let* ((showing (eq (window-buffer window) buffer))
                (start (save-excursion
                        (pcase spec
-                         (`(relative . ,delta)
+                         (`(relative ,delta ,start . ,above)
                           ;; From the point of the window: a hook can
                           ;; have selected another one on the buffer
                           (when showing
                             (goto-char (window-point window)))
-                          (forward-line (- delta))
-                          (line-beginning-position))
+                          (if (and showing
+                                   (<= start (point-max))
+                                   (string= above
+                                            (buffer-substring-no-properties
+                                             (point-min) start))
+                                   (vui--window-shows-p window start (point)))
+                              start
+                            (forward-line (- delta))
+                            (line-beginning-position)))
                          (`(absolute . ,line)
                           (goto-char (point-min))
                           ;; When the buffer got shorter than LINE,

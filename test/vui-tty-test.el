@@ -541,6 +541,63 @@ AFTER), the window's state once redisplay has run before the re-render
         (list :middle (funcall show 0 (+ rows 20))
               :end-from-header (funcall show 20 end)
               :end-from-none (funcall show 0 end))))
+    ;; Rows `more1'... after `row15' of 80 come or go while the selected
+    ;; window starts on a row above them and the cursor is on one below:
+    ;; the window's start row, the cursor's row and its screen row after
+    ;; redisplay.  With no `scroll-margin', and with the cursor ending up
+    ;; in the margin at the bottom or at the top.
+    :keep-start
+    (let ((show
+           (lambda (margin start cursor from to)
+             (let ((scroll-margin margin)
+                   (scroll-conservatively 0)
+                   (vui-render-delay nil)
+                   (row (lambda (tag)
+                          (save-excursion
+                            (goto-char (point-min))
+                            (search-forward (format "[%s]" tag))
+                            (match-beginning 0))))
+                   (tag (lambda (pos)
+                          (save-excursion
+                            (goto-char pos)
+                            (buffer-substring-no-properties
+                             (pos-bol) (pos-eol))))))
+               (vui-defcomponent vui-tty-fold ()
+                 :state ((more from))
+                 :render
+                 (apply #'vui-vstack
+                        (mapcan (lambda (i)
+                                  (cons (vui-button (format "row%d" i))
+                                        (when (= i 15)
+                                          (mapcar (lambda (j)
+                                                    (vui-button
+                                                     (format "more%d" j)))
+                                                  (number-sequence 1 more)))))
+                                (number-sequence 1 80))))
+               (delete-other-windows)
+               (let ((inst (vui-mount (vui-component 'vui-tty-fold)
+                                      "*vui-tty-keep*")))
+                 (switch-to-buffer "*vui-tty-keep*")
+                 (set-window-start nil (funcall row start))
+                 (goto-char (funcall row (if (stringp cursor)
+                                             cursor
+                                           (format "row%d"
+                                                   (funcall cursor)))))
+                 (redisplay t)
+                 (let ((vui--current-instance inst))
+                   (vui-set-state :more to))
+                 (redisplay t)
+                 (prog1 (list (funcall tag (window-start))
+                              (funcall tag (point))
+                              (- (line-number-at-pos (point))
+                                 (line-number-at-pos (window-start))))
+                   (vui-unmount inst)
+                   (kill-buffer "*vui-tty-keep*"))))))
+          ;; Five rows above the bottom of the window
+          (low (lambda () (+ 10 (window-body-height) -6))))
+      (list :kept (funcall show 0 "row10" low 0 3)
+            :margin-bottom (funcall show 3 "row10" low 0 3)
+            :margin-top (funcall show 3 "row14" "row16" 8 0)))
     ;; Not a scenario: whether the child compiles what it loads, and
     ;; the processes it has running.
     :native-comp
@@ -699,6 +756,19 @@ anyone noticing."
       (expect (plist-get report :unforced) :to-be-greater-than 0)
       ;; Turned back on at the top: the bar comes back
       (expect (plist-get report :kept) :to-be-greater-than 0)))
+
+  (it "keeps the window start when rows come and go below it, out of the scroll margin"
+    (let* ((report (vui-tty-test--scenario :keep-start))
+           (low (nth 1 (plist-get report :kept)))
+           (screen-row (nth 2 (plist-get report :kept))))
+      ;; Three rows more between the start and the cursor
+      (expect (car (plist-get report :kept)) :to-equal "[row10]")
+      (expect (plist-get report :margin-bottom)
+              :to-equal (list "[row13]" low (- screen-row 3)))
+      ;; With the cursor in the margin redisplay would recenter; the
+      ;; cursor keeps its screen row instead
+      (expect (plist-get report :margin-top)
+              :to-equal '("[row6]" "[row16]" 10))))
 
   (it "runs in a child that starts no native compilation"
     ;; It starts one for vui.elc otherwise, and that process can

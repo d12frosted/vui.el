@@ -96,6 +96,15 @@ The format is based on [[https://keepachangelog.com/en/1.1.0/][Keep a Changelog]
 
 ** Changed
 
+- A re-render keeps the start of the selected window when the text
+  above it did not change (issue #298), the way Emacs keeps a window's
+  start when text below it is edited. Rows that appear or go away
+  between the start and the cursor used to scroll the view by as many
+  rows, since the cursor kept its screen row; now the cursor moves and
+  the view stays. The cursor keeps its screen row, as before, when the
+  text above the start changed or when keeping the start would push the
+  cursor out of view or into the =scroll-margin=.
+
 - A sticky table header or sticky region no longer replaces the
   buffer's =header-line-format= (issue #305). The pin goes in the
   =header-line-format= parameter of each window that shows the buffer,
